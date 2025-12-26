@@ -1,0 +1,27 @@
+# Keine LF / CRLF Konvertierung....
+CAD-housing/* binary
+
+# Binär-Dateien (keine Konvertierung)
+*.bin binary
+*.hex binary
+*.elf binary
+*.a binary
+*.o binary
+*.zip binary
+*.png binary
+*.jpg binary
+
+# Konfigurations-Dateien LF
+*.ini text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.cmake text eol=lf
+*.csv text eol=lf
+
+# Web-Dateien LF
+*.html text eol=lf
+*.css text eol=lf
+*.js text eol=lf
