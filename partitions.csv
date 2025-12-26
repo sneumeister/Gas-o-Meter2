@@ -1,0 +1,15 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# Partition Table für ESP32C6 (2MB Flash)
+# 
+# Standard Partitionen
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  ota_0,   0x10000, 0x140000,
+#
+# Custom Partitionen
+# NVS Partition für Pulse-Zähler Ringspeicher (96 KB)
+pulse_nv, data, nvs,     0x150000, 0x18000,
+#
+# SPIFFS Partition für config.json und andere Dateien (256 KB)
+spiffs,   data, spiffs,  0x168000, 0x40000,
+

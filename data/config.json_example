@@ -1,0 +1,8 @@
+{
+    "hostname": "gas-o-meter2",
+    "adminpass": "geheim123",
+    "wifiCredentials": [
+      {"ssid": "FritzensBox24",   "password": "TheQuickBrownFoxJumpsOverTheLazyDog"},
+      {"ssid": "MNAccessPoint-2", "password": "TheQuickBrownFoxJumpsOverTheLazyDog!"}
+    ]
+}

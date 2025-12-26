@@ -1,0 +1,203 @@
+#ifndef HARDWARE_H
+#define HARDWARE_H
+
+#include <Arduino.h>
+#include "hal/adc_types.h"
+
+// ============================================
+// Hardware Pin-Definitionen
+// ============================================
+
+// GPIO-Pins für Taster und Sensoren
+#define BUTTON_A_GPIO      1   // Taster A (Software Pull-Up, active-low gegen Masse)
+#define REED_GPIO          2   // Reed-Kontakt (externer Pull-Up, active-low)
+#define BUTTON_B_GPIO      21  // Taster B (Software Pull-Up, active-low gegen Masse)
+
+// Interne LED (XIAO ESP32C6: GPIO15)
+// HINWEIS: Bei einigen Boards ist die LED active-low (ON = LOW, OFF = HIGH)
+// Falls die LED nicht leuchtet, versuchen Sie LOW statt HIGH
+#define LED_BUILTIN_GPIO   15  // Interne LED
+#define LED_OFF              HIGH  // LED EIN (falls nicht funktioniert, auf LOW ändern)
+#define LED_ON             LOW   // LED AUS (falls nicht funktioniert, auf HIGH ändern)
+
+// Pin-Modi Definitionen (für Setup)
+#define BUTTON_A_GPIO_MODE  INPUT_PULLUP
+#define REED_GPIO_MODE      INPUT          // Kein Pull-Up/Pull-Down (externer Pull-Up)
+#define BUTTON_B_GPIO_MODE  INPUT_PULLUP
+
+// ADC-Pins für Akku-Monitoring
+#define BATTERY_ADC_PIN    0   // Akku-Monitoring ADC Pin (GPIO0)
+#define BATTERY_ADC_UNIT   ADC_UNIT_1  // ADC Unit 1 (GPIO0 gehört zu ADC1)
+#define BATTERY_ADC_CHANNEL ADC_CHANNEL_0  // ADC1 Channel 0
+
+// Antennenumschaltung (ESP32C6: RF-Switch + Antennenauswahl)
+#define ANTENNA_RF_SWITCH_GPIO  3   // GPIO3: RF-Switch aktivieren (LOW = aktiviert)
+#define ANTENNA_SELECT_GPIO     14  // GPIO14: Antennenauswahl (LOW = intern, HIGH = extern)
+#define ANTENNA_RF_SWITCH_ENABLE LOW  // RF-Switch aktivieren
+#define ANTENNA_INTERNAL        LOW   // Logik-Level für interne Antenne (GPIO14)
+#define ANTENNA_EXTERNAL        HIGH  // Logik-Level für externe Antenne (GPIO14)
+
+// ============================================
+// ADC-Konfiguration
+// ============================================
+
+// Median-Filter Konfiguration
+#define ADC_SAMPLE_COUNT   5   // Anzahl Messungen für Median-Filter
+
+// Spannungsteiler-Konfiguration
+#define VOLTAGE_DIVIDER_RATIO  2.0   // Spannungsteiler-Verhältnis (2:1 = 2.0)
+
+// ADC-Korrekturfaktor (Offset-Korrektur)
+// Gemessen: 3.3V Eingang → 3.25V angezeigt → Offset: +0.05V
+//#define ADC_VOLTAGE_OFFSET     0.00f  // Offset-Korrektur in Volt (empirisch bestimmt)
+#define ADC_VOLTAGE_OFFSET     -1.00f  
+
+// ADC-Konfiguration für ADC_ATTEN_DB_12
+// Gemessen: 3.3V Eingang → 1.65V am ADC → ADC-Wert 1595
+// Berechnung: 1.65V / (1595/4095) = 4.24V maximale ADC-Spannung
+#define ADC_MAX_ADC_VOLTAGE    4.24f  // Maximale Spannung am ADC-Eingang bei ADC_ATTEN_DB_12 (V) - gemessen
+#define ADC_RESOLUTION         4095   // 12-bit ADC Auflösung (2^12 - 1)
+
+// Akku-Spannungsbereich (gemessene Werte aus Tabelle)
+// Diese Werte werden gegen die mit ADC_TO_VOLTAGE() berechneten Spannungen geprüft
+#define BATTERY_VOLTAGE_FULL      4.02f   // ≥4.02V = 100% = "Voll"
+#define BATTERY_VOLTAGE_80        3.92f   // 3.92V = 80% = "Gut"
+#define BATTERY_VOLTAGE_50        3.72f   // 3.72V = 50% = "Mittel"
+#define BATTERY_VOLTAGE_20        3.42f   // 3.42V = 20% = "Niedrig"
+#define BATTERY_VOLTAGE_PROTECTION 3.15f   // ≤3.15V = 0% = "Schutz!" (Betrieb einstellen)
+
+// Min/Max für Kompatibilität
+#define BATTERY_MIN_VOLTAGE   BATTERY_VOLTAGE_PROTECTION  // Minimale Akku-Spannung (V) = 0%
+#define BATTERY_MAX_VOLTAGE   BATTERY_VOLTAGE_FULL        // Maximale Akku-Spannung (V) = 100%
+
+// Stromversorgungs-Erkennung
+// Spannung < USB_DETECTION_THRESHOLD: USB-Stromversorgung (ESP32C6 würde sonst nicht starten)
+// Spannung >= USB_DETECTION_THRESHOLD aber < BATTERY_VOLTAGE_20: Akku zu niedrig → Deep-Sleep
+#define USB_DETECTION_THRESHOLD   2.0f    // Schwellwert für USB-Erkennung (V) - darunter: USB angeschlossen
+
+// NTP-Konfiguration
+#define DEFAULT_NTP_SERVER    "pool.ntp.org"  // Default NTP-Server (gut für Europa)
+#define NTP_TIMEOUT_MS        5000            // Timeout für NTP-Synchronisation (ms)
+
+// Deep-Sleep Konfiguration
+#define WIFI_WAIT_FOR_SLEEP   5               // Minuten ohne Web-Server-Zugriff → Deep-Sleep
+
+// LP-Core Konfiguration
+#define LP_CORE_INTERVAL_US   2500000         // LP-Core Schleifen-Intervall: 2.5s (in Mikrosekunden)
+#define LP_CORE_WATCHDOG_MS   ((LP_CORE_INTERVAL_US / 1000) + 500)  // Watchdog-Timeout: LP_CORE_INTERVAL + 500ms
+
+// ============================================
+// Wake-up Konfiguration
+// ============================================
+
+// Standard Wake-up Interval (wird von config.json überschrieben) zur ADC-Abfrage
+#define DEFAULT_WAKEUP_INTERVAL_MIN  10  // Minuten
+#define DEFAULT_WAKEUP_INTERVAL_US   (DEFAULT_WAKEUP_INTERVAL_MIN * 60 * 1000000ULL)
+
+// Standard Transfer Interval (wird von config.json überschrieben) : x * DEFAULT_WAKEUP_INTERVAL_MIN
+#define DEFAULT_TRANSFER_INTERVAL_X  3  // Multiplikator für Transfer-Intervall
+#define DEFAULT_TRANSFER_INTERVAL_US   (DEFAULT_TRANSFER_INTERVAL_X * DEFAULT_WAKEUP_INTERVAL_MIN * 60 * 1000000ULL)
+
+// ============================================
+// Pulse-Zähler Konfiguration
+// ============================================
+
+// Pulse-Zähler verwendet uint32_t (32-bit unsigned int)
+// Vom Gas-zähler max 99999999 (inklusive der 2 Nachkomastellen 99999.999)
+// Maximaler Wert: UINT32_MAX = 4294967295 (automatisch durch Datentyp)
+
+// Ringspeicher-Konfiguration
+#define RING_BUFFER_SIZE  12000  // Anzahl Einträge im Ringspeicher (10 Jahre @ 1200 Pulse/Jahr)
+
+// ============================================
+// RTC Memory Konfiguration
+// ============================================
+
+// RTC Memory Adressen
+#define ULP_RTC_MEM_BASE   0x50000000  // RTC Fast Memory Start-Adresse
+#define ULP_DATA_OFFSET    0x100       // Offset für Daten im RTC Memory
+
+// Magic Number für RTC Memory Validierung
+#define ULP_DATA_MAGIC     0x475A4D4F  // "GZMO" (Gas-Zähler-Meter-Original)
+
+// ============================================
+// NVS Konfiguration
+// ============================================
+
+// NVS Partition und Namespace
+#define NVS_PARTITION_PULSE  "pulse_nv"   // Partition-Name aus partitions.csv
+#define NVS_NAMESPACE_PULSE  "pulse_ring"
+
+// NVS Keys
+// NVS_KEY_INDEX entfernt - ring_idx wird jetzt im RTC-RAM gehalten (vermeidet Wear-Leveling-Hotspot)
+// NVS_KEY_COUNTER entfernt - wird nicht verwendet
+#define NVS_KEY_VERSION      "version"  // Versionsnummer für Initialisierungs-Check
+#define NVS_KEY_PREFIX       "p_"
+#define MAX_KEY_LENGTH       8   // Max: "p_11999" = 7 Zeichen + 1 Null-Terminator = 8
+
+// Ring-Speicher Versionsnummer
+// Wird automatisch aus BUILD_TIMESTAMP (version.h) übernommen
+#include "version.h"
+// RING_BUFFER_VERSION ist bereits in version.h definiert
+
+// ============================================
+// Helper Makros
+// ============================================
+
+// ADC-Wert zu Eingangsspannung konvertieren
+// Formel: (ADC-Wert / 4095) * ADC_MAX_ADC_VOLTAGE * VOLTAGE_DIVIDER_RATIO
+// Beispiel: ADC=1595 → (1595/4095) * 4.24V * 2.0 = 3.3V Eingangsspannung
+#define ADC_TO_VOLTAGE(adc_value) \
+    ((float)(adc_value) / ADC_RESOLUTION * ADC_MAX_ADC_VOLTAGE * VOLTAGE_DIVIDER_RATIO)
+
+// Spannung zu Akku-Prozent konvertieren (diskrete Werte basierend auf Tabelle)
+// Basierend auf den definierten Spannungswerten aus der Tabelle
+inline uint8_t VOLTAGE_TO_PERCENT(float voltage) {
+    if (voltage >= BATTERY_VOLTAGE_FULL) {
+        return 100;  // "Voll"
+    } else if (voltage >= BATTERY_VOLTAGE_80) {
+        // 100% - 80%: 4.02V - 3.92V = 0.10V
+        return 80 + (uint8_t)(((voltage - BATTERY_VOLTAGE_80) / (BATTERY_VOLTAGE_FULL - BATTERY_VOLTAGE_80)) * 20.0f);
+    } else if (voltage >= BATTERY_VOLTAGE_50) {
+        // 80% - 50%: 3.92V - 3.72V = 0.20V
+        return 50 + (uint8_t)(((voltage - BATTERY_VOLTAGE_50) / (BATTERY_VOLTAGE_80 - BATTERY_VOLTAGE_50)) * 30.0f);
+    } else if (voltage >= BATTERY_VOLTAGE_20) {
+        // 50% - 20%: 3.72V - 3.42V = 0.30V
+        return 20 + (uint8_t)(((voltage - BATTERY_VOLTAGE_20) / (BATTERY_VOLTAGE_50 - BATTERY_VOLTAGE_20)) * 30.0f);
+    } else if (voltage >= BATTERY_VOLTAGE_PROTECTION) {
+        // 20% - 0%: 3.42V - 3.15V = 0.27V
+        return 0 + (uint8_t)(((voltage - BATTERY_VOLTAGE_PROTECTION) / (BATTERY_VOLTAGE_20 - BATTERY_VOLTAGE_PROTECTION)) * 20.0f);
+    } else {
+        return 0;     // "Schutz!" - unter 3.15V
+    }
+}
+
+// ADC-Wert direkt zu Akku-Prozent
+#define ADC_TO_PERCENT(adc_value) \
+    VOLTAGE_TO_PERCENT(ADC_TO_VOLTAGE(adc_value))
+
+// ============================================
+// Antennenumschaltung Helper Makros
+// ============================================
+
+// Antennenumschaltung initialisieren und direkt Antenne auswählen
+// Parameter: ANTENNA_INTERNAL oder ANTENNA_EXTERNAL
+// Beispiel: INIT_ANTENNA_SWITCH(ANTENNA_EXTERNAL)
+#define INIT_ANTENNA_SWITCH(antenna_type) \
+    do { \
+        pinMode(ANTENNA_RF_SWITCH_GPIO, OUTPUT); \
+        pinMode(ANTENNA_SELECT_GPIO, OUTPUT); \
+        digitalWrite(ANTENNA_RF_SWITCH_GPIO, ANTENNA_RF_SWITCH_ENABLE); \
+        delay(100); /* Stabilisierung */ \
+        digitalWrite(ANTENNA_SELECT_GPIO, antenna_type); \
+    } while(0)
+
+// Antenne nachträglich ändern (wenn bereits initialisiert)
+#define SET_ANTENNA_INTERNAL() \
+    digitalWrite(ANTENNA_SELECT_GPIO, ANTENNA_INTERNAL)
+
+#define SET_ANTENNA_EXTERNAL() \
+    digitalWrite(ANTENNA_SELECT_GPIO, ANTENNA_EXTERNAL)
+
+#endif // HARDWARE_H
+

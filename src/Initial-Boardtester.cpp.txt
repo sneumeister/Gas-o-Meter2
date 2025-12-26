@@ -1,0 +1,90 @@
+#include <Arduino.h>
+
+// GPIO-Pins für die Taster
+#define BUTTON_GPIO_01  1
+#define BUTTON_GPIO_02  2
+#define BUTTON_GPIO_21  21
+
+// Vorherige Zustände der Pins speichern
+bool lastState_GPIO01 = false;
+bool lastState_GPIO02 = false;
+bool lastState_GPIO21 = false;
+
+// Zeitpunkt für Reed LOW->HIGH Messung
+unsigned long reedLowTime = 0;
+bool reedWasLow = false;
+
+void setup() {
+  // Serielle Schnittstelle initialisieren (USB-C)
+  Serial.begin(115200);
+  delay(1000); // Kurze Pause für Serial Monitor
+  
+  // GPIO 01: Software-Pull-Up aktivieren (active-low gegen Masse)
+  pinMode(BUTTON_GPIO_01, INPUT_PULLUP);
+  
+  // GPIO 02: Input ohne Pull-Up/Pull-Down (externer Pull-Up vorhanden)
+  pinMode(BUTTON_GPIO_02, INPUT);
+  
+  // GPIO 21: Software-Pull-Up aktivieren (active-low gegen Masse)
+  pinMode(BUTTON_GPIO_21, INPUT_PULLUP);
+  
+  // Initiale Zustände lesen
+  lastState_GPIO01 = digitalRead(BUTTON_GPIO_01);
+  lastState_GPIO02 = digitalRead(BUTTON_GPIO_02);
+  lastState_GPIO21 = digitalRead(BUTTON_GPIO_21);
+  
+  // Initiale Zustände ausgeben
+  Serial.println("\n=== GPIO Taster Test ===");
+  Serial.print("Taster A: ");
+  Serial.println(lastState_GPIO01 ? "HIGH" : "LOW");
+  Serial.print("Reed: ");
+  Serial.println(lastState_GPIO02 ? "HIGH" : "LOW");
+  Serial.print("Taster B: ");
+  Serial.println(lastState_GPIO21 ? "HIGH" : "LOW");
+  Serial.println("Warte auf Änderungen...\n");
+}
+
+void loop() {
+  // Aktuelle Zustände lesen
+  bool currentState_GPIO01 = digitalRead(BUTTON_GPIO_01);
+  bool currentState_GPIO02 = digitalRead(BUTTON_GPIO_02);
+  bool currentState_GPIO21 = digitalRead(BUTTON_GPIO_21);
+  
+  // Änderungen erkennen und ausgeben
+  if (currentState_GPIO01 != lastState_GPIO01) {
+    Serial.print("Taster A: ");
+    Serial.println(currentState_GPIO01 ? "HIGH" : "LOW");
+    lastState_GPIO01 = currentState_GPIO01;
+  }
+  
+  if (currentState_GPIO02 != lastState_GPIO02) {
+    Serial.print("Reed: ");
+    Serial.println(currentState_GPIO02 ? "HIGH" : "LOW");
+    
+    // Zeitmessung für LOW->HIGH Übergang
+    if (currentState_GPIO02 == LOW) {
+      // Reed wurde LOW - Zeitpunkt speichern
+      reedLowTime = millis();
+      reedWasLow = true;
+    } else if (currentState_GPIO02 == HIGH && reedWasLow) {
+      // Reed wurde HIGH - Zeitdifferenz berechnen und ausgeben
+      unsigned long duration = millis() - reedLowTime;
+      Serial.print("  -> Dauer LOW: ");
+      Serial.print(duration);
+      Serial.println(" ms");
+      reedWasLow = false;
+    }
+    
+    lastState_GPIO02 = currentState_GPIO02;
+  }
+  
+  if (currentState_GPIO21 != lastState_GPIO21) {
+    Serial.print("Taster B: ");
+    Serial.println(currentState_GPIO21 ? "HIGH" : "LOW");
+    lastState_GPIO21 = currentState_GPIO21;
+  }
+  
+  // Kurze Verzögerung für Entprellung und CPU-Entlastung
+  delay(10);
+}
+
