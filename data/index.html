@@ -11,7 +11,7 @@
         <h1>Gas-O-Meter Status</h1>
         
         <div class="pulse-counter-display">
-            <span class="pulse-left">{{pulse_counter_left}}</span><span class="pulse-right">{{pulse_counter_right}}</span>
+            <span class="pulse-left">%pulse_counter_left%</span><span class="pulse-right">%pulse_counter_right%</span>
         </div>
         
         <table id="statusTable">
@@ -21,23 +21,23 @@
             </tr>
             <tr>
                 <td>Projektname</td>
-                <td>{{project_name}}</td>
+                <td>%project_name%</td>
             </tr>
             <tr>
                 <td>Version</td>
-                <td>{{project_version}}</td>
+                <td>%project_version%</td>
             </tr>
             <tr>
                 <td>Build-Datum</td>
-                <td>{{build_date}}</td>
+                <td>%build_date%</td>
             </tr>
             <tr>
                 <td>NV-Speicher Magic-Key</td>
-                <td>{{nv_magic_key}}</td>
+                <td>%nv_magic_key%</td>
             </tr>
             <tr>
                 <td>Hostname</td>
-                <td>{{hostname}}</td>
+                <td>%hostname%</td>
             </tr>
             <tr>
                 <td>Admin-Passwort</td>
@@ -45,42 +45,42 @@
             </tr>
             <tr>
                 <td>WiFi SSID</td>
-                <td>{{wifi_ssid}}</td>
+                <td>%wifi_ssid%</td>
             </tr>
             <tr>
                 <td>Wake-up Intervall</td>
-                <td>{{wakeup_minutes}} Minuten</td>
+                <td>%wakeup_minutes% Minuten</td>
             </tr>
             <tr>
                 <td>Transfer Intervall</td>
-                <td>{{transfer_minutes}} Minuten</td>
+                <td>%transfer_minutes% Minuten</td>
             </tr>
             <tr>
                 <td>NTP-Server</td>
-                <td>{{ntp_server}}</td>
+                <td>%ntp_server%</td>
             </tr>
             <tr>
                 <td>ADC-Wert (dezimal)</td>
-                <td>{{adc_value}}</td>
+                <td>%adc_value%</td>
             </tr>
             <tr>
                 <td>Akku-Spannung</td>
-                <td>{{battery_voltage}} V</td>
+                <td>%battery_voltage% V</td>
             </tr>
             <tr>
                 <td>Akku-Ladestatus</td>
-                <td>{{battery_percent}}%</td>
+                <td>%battery_percent%&#37;</td>
             </tr>
         </table>
         
         <div class="status">
-            <p>Wake-up Count: {{wakeup_count}}</p>
-            <p>WiFi Status: {{wifi_status}}</p>
-            <p id="wifi_info" style="display:none;">
-                IP-Adresse: {{wifi_ip}}<br>
-                RSSI: {{wifi_rssi}} dBm
+            <p>Wake-up Count: %wakeup_count%</p>
+            <p>WiFi Status: %wifi_status%</p>
+            <p id="wifi_info" style="%wifi_info_style%">
+                IP-Adresse: %wifi_ip%<br>
+                RSSI: %wifi_rssi% dBm
             </p>
-            <p>Systemzeit (UTC): {{system_time}}</p>
+            <p>Systemzeit (UTC): %system_time%</p>
         </div>
         
         <div class="refresh">

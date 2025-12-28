@@ -934,93 +934,66 @@ String processor(const String& var) {
         char buf[4];
         snprintf(buf, sizeof(buf), "%03lu", pulse_counter % 1000);
         return String(buf);
+    } else if (var == "wifi_info_style") {
+        // WiFi-Info Sichtbarkeit: leer wenn verbunden, "display:none;" wenn nicht verbunden
+        return WiFi.status() == WL_CONNECTED ? String("") : String("display:none;");
     }
     // Unbekannte Variable - leeren String zurückgeben
     return String();
 }
 
 void setupWebServer() {
-    // Root-Handler mit Template-Processor
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-        last_web_activity = millis();  // Web-Server-Aktivität aktualisieren
+    // Root auf index.html umleiten
+    server.rewrite("/", "/index.html");
+    
+    // Index.html Handler: ADC-Werte aktualisieren, dann Template-Processing mit ESPAsyncWebServer Template-Processor
+    server.on("/index.html", HTTP_GET, [](AsyncWebServerRequest *request){
+        last_web_activity = millis();
         
         // ADC-Werte bei jedem Seitenaufruf neu messen (für Auto-Refresh)
         battery_adc_mv = read_adc_median_mv();
         battery_voltage = (float)battery_adc_mv / 1000.0f * VOLTAGE_DIVIDER_RATIO + config_rtc.adc_voltage_offset;
         battery_percent = VOLTAGE_TO_PERCENT(battery_voltage);
         
-        // Datei laden und Template-Variablen ersetzen
-        File file = LittleFS.open("/index.html", "r");
-        if (!file) {
-            request->send(500, "text/plain", "index.html nicht gefunden");
-            return;
-        }
-        
-        String html = file.readString();
-        file.close();
-        
-        // Template-Variablen ersetzen
-        html.replace("{{hostname}}", processor("hostname"));
-        html.replace("{{wifi_ssid}}", processor("wifi_ssid"));
-        html.replace("{{wakeup_minutes}}", processor("wakeup_minutes"));
-        html.replace("{{transfer_minutes}}", processor("transfer_minutes"));
-        html.replace("{{adc_value}}", processor("adc_value"));
-        html.replace("{{battery_voltage}}", processor("battery_voltage"));
-        html.replace("{{battery_percent}}", processor("battery_percent"));
-        html.replace("{{ntp_server}}", processor("ntp_server"));
-        html.replace("{{wakeup_count}}", processor("wakeup_count"));
-        html.replace("{{wifi_status}}", processor("wifi_status"));
-        html.replace("{{wifi_ip}}", processor("wifi_ip"));
-        html.replace("{{wifi_rssi}}", processor("wifi_rssi"));
-        html.replace("{{system_time}}", processor("system_time"));
-        html.replace("{{project_name}}", processor("project_name"));
-        html.replace("{{project_version}}", processor("project_version"));
-        html.replace("{{build_date}}", processor("build_date"));
-        html.replace("{{nv_magic_key}}", processor("nv_magic_key"));
-        html.replace("{{pulse_counter}}", processor("pulse_counter"));
-        html.replace("{{pulse_counter_left}}", processor("pulse_counter_left"));
-        html.replace("{{pulse_counter_right}}", processor("pulse_counter_right"));
-        
-        // WiFi-Info anzeigen, wenn verbunden
-        if (WiFi.status() == WL_CONNECTED) {
-            html.replace("style=\"display:none;\"", "");
-        }
-        
-        // HTML mit Cache-Control-Header senden (kein Caching)
-        AsyncWebServerResponse *response = request->beginResponse(200, "text/html", html);
+        // Datei mit Template-Processor ausliefern (nutzt %VARIABLE% Syntax)
+        // processor() Funktion wird automatisch für jeden %VARIABLE% Platzhalter aufgerufen
+        AsyncWebServerResponse *response = request->beginResponse(LittleFS, "/index.html", "text/html", false, processor);
         response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         response->addHeader("Pragma", "no-cache");
         response->addHeader("Expires", "0");
         request->send(response);
     });
     
-    // CSS-Datei
-    server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){
-        last_web_activity = millis();  // Web-Server-Aktivität aktualisieren
+    // Bootstrap CSS (gzip-komprimiert) - MIT CACHE
+    server.on("/bootstrap.min.css", HTTP_GET, [](AsyncWebServerRequest *request){
+        last_web_activity = millis();
         
-        // CSS mit Cache-Control-Header senden (kein Caching)
-        AsyncWebServerResponse *response = request->beginResponse(LittleFS, "/style.css", "text/css");
-        response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        response->addHeader("Pragma", "no-cache");
-        response->addHeader("Expires", "0");
+        AsyncWebServerResponse *response = request->beginResponse(LittleFS, "/bootstrap.min.css.gz", "text/css");
+        response->addHeader("Content-Encoding", "gzip");
+        response->addHeader("Cache-Control", "public, max-age=31536000");  // 1 Jahr Cache
         request->send(response);
     });
     
-    // JavaScript-Datei
-    server.on("/script.js", HTTP_GET, [](AsyncWebServerRequest *request){
-        last_web_activity = millis();  // Web-Server-Aktivität aktualisieren
-        
-        // JavaScript mit Cache-Control-Header senden (kein Caching)
-        AsyncWebServerResponse *response = request->beginResponse(LittleFS, "/script.js", "application/javascript");
-        response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        response->addHeader("Pragma", "no-cache");
-        response->addHeader("Expires", "0");
-        request->send(response);
-    });
+    // Config-Seite (passwortgeschützt)
+    server.serveStatic("/config", LittleFS, "/config.html")
+        .setFilter([](AsyncWebServerRequest *request){
+            // Basic Auth prüfen
+            if (!request->authenticate("admin", config_rtc.adminpass)) {
+                request->requestAuthentication();
+                return false;  // Request blockieren
+            }
+            last_web_activity = millis();
+            return true;  // Request erlauben
+        });
     
-    // Reboot-Endpunkt
+    // Reboot-Endpunkt (geschützt)
     server.on("/reboot", HTTP_POST, [](AsyncWebServerRequest *request){
-        last_web_activity = millis();  // Web-Server-Aktivität aktualisieren
+        // Basic Auth prüfen
+        if (!request->authenticate("admin", config_rtc.adminpass)) {
+            return request->requestAuthentication();
+        }
+        
+        last_web_activity = millis();
         request->send(200, "text/plain", "Reboot wird durchgeführt...");
         delay(500);  // Kurze Verzögerung, damit die Antwort gesendet wird
         Serial.println("Reboot durch Web-Interface ausgelöst");
@@ -1038,11 +1011,21 @@ void setupWebServer() {
         ESP.restart();
     });
     
-    // 404 Handler
-    server.onNotFound([](AsyncWebServerRequest *request){
-        last_web_activity = millis();  // Web-Server-Aktivität aktualisieren (auch bei 404)
-        request->send(404, "text/plain", "Not Found");
-    });
+    // Alle anderen Dateien aus Filesystem (außer config.json)
+    server.serveStatic("/", LittleFS, "/")
+        .setFilter([](AsyncWebServerRequest *request){
+            last_web_activity = millis();
+            
+            String path = request->url();
+            
+            // Blockiere config.json
+            if (path.equals("/config.json")) {
+                request->send(403, "text/plain", "Forbidden: config.json is protected");
+                return false;
+            }
+            
+            return true;
+        });
     
     server.begin();
     server_started = true;  // Flag setzen: Web-Server läuft
