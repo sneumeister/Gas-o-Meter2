@@ -12,12 +12,11 @@
 #include "nvs_flash.h"
 #include "hardware.h"
 #include "version.h"
-// ESP-IDF LP-Core Header
-// HINWEIS: Mit framework = arduino, espidf sind die ESP-IDF Header verfügbar
-#include <esp_lp_core.h>
-#include <esp_lp_core_bootloader.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+bool start_lp_core() { return false; }  // LP-Core kommt später....
+
 
 // ============================================
 // RTC Memory Struktur für Config-Werte
@@ -258,111 +257,75 @@ bool write_pulse_counter_to_ring_buffer() {
     return true;
 }
 
-// ============================================
-// LP-Core Management
-// ============================================
-// HINWEIS: Die LP-Core API ist im Arduino Framework für ESP32C6 noch nicht verfügbar.
-// Die gesamte Implementierung ist vollständig und wartet auf zukünftige Framework-Updates.
-// Sobald die Header-Dateien (esp_lp_core.h, esp_lp_core_bootloader.h) verfügbar sind,
-// wird der Code automatisch funktionieren.
-
-// Forward-Declaration für LP-Core Hauptfunktion
-extern "C" void lp_core_main(void);
-
-bool start_lp_core() {
-    // Prüfe ob LP-Core bereits läuft
-    if (esp_lp_core_is_running()) {
-        Serial.println("LP-Core läuft bereits");
-        return true;
-    }
-    
-    Serial.println("Starte LP-Core...");
-    
-    // LP-Core Bootloader initialisieren
-    esp_lp_core_bootloader_config_t config = {
-        .entry_addr = (uint32_t)lp_core_main,
-    };
-    
-    esp_err_t err = esp_lp_core_bootloader_init(&config);
-    if (err != ESP_OK) {
-        Serial.printf("LP-Core Bootloader-Initialisierung fehlgeschlagen: %s\n", esp_err_to_name(err));
-        return false;
-    }
-    
-    // LP-Core starten
-    err = esp_lp_core_start();
-    if (err != ESP_OK) {
-        Serial.printf("LP-Core Start fehlgeschlagen: %s\n", esp_err_to_name(err));
-        return false;
-    }
-    
-    // Kurz warten, damit LP-Core starten kann
-    delay(100);
-    
-    // Prüfe ob LP-Core wirklich läuft
-    if (esp_lp_core_is_running()) {
-        Serial.println("LP-Core erfolgreich gestartet");
-        // Watchdog-Zähler zurücksetzen (wird vom LP-Core erhöht)
-        lp_core_running = 0;
-        return true;
-    } else {
-        Serial.println("WARNUNG: LP-Core läuft nicht nach Start!");
-        return false;
-    }
-}
 
 // FreeRTOS Task für LP-Core Watchdog
 void lp_core_watchdog_task(void *parameter) {
     uint32_t last_lp_core_value = 0;
+    uint8_t retry_count = 0;
+    const uint8_t MAX_RETRIES = 3;
     
     Serial.println("LP-Core Watchdog Task gestartet");
     
-    // Prüfe ob LP-Core bereits läuft (nach Power-Up/ESP.restart() ist lp_core_running == 0)
-    if (lp_core_running == 0) {
-        // Nach Power-Up oder ESP.restart(): LP-Core direkt starten
-        Serial.println("lp_core_running == 0 → Starte LP-Core...");
-        if (start_lp_core()) {
-            last_lp_core_value = lp_core_running;  // Neuer Wert nach Start
-        } else {
-            Serial.println("FEHLER: LP-Core Start fehlgeschlagen!");
-            // Bei Fehler: Task beenden (wird bei nächstem Power-Up/ESP.restart() erneut gestartet)
-            vTaskDelete(NULL);
-            return;
-        }
-    } else {
-        // LP-Core läuft bereits (z.B. nach Deep-Sleep-Wake-up)
-        last_lp_core_value = lp_core_running;
+    // Initialisiere last_lp_core_value mit aktuellem Wert
+    last_lp_core_value = lp_core_running;
+    if (last_lp_core_value > 0) {
         Serial.printf("LP-Core läuft bereits (Zähler: %lu)\n", last_lp_core_value);
     }
     
-    // Watchdog-Schleife: Prüfe regelmäßig, ob LP-Core noch läuft
+    // Kombinierte Start- und Watchdog-Schleife
+    // Wenn lp_core_running == 0 ODER Counter erhöht sich nicht → versuche LP-Core zu starten
+    // Wenn nach MAX_RETRIES immer noch nicht erfolgreich → Task beenden
     while (1) {
-        // Warte LP_CORE_WATCHDOG_MS bevor Prüfung
-        vTaskDelay(pdMS_TO_TICKS(LP_CORE_WATCHDOG_MS));
-        
-        uint32_t current_lp_core_value = lp_core_running;
-        
-        // Prüfe ob Zähler sich erhöht hat
-        if (current_lp_core_value == last_lp_core_value) {
-            // Zähler hat sich nicht erhöht → LP-Core läuft nicht mehr!
-            Serial.printf("WARNUNG: LP-Core Watchdog-Timeout! (Zähler: %lu, erwartet: > %lu)\n", 
-                         current_lp_core_value, last_lp_core_value);
-            Serial.println("Starte LP-Core neu...");
+        // Prüfe ob LP-Core läuft (lp_core_running == 0 bedeutet: nicht gestartet oder gestoppt)
+        if (lp_core_running == 0) {
+            // LP-Core läuft nicht → versuche zu starten
+            retry_count++;
+            Serial.printf("LP-Core läuft nicht (lp_core_running == 0) → Starte LP-Core... (Versuch %d/%d)\n", 
+                         retry_count, MAX_RETRIES);
             
-            // LP-Core neu starten
+            if (retry_count >= MAX_RETRIES) {
+                Serial.printf("FEHLER: LP-Core konnte nach %d Versuchen nicht gestartet werden. Watch-Dog-Task beendet!\n", MAX_RETRIES);
+                vTaskDelete(NULL);
+                return;
+            }
+            
+            // Versuche LP-Core zu starten
             if (start_lp_core()) {
-                last_lp_core_value = lp_core_running;  // Neuer Wert nach Start
+                // start_lp_core() gab true zurück - warte auf Watchdog-Timeout und prüfe dann
+                last_lp_core_value = lp_core_running;
+                Serial.printf("LP-Core Start aufgerufen (Zähler: %lu) - warte auf Watchdog-Timeout für Prüfung...\n", last_lp_core_value);
             } else {
-                Serial.println("FEHLER: LP-Core Neustart fehlgeschlagen!");
-                // Bei Fehler: Kurz warten und erneut versuchen
+                // start_lp_core() gab false zurück
+                Serial.println("FEHLER: LP-Core Start fehlgeschlagen (start_lp_core() gab false zurück)!");
+                // Kurz warten und erneut versuchen
                 vTaskDelay(pdMS_TO_TICKS(1000));
                 continue;
             }
         } else {
-            // Zähler hat sich erhöht → LP-Core läuft
-            Serial.printf("LP-Core Watchdog OK (Zähler: %lu → %lu)\n", 
-                         last_lp_core_value, current_lp_core_value);
-            last_lp_core_value = current_lp_core_value;
+            // LP-Core sollte laufen (lp_core_running > 0) → Watchdog-Prüfung
+            // Warte LP_CORE_WATCHDOG_MS bevor Prüfung (gibt LP-Core Zeit, Counter zu erhöhen)
+            vTaskDelay(pdMS_TO_TICKS(LP_CORE_WATCHDOG_MS));
+            
+            uint32_t current_lp_core_value = lp_core_running;
+            
+            // Prüfe ob Zähler sich erhöht hat
+            if (current_lp_core_value == last_lp_core_value) {
+                // Zähler hat sich nicht erhöht → LP-Core läuft nicht mehr!
+                Serial.printf("WARNUNG: LP-Core Watchdog-Timeout! (Zähler: %lu, erwartet: > %lu)\n", 
+                             current_lp_core_value, last_lp_core_value);
+                Serial.println("Setze lp_core_running auf 0 und versuche LP-Core neu zu starten...");
+                
+                // Setze lp_core_running auf 0, damit wir in die Start-Schleife kommen
+                lp_core_running = 0;
+                retry_count = 0;  // Reset Retry-Counter für Neustart-Versuche
+                continue;  // Gehe zurück in Start-Schleife
+            } else {
+                // Zähler hat sich erhöht → LP-Core läuft korrekt
+                Serial.printf("LP-Core Watchdog OK (Zähler: %lu → %lu)\n", 
+                             last_lp_core_value, current_lp_core_value);
+                last_lp_core_value = current_lp_core_value;
+                retry_count = 0;  // Reset Retry-Counter bei erfolgreichem Betrieb
+            }
         }
     }
 }
@@ -471,6 +434,41 @@ bool check_and_init_pulse_ring_nvs() {
     // Versionsnummer stimmt → keine Initialisierung nötig
     Serial.printf("NVS-Ring-Speicher Version %lu ist gültig → keine Initialisierung nötig\n", stored_version);
     return true;
+}
+
+// ============================================
+// Ressourcen sauber beenden (Web-Server, WiFi, SPIFFS)
+// ============================================
+void shutdown_resources() {
+    Serial.println("Schließe Ressourcen...");
+    
+    // 1. Web-Server stoppen
+    if (server_started) {
+        server.end();
+        server_started = false;  // Flag zurücksetzen
+        Serial.println("Web-Server gestoppt");
+        delay(100);  // Kurze Verzögerung für sauberes Schließen
+    }
+    
+    // 2. WiFi trennen und deaktivieren
+    if (WiFi.status() == WL_CONNECTED) {
+        WiFi.disconnect(true);  // true = WiFi komplett deaktivieren
+        Serial.println("WiFi getrennt und deaktiviert");
+        delay(100);
+    }
+    WiFi.mode(WIFI_OFF);
+    
+    // 3. SPIFFS unmounten (sichert alle ausstehenden Schreibvorgänge)
+    if (spiffs_mounted) {
+        SPIFFS.end();
+        spiffs_mounted = false;
+        Serial.println("SPIFFS unmounted");
+        delay(50);
+    }
+    
+    Serial.println("Alle Ressourcen freigegeben");
+    Serial.flush();
+    delay(200);  // Pause, damit Serial-Output gesendet wird
 }
 
 // ============================================
@@ -612,37 +610,11 @@ void enter_deep_sleep_with_gpio_wakeup() {
     digitalWrite(LED_BUILTIN_GPIO, LED_OFF);
     Serial.println("Interne LED ausgeschaltet (Deep-Sleep)");
     
-    // WICHTIG: Ressourcen ordnungsgemäß freigeben vor Deep-Sleep
-    Serial.println("Schließe Ressourcen vor Deep-Sleep...");
+    // Ressourcen sauber beenden
+    shutdown_resources();
     
-    // 1. Web-Server stoppen
-    if (server_started) {
-        server.end();
-        server_started = false;  // Flag zurücksetzen
-        Serial.println("Web-Server gestoppt");
-        delay(100);  // Kurze Verzögerung für sauberes Schließen
-    }
-    
-    // 2. WiFi trennen und deaktivieren
-    if (WiFi.status() == WL_CONNECTED) {
-        WiFi.disconnect(true);  // true = WiFi komplett deaktivieren
-        Serial.println("WiFi getrennt und deaktiviert");
-        delay(100);
-    }
-    WiFi.mode(WIFI_OFF);
-    
-    // 3. SPIFFS unmounten (sichert alle ausstehenden Schreibvorgänge)
-    if (spiffs_mounted) {
-        SPIFFS.end();
-        spiffs_mounted = false;
-        Serial.println("SPIFFS unmounted");
-        delay(50);
-    }
-    
-    Serial.println("Alle Ressourcen freigegeben");
     Serial.println("Gehe in Deep-Sleep...");
     Serial.flush();
-    delay(200);  // Längere Pause, damit Serial-Output gesendet wird
     
     esp_deep_sleep_start();
     // Ab hier wird Code nicht mehr ausgeführt
@@ -1040,6 +1012,10 @@ void setupWebServer() {
         Serial.println("Speichere pulse_counter in Ring-Speicher vor Reboot...");
         write_pulse_counter_to_ring_buffer();
         
+        // Ressourcen sauber beenden
+        shutdown_resources();
+        
+        Serial.println("Starte Reboot...");
         Serial.flush();
         ESP.restart();
     });
@@ -1172,13 +1148,14 @@ void setup() {
         digitalWrite(LED_BUILTIN_GPIO, LED_ON);  // LED EIN (HP-Core aktiv)
         Serial.println("Interne LED Status bestätigt (HP-Core aktiv, Spannung OK)");
         
-        // Nur wenn Spannung OK: NVS initialisieren (bei Power-On)
-        if (isPowerOn) {
-            // NVS initialisieren (beim ersten Boot)
-            // Standard-NVS-Partition initialisieren
-            esp_err_t nvs_err = nvs_flash_init();
-            if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-                // NVS-Partition wurde gelöscht oder hat neue Version - neu initialisieren
+        // NVS initialisieren (bei Power-On und Deep-Sleep-Wake-up)
+        // WICHTIG: nvs_flash_init() ist idempotent - wenn bereits initialisiert, passiert nichts (keine Wear!)
+        // Standard-NVS-Partition initialisieren
+        esp_err_t nvs_err = nvs_flash_init();
+        if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            // NVS-Partition wurde gelöscht oder hat neue Version - neu initialisieren
+            // WICHTIG: Nur bei Power-On löschen (bei Deep-Sleep-Wake-up sollte NVS noch vorhanden sein)
+            if (isPowerOn) {
                 Serial.println("Standard-NVS-Partition muss neu initialisiert werden...");
                 esp_err_t erase_err = nvs_flash_erase();
                 if (erase_err != ESP_OK) {
@@ -1186,17 +1163,24 @@ void setup() {
                 } else {
                     nvs_err = nvs_flash_init();
                 }
-            }
-            if (nvs_err != ESP_OK) {
-                Serial.printf("Standard-NVS-Initialisierung fehlgeschlagen: %s\n", esp_err_to_name(nvs_err));
             } else {
-                Serial.println("Standard-NVS erfolgreich initialisiert");
+                Serial.println("WARNUNG: Standard-NVS-Partition benötigt Neuinitialisierung nach Deep-Sleep-Wake-up!");
+                Serial.println("Versuche erneut zu initialisieren (ohne Löschung)...");
+                nvs_err = nvs_flash_init();
             }
-            
-            // Pulse-NVS-Partition initialisieren
-            esp_err_t pulse_nvs_err = nvs_flash_init_partition(NVS_PARTITION_PULSE);
-            if (pulse_nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || pulse_nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-                // Pulse-NVS-Partition wurde gelöscht oder hat neue Version - neu initialisieren
+        }
+        if (nvs_err != ESP_OK) {
+            Serial.printf("Standard-NVS-Initialisierung fehlgeschlagen: %s\n", esp_err_to_name(nvs_err));
+        } else {
+            Serial.println("Standard-NVS erfolgreich initialisiert");
+        }
+        
+        // Pulse-NVS-Partition initialisieren
+        esp_err_t pulse_nvs_err = nvs_flash_init_partition(NVS_PARTITION_PULSE);
+        if (pulse_nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || pulse_nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            // Pulse-NVS-Partition wurde gelöscht oder hat neue Version - neu initialisieren
+            // WICHTIG: Nur bei Power-On löschen (bei Deep-Sleep-Wake-up sollte NVS noch vorhanden sein)
+            if (isPowerOn) {
                 Serial.printf("Pulse-NVS-Partition '%s' muss neu initialisiert werden...\n", NVS_PARTITION_PULSE);
                 esp_err_t erase_err = nvs_flash_erase_partition(NVS_PARTITION_PULSE);
                 if (erase_err != ESP_OK) {
@@ -1204,32 +1188,43 @@ void setup() {
                 } else {
                     pulse_nvs_err = nvs_flash_init_partition(NVS_PARTITION_PULSE);
                 }
-            }
-            if (pulse_nvs_err != ESP_OK) {
-                Serial.printf("Pulse-NVS-Initialisierung fehlgeschlagen: %s\n", esp_err_to_name(pulse_nvs_err));
             } else {
-                Serial.printf("Pulse-NVS-Partition '%s' erfolgreich initialisiert\n", NVS_PARTITION_PULSE);
+                Serial.printf("WARNUNG: Pulse-NVS-Partition '%s' benötigt Neuinitialisierung nach Deep-Sleep-Wake-up!\n", NVS_PARTITION_PULSE);
+                Serial.println("Versuche erneut zu initialisieren (ohne Löschung)...");
+                pulse_nvs_err = nvs_flash_init_partition(NVS_PARTITION_PULSE);
             }
-            
-            // NVS-Ring-Speicher: Versionsnummer prüfen und ggf. initialisieren
-            // Dies geschieht NUR beim ersten Boot nach Code-Upload oder partition.csv-Änderung
+        }
+        if (pulse_nvs_err != ESP_OK) {
+            Serial.printf("Pulse-NVS-Initialisierung fehlgeschlagen: %s\n", esp_err_to_name(pulse_nvs_err));
+        } else {
+            Serial.printf("Pulse-NVS-Partition '%s' erfolgreich initialisiert\n", NVS_PARTITION_PULSE);
+        }
+        
+        // NVS-Ring-Speicher: Versionsnummer prüfen und ggf. initialisieren
+        // Dies geschieht NUR beim ersten Boot nach Code-Upload oder partition.csv-Änderung
+        if (isPowerOn) {
             Serial.println("Prüfe NVS-Ring-Speicher-Version...");
             Serial.printf("Erwartete Version (Build-Timestamp): %lu\n", RING_BUFFER_VERSION);
             check_and_init_pulse_ring_nvs();
-            
-            // LP-Core Watchdog Task starten (asynchron)
-            // Der Task prüft automatisch lp_core_running und startet LP-Core bei Bedarf
-            xTaskCreate(
-                lp_core_watchdog_task,      // Task-Funktion
-                "LP_Core_Watchdog",          // Task-Name
-                4096,                        // Stack-Größe (Bytes)
-                NULL,                        // Parameter
-                1,                           // Priorität (niedrig, da nicht kritisch)
-                NULL                         // Task-Handle (nicht benötigt)
-            );
-            Serial.println("LP-Core Watchdog Task gestartet");
-            
-            // ring_idx aus Ring-Speicher ermitteln (RTC-RAM wurde bei Power-On/ESP.restart() zurückgesetzt)
+        }
+        
+        // LP-Core Watchdog Task starten (asynchron)
+        // Der Task prüft automatisch lp_core_running und startet LP-Core bei Bedarf
+        // WICHTIG: Task wird sowohl bei Power-On als auch bei Deep-Sleep-Wake-up gestartet
+        xTaskCreate(
+            lp_core_watchdog_task,      // Task-Funktion
+            "LP_Core_Watchdog",          // Task-Name
+            4096,                        // Stack-Größe (Bytes)
+            NULL,                        // Parameter
+            1,                           // Priorität (niedrig, da nicht kritisch)
+            NULL                         // Task-Handle (nicht benötigt)
+        );
+        Serial.println("LP-Core Watchdog Task gestartet");
+        
+        // ring_idx aus Ring-Speicher ermitteln (RTC-RAM wurde bei Power-On/ESP.restart() zurückgesetzt)
+        // Bei Deep-Sleep-Wake-up sollte ring_idx noch im RTC-RAM vorhanden sein
+        if (isPowerOn || ring_idx >= RING_BUFFER_SIZE) {
+            // Nur bei Power-On oder wenn ring_idx ungültig ist: aus Ring-Speicher ermitteln
             uint32_t max_index = 0;
             uint32_t max_pulse = find_max_pulse_and_index_from_nvs(&max_index);
             if (max_pulse > 0) {
@@ -1240,49 +1235,28 @@ void setup() {
                 ring_idx = 0;  // Erster Slot (keine Daten vorhanden)
                 Serial.println("ring_idx auf 0 gesetzt (keine Daten im Ring-Speicher)");
             }
-            
-            // Beim ersten Boot (Power-On) oder nach ESP.restart(): pulse_counter aus Ring-Speicher laden
-            // WICHTIG: RTC-RAM ist bei Power-On/ESP.restart() leer (pulse_counter == 0)
-            // Bei Deep-Sleep-Wake-up ist RTC-RAM noch vorhanden und muss NICHT geladen werden
-            if (pulse_counter == 0) {
-                Serial.println("RTC-RAM leer → Lade pulse_counter aus Ring-Speicher...");
-                if (max_pulse > 0) {
-                    pulse_counter = max_pulse;
-                    Serial.printf("pulse_counter aus Ring-Speicher übernommen: %lu\n", pulse_counter);
-                } else {
-                    pulse_counter = 0;
-                    Serial.println("Keine Ring-Speicher-Daten gefunden, pulse_counter auf 0 initialisiert");
-                }
+        } else {
+            Serial.printf("ring_idx aus RTC-RAM übernommen: %lu\n", ring_idx);
+        }
+        
+        // Beim ersten Boot (Power-On) oder nach ESP.restart(): pulse_counter aus Ring-Speicher laden
+        // WICHTIG: RTC-RAM ist bei Power-On/ESP.restart() leer (pulse_counter == 0)
+        // Bei Deep-Sleep-Wake-up ist RTC-RAM noch vorhanden und muss NICHT geladen werden
+        if (pulse_counter == 0) {
+            Serial.println("RTC-RAM leer → Lade pulse_counter aus Ring-Speicher...");
+            uint32_t max_index = 0;
+            uint32_t max_pulse = find_max_pulse_and_index_from_nvs(&max_index);
+            if (max_pulse > 0) {
+                pulse_counter = max_pulse;
+                Serial.printf("pulse_counter aus Ring-Speicher übernommen: %lu\n", pulse_counter);
             } else {
-                Serial.printf("RTC-RAM noch vorhanden (pulse_counter = %lu) → Keine NVS-Übertragung nötig\n", pulse_counter);
-                Serial.println("RTC-RAM behält Daten bei Deep-Sleep-Wake-up");
+                pulse_counter = 0;
+                Serial.println("Keine Ring-Speicher-Daten gefunden, pulse_counter auf 0 initialisiert");
             }
         } else {
-            // Bei Deep-Sleep-Wake-up: RTC-RAM sollte noch vorhanden sein
-            Serial.printf("Deep-Sleep-Wake-up erkannt → RTC-RAM sollte noch vorhanden sein (pulse_counter = %lu, ring_idx = %lu)\n", 
-                         pulse_counter, ring_idx);
-            if (pulse_counter == 0) {
-                Serial.println("WARNUNG: RTC-RAM ist leer trotz Deep-Sleep-Wake-up!");
-                Serial.println("Mögliche Ursachen: Spannung war unterbrochen oder RTC-RAM wurde zurückgesetzt");
-                Serial.println("Versuche pulse_counter und ring_idx aus Ring-Speicher zu laden...");
-                
-                // Versuche aus Ring-Speicher zu laden
-                uint32_t max_index = 0;
-                uint32_t max_pulse = find_max_pulse_and_index_from_nvs(&max_index);
-                if (max_pulse > 0) {
-                    pulse_counter = max_pulse;
-                    ring_idx = (max_index + 1) % RING_BUFFER_SIZE;
-                    Serial.printf("pulse_counter und ring_idx aus Ring-Speicher wiederhergestellt: pulse=%lu, ring_idx=%lu\n", 
-                                 pulse_counter, ring_idx);
-                }
-            } else if (ring_idx >= RING_BUFFER_SIZE) {
-                // ring_idx ist ungültig, aber pulse_counter ist vorhanden
-                Serial.println("WARNUNG: ring_idx ist ungültig trotz Deep-Sleep-Wake-up!");
-                Serial.println("Ermittle ring_idx aus Ring-Speicher...");
-                uint32_t max_index = 0;
-                find_max_pulse_and_index_from_nvs(&max_index);
-                ring_idx = (max_index + 1) % RING_BUFFER_SIZE;
-                Serial.printf("ring_idx wiederhergestellt: %lu\n", ring_idx);
+            Serial.printf("RTC-RAM noch vorhanden (pulse_counter = %lu) → Keine NVS-Übertragung nötig\n", pulse_counter);
+            if (!isPowerOn) {
+                Serial.println("RTC-RAM behält Daten bei Deep-Sleep-Wake-up");
             }
         }
         
@@ -1306,7 +1280,7 @@ void setup() {
         } else {
             Serial.println("Config-Laden fehlgeschlagen");
         }
-    }
+    }  // Ende des else-Blocks (ADC erfolgreich)
 }
 
 void loop() {

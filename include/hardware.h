@@ -17,8 +17,8 @@
 // HINWEIS: Bei einigen Boards ist die LED active-low (ON = LOW, OFF = HIGH)
 // Falls die LED nicht leuchtet, versuchen Sie LOW statt HIGH
 #define LED_BUILTIN_GPIO   15  // Interne LED
-#define LED_OFF              HIGH  // LED EIN (falls nicht funktioniert, auf LOW ändern)
-#define LED_ON             LOW   // LED AUS (falls nicht funktioniert, auf HIGH ändern)
+#define LED_OFF            HIGH  // LED AUS (bei HIGH!)
+#define LED_ON             LOW   // LED AN (bei LOW!)
 
 // Pin-Modi Definitionen (für Setup)
 #define BUTTON_A_GPIO_MODE  INPUT_PULLUP

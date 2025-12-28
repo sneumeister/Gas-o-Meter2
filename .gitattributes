@@ -20,6 +20,12 @@ CAD-housing/* binary
 *.yaml text eol=lf
 *.cmake text eol=lf
 *.csv text eol=lf
+*.code-workspace text eol=lf
+* text=auto
+*.cpp text eol=lf
+*.h text eol=lf
+*.js text eol=lf
+*.md text eol=lf
 
 # Web-Dateien LF
 *.html text eol=lf
