@@ -1,6 +1,7 @@
 # Build-Artefakte
 .pio
 build/
+data/bootstrap.min.css
 
 # IDE
 .vscode/.browse.c_cpp.db*

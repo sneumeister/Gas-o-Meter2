@@ -1,7 +1,8 @@
 #include <Arduino.h>
 #include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include "esp_sleep.h"
@@ -55,7 +56,7 @@ RTC_DATA_ATTR uint32_t lp_core_running = 0;  // LP-Core Watchdog-Zähler (wird v
 // Globale Variablen
 // ============================================
 AsyncWebServer server(80);
-bool spiffs_mounted = false;
+bool littlefs_mounted = false;
 bool server_started = false;  // Flag: Web-Server gestartet?
 
 // Akku-Messwerte
@@ -104,19 +105,21 @@ uint32_t read_adc_median_mv() {
 }
 
 // ============================================
-// SPIFFS Mount (einmalig)
+// LittleFS Mount (einmalig)
 // ============================================
-bool mount_spiffs() {
-    if (spiffs_mounted) {
+bool mount_littlefs() {
+    if (littlefs_mounted) {
         return true;
     }
     
-    if (!SPIFFS.begin(true)) {
-        Serial.println("SPIFFS Mount fehlgeschlagen");
+    // LittleFS mit explizitem Partitionsnamen mounten
+    // Parameter: formatOnFail, basePath, maxOpenFiles, partitionLabel
+    if (!LittleFS.begin(true, "", 10, "storage")) {
+        Serial.println("LittleFS Mount fehlgeschlagen");
         return false;
     }
     
-    spiffs_mounted = true;
+    littlefs_mounted = true;
     return true;
 }
 
@@ -437,12 +440,17 @@ bool check_and_init_pulse_ring_nvs() {
 }
 
 // ============================================
-// Ressourcen sauber beenden (Web-Server, WiFi, SPIFFS)
+// Ressourcen sauber beenden (Web-Server, WiFi, LittleFS)
 // ============================================
 void shutdown_resources() {
     Serial.println("Schließe Ressourcen...");
     
-    // 1. Web-Server stoppen
+    // 1. mDNS stoppen
+    MDNS.end();
+    Serial.println("mDNS gestoppt");
+    delay(50);
+    
+    // 2. Web-Server stoppen
     if (server_started) {
         server.end();
         server_started = false;  // Flag zurücksetzen
@@ -450,7 +458,7 @@ void shutdown_resources() {
         delay(100);  // Kurze Verzögerung für sauberes Schließen
     }
     
-    // 2. WiFi trennen und deaktivieren
+    // 3. WiFi trennen und deaktivieren
     if (WiFi.status() == WL_CONNECTED) {
         WiFi.disconnect(true);  // true = WiFi komplett deaktivieren
         Serial.println("WiFi getrennt und deaktiviert");
@@ -458,11 +466,11 @@ void shutdown_resources() {
     }
     WiFi.mode(WIFI_OFF);
     
-    // 3. SPIFFS unmounten (sichert alle ausstehenden Schreibvorgänge)
-    if (spiffs_mounted) {
-        SPIFFS.end();
-        spiffs_mounted = false;
-        Serial.println("SPIFFS unmounted");
+    // 4. LittleFS unmounten (sichert alle ausstehenden Schreibvorgänge)
+    if (littlefs_mounted) {
+        LittleFS.end();
+        littlefs_mounted = false;
+        Serial.println("LittleFS unmounted");
         delay(50);
     }
     
@@ -624,11 +632,11 @@ void enter_deep_sleep_with_gpio_wakeup() {
 // Config.json laden
 // ============================================
 bool load_config() {
-    if (!mount_spiffs()) {
+    if (!mount_littlefs()) {
         return false;
     }
     
-    File configFile = SPIFFS.open("/config.json", "r");
+    File configFile = LittleFS.open("/config.json", "r");
     if (!configFile) {
         Serial.println("config.json nicht gefunden");
         return false;
@@ -642,7 +650,7 @@ bool load_config() {
     }
     
     // JSON parsen
-    DynamicJsonDocument doc(1024);
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, configFile);
     configFile.close();
     
@@ -661,14 +669,14 @@ bool load_config() {
     config_rtc.adminpass[sizeof(config_rtc.adminpass) - 1] = '\0';
     
     // Wake-up Intervall: aus config.json oder Default aus hardware.h
-    if (doc.containsKey("wakeup_minutes")) {
+    if (doc["wakeup_minutes"].is<uint8_t>()) {
         config_rtc.wakeup_minutes = doc["wakeup_minutes"].as<uint8_t>();
     } else {
         config_rtc.wakeup_minutes = DEFAULT_WAKEUP_INTERVAL_MIN;
     }
     
     // Transfer Intervall: aus config.json oder Default (DEFAULT_TRANSFER_INTERVAL_X * DEFAULT_WAKEUP_INTERVAL_MIN)
-    if (doc.containsKey("tarnsfer_minutes")) {  // Tippfehler in JSON beibehalten
+    if (doc["tarnsfer_minutes"].is<uint8_t>()) {  // Tippfehler in JSON beibehalten
         config_rtc.transfer_minutes = doc["tarnsfer_minutes"].as<uint8_t>();
     } else {
         // Default: DEFAULT_TRANSFER_INTERVAL_X * DEFAULT_WAKEUP_INTERVAL_MIN
@@ -676,14 +684,14 @@ bool load_config() {
     }
     
     // ADC-Offset: aus config.json oder Default aus hardware.h
-    if (doc.containsKey("adc_voltage_offset")) {
+    if (doc["adc_voltage_offset"].is<float>()) {
         config_rtc.adc_voltage_offset = doc["adc_voltage_offset"].as<float>();
     } else {
         config_rtc.adc_voltage_offset = ADC_VOLTAGE_OFFSET;
     }
     
     // NTP-Server: aus config.json oder Default aus hardware.h
-    if (doc.containsKey("ntp_server")) {
+    if (doc["ntp_server"].is<const char*>()) {
         const char* ntp_server = doc["ntp_server"] | DEFAULT_NTP_SERVER;
         strncpy(config_rtc.ntp_server, ntp_server, sizeof(config_rtc.ntp_server) - 1);
         config_rtc.ntp_server[sizeof(config_rtc.ntp_server) - 1] = '\0';
@@ -703,16 +711,16 @@ bool load_config() {
 // WiFi-Verbindung mit höchster RSSI
 // ============================================
 bool connect_wifi() {
-    if (!mount_spiffs()) {
+    if (!mount_littlefs()) {
         return false;
     }
     
-    File configFile = SPIFFS.open("/config.json", "r");
+    File configFile = LittleFS.open("/config.json", "r");
     if (!configFile) {
         return false;
     }
     
-    DynamicJsonDocument doc(1024);
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, configFile);
     configFile.close();
     
@@ -720,7 +728,13 @@ bool connect_wifi() {
         return false;
     }
     
-    JsonArray credentials = doc["wifiCredentials"];
+    // Prüfe ob wifiCredentials ein Array ist
+    if (!doc["wifiCredentials"].is<JsonArray>()) {
+        Serial.println("wifiCredentials ist kein Array");
+        return false;
+    }
+    
+    JsonArray credentials = doc["wifiCredentials"].as<JsonArray>();
     if (credentials.size() == 0) {
         Serial.println("Keine WiFi-Credentials gefunden");
         return false;
@@ -733,6 +747,10 @@ bool connect_wifi() {
     WiFi.mode(WIFI_STA);  // Dann Station-Modus aktivieren
     WiFi.disconnect();    // Bestehende Verbindungen trennen
     delay(100);
+    
+    // Hostname setzen (für DHCP-Server, damit dieser den Namen in DNS eintragen kann)
+    WiFi.setHostname(config_rtc.hostname);
+    Serial.printf("Hostname gesetzt: %s\n", config_rtc.hostname);
     
     // WiFi-Scan durchführen
     int n = WiFi.scanNetworks();
@@ -932,7 +950,7 @@ void setupWebServer() {
         battery_percent = VOLTAGE_TO_PERCENT(battery_voltage);
         
         // Datei laden und Template-Variablen ersetzen
-        File file = SPIFFS.open("/index.html", "r");
+        File file = LittleFS.open("/index.html", "r");
         if (!file) {
             request->send(500, "text/plain", "index.html nicht gefunden");
             return;
@@ -981,7 +999,7 @@ void setupWebServer() {
         last_web_activity = millis();  // Web-Server-Aktivität aktualisieren
         
         // CSS mit Cache-Control-Header senden (kein Caching)
-        AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/style.css", "text/css");
+        AsyncWebServerResponse *response = request->beginResponse(LittleFS, "/style.css", "text/css");
         response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         response->addHeader("Pragma", "no-cache");
         response->addHeader("Expires", "0");
@@ -993,7 +1011,7 @@ void setupWebServer() {
         last_web_activity = millis();  // Web-Server-Aktivität aktualisieren
         
         // JavaScript mit Cache-Control-Header senden (kein Caching)
-        AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/script.js", "application/javascript");
+        AsyncWebServerResponse *response = request->beginResponse(LittleFS, "/script.js", "application/javascript");
         response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         response->addHeader("Pragma", "no-cache");
         response->addHeader("Expires", "0");
@@ -1266,6 +1284,15 @@ void setup() {
             
             // WiFi verbinden
             if (connect_wifi()) {
+                // mDNS starten (für .local Domain)
+                // HINWEIS: ESP32C6 ESPmDNS läuft automatisch asynchron im Hintergrund
+                if (MDNS.begin(config_rtc.hostname)) {
+                    Serial.println("mDNS gestartet");
+                    Serial.printf("Erreichbar unter: http://%s.local\n", config_rtc.hostname);
+                } else {
+                    Serial.println("mDNS Fehler!");
+                }
+                
                 // NTP-Zeitsynchronisation
                 sync_ntp_time();
                 
@@ -1274,6 +1301,7 @@ void setup() {
                 
                 Serial.println("Web-Server gestartet");
                 Serial.printf("Öffne: http://%s\n", WiFi.localIP().toString().c_str());
+                Serial.printf("Oder: http://%s.local\n", config_rtc.hostname);
             } else {
                 Serial.println("WiFi-Verbindung fehlgeschlagen");
             }
@@ -1285,6 +1313,7 @@ void setup() {
 
 void loop() {
     // AsyncWebServer läuft im Hintergrund, kein handleClient() nötig
+    // mDNS läuft automatisch asynchron im Hintergrund (nach MDNS.begin())
     
     // Prüfe Web-Server-Inaktivität: Wenn WIFI_WAIT_FOR_SLEEP Minuten keine Aktivität → Deep-Sleep
     if (last_web_activity > 0) {

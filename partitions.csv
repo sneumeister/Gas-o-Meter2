@@ -10,6 +10,6 @@ app0,     app,  ota_0,   0x10000, 0x140000,
 # NVS Partition für Pulse-Zähler Ringspeicher (96 KB)
 pulse_nv, data, nvs,     0x150000, 0x18000,
 #
-# SPIFFS Partition für config.json und andere Dateien (256 KB)
-spiffs,   data, spiffs,  0x168000, 0x40000,
+# LittleFS Partition für config.json und andere Dateien (256 KB)
+storage,   data, littlefs,  0x168000, 0x40000,
 
