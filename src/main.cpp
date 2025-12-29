@@ -67,6 +67,10 @@ uint8_t battery_percent = 0;
 // Web-Server Inaktivitäts-Timer
 unsigned long last_web_activity = 0;  // Zeitpunkt der letzten Web-Server-Aktivität
 
+// Deep-Sleep-Steuerung (zentralisiert in loop())
+bool should_enter_deep_sleep = false;
+const char* deep_sleep_reason = NULL;
+
 // ============================================
 // ADC Initialisierung (Arduino analogReadMilliVolts - automatisch kalibriert)
 // ============================================
@@ -197,9 +201,41 @@ uint32_t find_max_pulse_from_nvs() {
 }
 
 // ============================================
+// Pulse-NVS-Partition initialisieren (minimal, nur für Ring-Speicher)
+// ============================================
+bool init_pulse_nvs_minimal() {
+    // Prüfe, ob bereits initialisiert
+    esp_err_t err = nvs_flash_init_partition(NVS_PARTITION_PULSE);
+    if (err == ESP_OK) {
+        return true;  // Bereits initialisiert
+    }
+    
+    // Versuche zu initialisieren (ohne Löschung, da wir nur lesen/schreiben wollen)
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        Serial.printf("Pulse-NVS-Partition '%s' benötigt Initialisierung...\n", NVS_PARTITION_PULSE);
+        // Bei Wake-up: Versuche erneut zu initialisieren (ohne Löschung)
+        err = nvs_flash_init_partition(NVS_PARTITION_PULSE);
+    }
+    
+    if (err != ESP_OK) {
+        Serial.printf("Pulse-NVS-Initialisierung fehlgeschlagen: %s\n", esp_err_to_name(err));
+        return false;
+    }
+    
+    Serial.printf("Pulse-NVS-Partition '%s' erfolgreich initialisiert\n", NVS_PARTITION_PULSE);
+    return true;
+}
+
+// ============================================
 // RTC pulse_counter: In Ring-Speicher schreiben (bei ESP.restart(), Akku-Low, USB)
 // ============================================
 bool write_pulse_counter_to_ring_buffer() {
+    // WICHTIG: Stelle sicher, dass Pulse-NVS initialisiert ist
+    if (!init_pulse_nvs_minimal()) {
+        Serial.println("FEHLER: Pulse-NVS konnte nicht initialisiert werden → kein Schreiben möglich");
+        return false;
+    }
+    
     // Prüfung: Nur schreiben, wenn pulse_counter > 0
     if (pulse_counter == 0) {
         Serial.println("pulse_counter ist 0 → Keine Ring-Speicher-Schreibung nötig");
@@ -671,7 +707,11 @@ void enter_deep_sleep_with_gpio_and_timer_wakeup() {
     // Ressourcen sauber beenden
     shutdown_resources();
     
-    Serial.println("Gehe in Deep-Sleep...");
+    // Finale Deep-Sleep-Ausgabe
+    Serial.println("=== Gehe in Deep-Sleep ===");
+    Serial.println("Wake-up möglich durch:");
+    Serial.println("  - Taster A (GPIO-Wake-up)");
+    Serial.println("  - Timer (Cron-Intervall)");
     Serial.flush();
     
     esp_deep_sleep_start();
@@ -1177,21 +1217,16 @@ void setup() {
             Serial.println("USB-Stromversorgung erkannt - Betrieb fortgesetzt");
             Serial.printf("Spannung: %.2f V (USB-Schwelle: %.2f V)\n", 
                          battery_voltage, USB_DETECTION_THRESHOLD);
-            // WICHTIG: pulse_counter wird vor Deep-Sleep gespeichert (wie bei Akku-Low-Power)
-            // (USB-Stecker kann jederzeit gezogen werden → RTC-RAM geht verloren)
         } else if (battery_voltage < BATTERY_VOLTAGE_20) {
             // Spannung >= 2V aber < BATTERY_VOLTAGE_20: Akku zu niedrig → Deep-Sleep zum Schutz
             Serial.println("Akku zu niedrig - Deep-Sleep zum Akku-Schutz");
             Serial.printf("Spannung: %.2f V (Minimum: %.2f V)\n", 
                          battery_voltage, BATTERY_VOLTAGE_20);
             
-            // WICHTIG: pulse_counter vor Deep-Sleep in Ring-Speicher speichern
+            // Vor Deep-Sleep: pulse_counter prüfen und ggf. in Ring-Speicher schreiben
             // (bei Akku-Low kann RTC-RAM verloren gehen)
             Serial.println("Speichere pulse_counter in Ring-Speicher vor Deep-Sleep (Akku-Low)...");
             write_pulse_counter_to_ring_buffer();
-            
-            Serial.println("Gehe in Deep-Sleep mit Taster A Wake-up...");
-            Serial.flush();
             
             // Deep-Sleep mit GPIO-Wake-up (Taster A) - spart Energie und schützt Akku
             enter_deep_sleep_with_gpio_and_timer_wakeup();
@@ -1315,35 +1350,80 @@ void setup() {
             }
         }
         
-        // Config laden, WiFi, NTP und Web-Server (nur wenn Spannung OK)
+        // 1. Batteriespannung-Test und ggf. in Ring-Speicher schreiben
+        // < 30% ODER USB: Schreibe in Ring-Speicher (RTC-RAM könnte verloren gehen)
+        // >= 30%: Kein Schreiben (RTC-RAM bleibt erhalten)
+        if (battery_voltage < BATTERY_VOLTAGE_30 || battery_voltage < USB_DETECTION_THRESHOLD) {
+            Serial.println("Speichere pulse_counter in Ring-Speicher (< 30% oder USB)...");
+            write_pulse_counter_to_ring_buffer();
+        }
+        
+        // 2. Config laden (idempotent: prüft intern, ob bereits geladen)
+        // WICHTIG: Muss vor allen Aktionen geladen sein, da beide Stränge (Timer/Power-On/GPIO) Config benötigen
         if (load_config()) {
             Serial.println("Config erfolgreich geladen");
             
-            // WiFi verbinden
-            if (connect_wifi()) {
-                // mDNS starten (für .local Domain)
-                // HINWEIS: ESP32C6 ESPmDNS läuft automatisch asynchron im Hintergrund
-                if (MDNS.begin(config_rtc.hostname)) {
-                    Serial.println("mDNS gestartet");
-                    Serial.printf("Erreichbar unter: http://%s.local\n", config_rtc.hostname);
-                } else {
-                    Serial.println("mDNS Fehler!");
-                }
-                
-                // NTP-Zeitsynchronisation
-                sync_ntp_time();
-                
-                // Web-Server starten
-                setupWebServer();
-                
-                Serial.println("Web-Server gestartet");
-                Serial.printf("Öffne: http://%s\n", WiFi.localIP().toString().c_str());
-                Serial.printf("Oder: http://%s.local\n", config_rtc.hostname);
-            } else {
-                Serial.println("WiFi-Verbindung fehlgeschlagen");
+            // 3. Abhängig vom Wake-up-Grund: Unterschiedliche Aktionen
+            switch (wakeup_reason) {
+                case ESP_SLEEP_WAKEUP_TIMER:
+                    // Timer-Wake-up: Datenübertragung, kein WiFi/Web-Server
+                    Serial.println("=== Timer-Wake-up: Datenübertragung ===");
+                    Serial.println("Hier sollten jetzt die Daten übertragen werden....................");
+                    
+                    // Deep-Sleep über loop() steuern (nicht sofort)
+                    should_enter_deep_sleep = true;
+                    deep_sleep_reason = "Timer-Wake-up: Datenübertragung abgeschlossen";
+                    break;
+                    
+                case ESP_SLEEP_WAKEUP_GPIO:
+                case ESP_SLEEP_WAKEUP_UNDEFINED:
+                default:
+                    // Power-On oder GPIO-Wake-up: WiFi und Web-Server starten
+                    // WiFi verbinden
+                    if (connect_wifi()) {
+                        // mDNS starten (für .local Domain)
+                        // HINWEIS: ESP32C6 ESPmDNS läuft automatisch asynchron im Hintergrund
+                        if (MDNS.begin(config_rtc.hostname)) {
+                            Serial.println("mDNS gestartet");
+                            Serial.printf("Erreichbar unter: http://%s.local\n", config_rtc.hostname);
+                        } else {
+                            Serial.println("mDNS Fehler!");
+                        }
+                        
+                        // NTP-Zeitsynchronisation
+                        sync_ntp_time();
+                        
+                        // Web-Server starten
+                        setupWebServer();
+                        
+                        Serial.println("Web-Server gestartet");
+                        Serial.printf("Öffne: http://%s\n", WiFi.localIP().toString().c_str());
+                        Serial.printf("Oder: http://%s.local\n", config_rtc.hostname);
+                    } else {
+                        Serial.println("WiFi-Verbindung fehlgeschlagen");
+                    }
+                    break;
             }
         } else {
-            Serial.println("Config-Laden fehlgeschlagen");
+            Serial.println("WARNUNG: Config konnte nicht geladen werden!");
+            
+            // Auch ohne Config: Basierend auf Wake-up-Grund handeln
+            switch (wakeup_reason) {
+                case ESP_SLEEP_WAKEUP_TIMER:
+                    Serial.println("=== Timer-Wake-up: Datenübertragung ===");
+                    Serial.println("FEHLER: Config nicht verfügbar → Datenübertragung nicht möglich");
+                    
+                    // Deep-Sleep über loop() steuern (nicht sofort)
+                    should_enter_deep_sleep = true;
+                    deep_sleep_reason = "Timer-Wake-up: Config-Fehler → Deep-Sleep";
+                    break;
+                    
+                case ESP_SLEEP_WAKEUP_GPIO:
+                case ESP_SLEEP_WAKEUP_UNDEFINED:
+                default:
+                    Serial.println("Config-Laden fehlgeschlagen → WiFi/Web-Server nicht gestartet");
+                    break;
+            }
         }
     }  // Ende des else-Blocks (ADC erfolgreich)
 }
@@ -1352,24 +1432,34 @@ void loop() {
     // AsyncWebServer läuft im Hintergrund, kein handleClient() nötig
     // mDNS läuft automatisch asynchron im Hintergrund (nach MDNS.begin())
     
-    // Prüfe Web-Server-Inaktivität: Wenn WIFI_WAIT_FOR_SLEEP Minuten keine Aktivität → Deep-Sleep
-    if (last_web_activity > 0) {
+    // Prüfe Web-Server-Inaktivität: Wenn WIFI_WAIT_FOR_SLEEP Minuten keine Aktivität → Deep-Sleep anfordern
+    if (server_started) {  // Web-Server läuft
         unsigned long inactivity_ms = millis() - last_web_activity;
         unsigned long sleep_threshold_ms = WIFI_WAIT_FOR_SLEEP * 60 * 1000UL;  // Minuten in Millisekunden
         
-        if (inactivity_ms >= sleep_threshold_ms) {
-            Serial.printf("Keine Web-Server-Aktivität seit %lu Minuten → Deep-Sleep\n", WIFI_WAIT_FOR_SLEEP);
-            
-            // WICHTIG: pulse_counter vor Deep-Sleep in Ring-Speicher speichern
-            // (gilt für alle Deep-Sleep-Szenarien: Inaktivität, Akku-Low, USB-Betrieb)
-            Serial.println("Speichere pulse_counter in Ring-Speicher vor Deep-Sleep...");
-            write_pulse_counter_to_ring_buffer();
-            
-            Serial.flush();
-            
-            // Deep-Sleep mit GPIO-Wake-up (Taster A)
-            enter_deep_sleep_with_gpio_and_timer_wakeup();
+        if (inactivity_ms >= sleep_threshold_ms && !should_enter_deep_sleep) {
+            Serial.printf("Keine Web-Server-Aktivität seit %lu Minuten → Deep-Sleep anfordern\n", WIFI_WAIT_FOR_SLEEP);
+            should_enter_deep_sleep = true;
+            deep_sleep_reason = "Web-Server-Inaktivität";
         }
+    }
+    
+    // Prüfe, ob Deep-Sleep gewünscht ist (Timer-Wake-up, Web-Timeout, etc.)
+    if (should_enter_deep_sleep) {
+        Serial.println(deep_sleep_reason);
+        
+        // Ring-Speicher-Prüfung (einmalig, zentralisiert)
+        // < 30% ODER USB: Schreibe in Ring-Speicher (RTC-RAM könnte verloren gehen)
+        // >= 30%: Kein Schreiben (RTC-RAM bleibt erhalten)
+        if (battery_voltage < BATTERY_VOLTAGE_30 || battery_voltage < USB_DETECTION_THRESHOLD) {
+            Serial.println("Speichere pulse_counter in Ring-Speicher vor Deep-Sleep (< 30% oder USB)...");
+            write_pulse_counter_to_ring_buffer();
+        } else {
+            Serial.println("Akku-Spannung OK (>= 30%) → pulse_counter bleibt im RTC-RAM (kein Schreiben nötig)");
+        }
+        
+        enter_deep_sleep_with_gpio_and_timer_wakeup();
+        return;  // Wird nie erreicht, aber für Klarheit
     }
     
     delay(100);

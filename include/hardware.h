@@ -63,6 +63,7 @@
 #define BATTERY_VOLTAGE_FULL      4.02f   // ≥4.02V = 100% = "Voll"
 #define BATTERY_VOLTAGE_80        3.92f   // 3.92V = 80% = "Gut"
 #define BATTERY_VOLTAGE_50        3.72f   // 3.72V = 50% = "Mittel"
+#define BATTERY_VOLTAGE_30        3.57f   // 3.57V = 30% (Schwelle für Ring-Speicher-Schreibung)
 #define BATTERY_VOLTAGE_20        3.42f   // 3.42V = 20% = "Niedrig"
 #define BATTERY_VOLTAGE_PROTECTION 3.15f   // ≤3.15V = 0% = "Schutz!" (Betrieb einstellen)
 

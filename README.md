@@ -28,4 +28,4 @@ Siehe `data/config.json_example` für Konfigurations-Optionen.
 
 ## Lizenz
 
-[Ihre Lizenz hier]
+[GNU General Public License v3.0](./LICENSE "GNU General Public License v3.0")
