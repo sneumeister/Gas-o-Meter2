@@ -480,9 +480,46 @@ void shutdown_resources() {
 }
 
 // ============================================
-// Deep-Sleep mit GPIO-Wake-up konfigurieren
+// Berechne nächsten Timer-Wake-up-Zeitpunkt (Cron-ähnlich)
 // ============================================
-void enter_deep_sleep_with_gpio_wakeup() {
+uint64_t calculate_next_wakeup_timer() {
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        Serial.println("WARNUNG: Keine Zeit-Synchronisation → verwende Fallback-Intervall");
+        return config_rtc.wakeup_minutes * 60 * 1000000ULL;  // Mikrosekunden
+    }
+    
+    // 1. Ist-UNIX_EPOCH ermitteln
+    time_t current_time = mktime(&timeinfo);
+    
+    // 2. Target-UNIX_EPOCH = Ist-UNIX_EPOCH + WAKEUP_BUFFER_SEC
+    time_t target_time = current_time + WAKEUP_BUFFER_SEC;
+    
+    // 3. Intervall in Sekunden (z.B. 10 Minuten = 600 Sekunden)
+    int interval_seconds = config_rtc.wakeup_minutes * 60;
+    
+    // 4. Auf nächste Intervall-Grenze aufrunden (Vielfaches von interval_seconds)
+    // Beispiel: target_time = 12345, interval = 600 → next_wakeup = 12600
+    time_t next_wakeup_time = ((target_time / interval_seconds) + 1) * interval_seconds;
+    
+    // 5. Wake-Interval = Target-UNIX_EPOCH - Ist-UNIX_EPOCH
+    int seconds_until_wakeup = (int)(next_wakeup_time - current_time);
+    
+    // 6. Zur Textausgabe: Target-UNIX_EPOCH in Time-struct wandeln
+    struct tm next_wakeup_tm;
+    localtime_r(&next_wakeup_time, &next_wakeup_tm);
+    Serial.printf("Aktuelle Zeit: %02d:%02d:%02d\n", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    Serial.printf("Nächster Wake-up: %02d:%02d:00 (in %d Sekunden = %.2f Minuten)\n", 
+                 next_wakeup_tm.tm_hour, next_wakeup_tm.tm_min, seconds_until_wakeup, (float)seconds_until_wakeup / 60.0f);
+    
+    // Konvertiere zu Mikrosekunden für esp_sleep_enable_timer_wakeup()
+    return (uint64_t)seconds_until_wakeup * 1000000ULL;
+}
+
+// ============================================
+// Deep-Sleep mit GPIO- und Timer-Wake-up konfigurieren
+// ============================================
+void enter_deep_sleep_with_gpio_and_timer_wakeup() {
     Serial.println("Konfiguriere Deep-Sleep mit GPIO-Wake-up (Taster A)...");
     
     // Taster A (BUTTON_A_GPIO) als Wake-up-Source konfigurieren
@@ -614,6 +651,19 @@ void enter_deep_sleep_with_gpio_wakeup() {
         }
     }
     
+    // Timer-Wake-up berechnen und aktivieren
+    uint64_t wakeup_time_us = calculate_next_wakeup_timer();
+    
+    if (wakeup_time_us > 0) {
+        esp_err_t ret = esp_sleep_enable_timer_wakeup(wakeup_time_us);
+        if (ret != ESP_OK) {
+            Serial.printf("FEHLER: Timer-Wake-up-Konfiguration fehlgeschlagen: %s\n", esp_err_to_name(ret));
+        } else {
+            Serial.printf("Timer-Wake-up aktiviert: %llu Sekunden (%.2f Minuten)\n", 
+                         wakeup_time_us / 1000000ULL, (float)wakeup_time_us / 60000000.0f);
+        }
+    }
+    
     // LED ausschalten (HP-Core geht in Deep-Sleep)
     digitalWrite(LED_BUILTIN_GPIO, LED_OFF);
     Serial.println("Interne LED ausgeschaltet (Deep-Sleep)");
@@ -632,6 +682,12 @@ void enter_deep_sleep_with_gpio_wakeup() {
 // Config.json laden
 // ============================================
 bool load_config() {
+    // Prüfen, ob Config bereits geladen ist (z.B. aus RTC-RAM nach Wake-up)
+    if (config_rtc.config_loaded) {
+        Serial.println("Config bereits geladen (aus RTC-RAM) → kein erneutes Laden nötig");
+        return true;
+    }
+    
     if (!mount_littlefs()) {
         return false;
     }
@@ -1057,33 +1113,31 @@ void setup() {
     Serial.println("\n=== Gas-O-Meter ===");
     Serial.printf("Wake-up Count: %d\n", wakeupCount);
     
-    // Wake-up-Grund ausgeben
-    switch (wakeup_reason) {
-        case ESP_SLEEP_WAKEUP_UNDEFINED:
-            Serial.println("Power-On erkannt (kein Wake-up)");
-            break;
-        case ESP_SLEEP_WAKEUP_EXT0:
-            Serial.println("Wake-up erkannt: EXT0 (GPIO)");
-            break;
-        case ESP_SLEEP_WAKEUP_EXT1:
-            Serial.println("Wake-up erkannt: EXT1 (GPIO)");
-            break;
-        case ESP_SLEEP_WAKEUP_GPIO:
-            Serial.println("Wake-up erkannt: GPIO (Taster A gedrückt)");
-            // GPIO-Wake-up-Pin ermitteln (falls unterstützt)
-            break;
-        case ESP_SLEEP_WAKEUP_TIMER:
-            Serial.println("Wake-up erkannt: Timer");
-            break;
-        case ESP_SLEEP_WAKEUP_TOUCHPAD:
-            Serial.println("Wake-up erkannt: Touchpad");
-            break;
-        case ESP_SLEEP_WAKEUP_ULP:
-            Serial.println("Wake-up erkannt: ULP");
-            break;
-        default:
-            Serial.printf("Wake-up erkannt: Unbekannt (0x%x)\n", wakeup_reason);
-            break;
+    // Wake-up-Grund detailliert ausgeben
+    if (isPowerOn) {
+        Serial.println("=== EVENT: Power-On ===");
+    } else {
+        switch (wakeup_reason) {
+            case ESP_SLEEP_WAKEUP_GPIO:
+                Serial.println("=== EVENT: Wake-up durch GPIO (Taster A) ===");
+                break;
+            case ESP_SLEEP_WAKEUP_TIMER:
+                Serial.println("=== EVENT: Wake-up durch Timer (Cron-Intervall) ===");
+                break;
+            case ESP_SLEEP_WAKEUP_EXT0:
+            case ESP_SLEEP_WAKEUP_EXT1:
+                Serial.println("=== EVENT: Wake-up durch GPIO (EXT) ===");
+                break;
+            case ESP_SLEEP_WAKEUP_TOUCHPAD:
+                Serial.println("=== EVENT: Wake-up durch Touchpad ===");
+                break;
+            case ESP_SLEEP_WAKEUP_ULP:
+                Serial.println("=== EVENT: Wake-up durch ULP ===");
+                break;
+            default:
+                Serial.printf("=== EVENT: Wake-up durch Unbekannt (0x%x) ===\n", wakeup_reason);
+                break;
+        }
     }
     
     if (isPowerOn) {
@@ -1140,7 +1194,7 @@ void setup() {
             Serial.flush();
             
             // Deep-Sleep mit GPIO-Wake-up (Taster A) - spart Energie und schützt Akku
-            enter_deep_sleep_with_gpio_wakeup();
+            enter_deep_sleep_with_gpio_and_timer_wakeup();
             // Ab hier wird Code nicht mehr ausgeführt (Deep-Sleep)
         }
         
@@ -1314,7 +1368,7 @@ void loop() {
             Serial.flush();
             
             // Deep-Sleep mit GPIO-Wake-up (Taster A)
-            enter_deep_sleep_with_gpio_wakeup();
+            enter_deep_sleep_with_gpio_and_timer_wakeup();
         }
     }
     

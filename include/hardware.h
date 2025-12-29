@@ -91,8 +91,15 @@
 // ============================================
 
 // Standard Wake-up Interval (wird von config.json überschrieben) zur ADC-Abfrage
+// Cron-ähnliche Logik: Wake-up erfolgt zu Minuten der Stunde, die durch diesen Wert teilbar sind
+// Beispiel: DEFAULT_WAKEUP_INTERVAL_MIN = 10 → Wake-up bei 0, 10, 20, 30, 40, 50 Minuten jeder Stunde
+// Muss Teiler von 60 sein: 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60
 #define DEFAULT_WAKEUP_INTERVAL_MIN  10  // Minuten
 #define DEFAULT_WAKEUP_INTERVAL_US   (DEFAULT_WAKEUP_INTERVAL_MIN * 60 * 1000000ULL)
+
+// Puffer-Zeit vor Wake-up-Berechnung (verhindert sofortiges Wake-up wenn kurz vor dem Zeitpunkt)
+// Wird zur aktuellen Zeit addiert, bevor nächster Wake-up-Zeitpunkt berechnet wird
+#define WAKEUP_BUFFER_SEC  30  // Sekunden
 
 // Standard Transfer Interval (wird von config.json überschrieben) : x * DEFAULT_WAKEUP_INTERVAL_MIN
 #define DEFAULT_TRANSFER_INTERVAL_X  3  // Multiplikator für Transfer-Intervall
