@@ -25,8 +25,11 @@ bool start_lp_core() { return false; }  // LP-Core kommt später....
 typedef struct {
     char hostname[32];
     char adminpass[32];
-    char wifi_ssid[32];
-    char wifi_password[64];
+    struct {
+        char ssid[32];
+        char password[64];
+    } wifi_credentials[2];  // Max 2 SSID/Passwort-Paare
+    uint8_t wifi_count;  // Anzahl der gespeicherten Credentials (0, 1 oder 2)
     uint8_t wakeup_minutes;
     uint8_t transfer_minutes;
     float adc_voltage_offset;  // ADC-Offset-Korrektur in Volt (aus config.json oder hardware.h)
@@ -35,10 +38,10 @@ typedef struct {
 } config_rtc_t;
 
 RTC_DATA_ATTR config_rtc_t config_rtc = {
-    .hostname = "gas-o-meter2",
+    .hostname = "gasometer2",
     .adminpass = "",
-    .wifi_ssid = "",
-    .wifi_password = "",
+    .wifi_credentials = {{"", ""}, {"", ""}},
+    .wifi_count = 0,
     .wakeup_minutes = DEFAULT_WAKEUP_INTERVAL_MIN,
     .transfer_minutes = DEFAULT_TRANSFER_INTERVAL_X * DEFAULT_WAKEUP_INTERVAL_MIN,
     .adc_voltage_offset = ADC_VOLTAGE_OFFSET,  // Default aus hardware.h
@@ -476,6 +479,119 @@ bool check_and_init_pulse_ring_nvs() {
 }
 
 // ============================================
+// NVS-Partition initialisieren (Hilfsfunktion)
+// ============================================
+// Initialisiert eine NVS-Partition (Standard oder Pulse)
+// WICHTIG: nvs_flash_init() ist idempotent - wenn bereits initialisiert, passiert nichts (keine Wear!)
+// Bei Power-On: Partition wird gelöscht und neu initialisiert (falls nötig)
+// Bei Deep-Sleep-Wake-up: Versucht erneut zu initialisieren ohne Löschung (NVS sollte noch vorhanden sein)
+bool init_nvs_partition(const char* partition_name, bool is_power_on, bool is_standard_nvs) {
+    esp_err_t err;
+    
+    // Initialisierung versuchen (Standard-NVS oder Pulse-NVS)
+    if (is_standard_nvs) {
+        err = nvs_flash_init();
+    } else {
+        err = nvs_flash_init_partition(partition_name);
+    }
+    
+    // Prüfen, ob Neuinitialisierung erforderlich ist
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        if (is_power_on) {
+            // Bei Power-On: Partition löschen und neu initialisieren
+            Serial.printf("%s muss neu initialisiert werden...\n", partition_name);
+            esp_err_t erase_err = is_standard_nvs ? 
+                nvs_flash_erase() : 
+                nvs_flash_erase_partition(partition_name);
+            if (erase_err == ESP_OK) {
+                err = is_standard_nvs ? 
+                    nvs_flash_init() : 
+                    nvs_flash_init_partition(partition_name);
+            } else {
+                Serial.printf("%s-Löschung fehlgeschlagen: %s\n", partition_name, esp_err_to_name(erase_err));
+            }
+        } else {
+            // Bei Deep-Sleep-Wake-up: Versuche erneut ohne Löschung (NVS sollte noch vorhanden sein)
+            Serial.printf("WARNUNG: %s benötigt Neuinitialisierung!\n", partition_name);
+            Serial.println("Versuche erneut zu initialisieren (ohne Löschung)...");
+            err = is_standard_nvs ? 
+                nvs_flash_init() : 
+                nvs_flash_init_partition(partition_name);
+        }
+    }
+    
+    // Ergebnis prüfen
+    if (err != ESP_OK) {
+        Serial.printf("%s-Initialisierung fehlgeschlagen: %s\n", partition_name, esp_err_to_name(err));
+        return false;
+    }
+    Serial.printf("%s erfolgreich initialisiert\n", partition_name);
+    return true;
+}
+
+// ============================================
+// NVS-Partitionen initialisieren
+// ============================================
+// Initialisiert beide NVS-Partitionen (Standard und Pulse)
+// Wird bei Power-On und Deep-Sleep-Wake-up aufgerufen
+void init_nvs_partitions(bool is_power_on) {
+    init_nvs_partition("Standard-NVS", is_power_on, true);
+    init_nvs_partition(NVS_PARTITION_PULSE, is_power_on, false);
+}
+
+// ============================================
+// ring_idx und pulse_counter initialisieren (kombiniert)
+// ============================================
+// Initialisiert ring_idx und pulse_counter aus RTC-RAM oder NVS-Ring-Speicher
+// ring_idx: Ring-Buffer-Index (im RTC-RAM, wird bei Power-On/ESP.restart() neu ermittelt)
+//           Bei Deep-Sleep-Wake-up sollte ring_idx noch im RTC-RAM vorhanden sein
+// pulse_counter: Puls-Zähler (im RTC-RAM, wird bei Power-On/ESP.restart() aus Ring-Speicher geladen)
+//                Bei Deep-Sleep-Wake-up ist RTC-RAM noch vorhanden und muss NICHT geladen werden
+void init_ring_buffer_and_pulse_counter(bool is_power_on) {
+    // ring_idx initialisieren
+    // Bei Power-On oder wenn ring_idx ungültig: aus Ring-Speicher ermitteln
+    if (is_power_on || ring_idx >= RING_BUFFER_SIZE) {
+        uint32_t max_index = 0;
+        uint32_t max_pulse = find_max_pulse_and_index_from_nvs(&max_index);
+        if (max_pulse > 0) {
+            // Nächster freier Slot: (max_index + 1) % RING_BUFFER_SIZE
+            ring_idx = (max_index + 1) % RING_BUFFER_SIZE;
+            Serial.printf("ring_idx aus Ring-Speicher: %lu (höchster Index: %lu)\n", ring_idx, max_index);
+        } else {
+            ring_idx = 0;  // Erster Slot (keine Daten vorhanden)
+            Serial.println("ring_idx auf 0 gesetzt (keine Daten im Ring-Speicher)");
+        }
+    } else {
+        // Bei Deep-Sleep-Wake-up: ring_idx aus RTC-RAM übernehmen
+        Serial.printf("ring_idx aus RTC-RAM: %lu\n", ring_idx);
+    }
+    
+    // pulse_counter initialisieren
+    // Beim ersten Boot (Power-On) oder nach ESP.restart(): pulse_counter aus Ring-Speicher laden
+    // WICHTIG: RTC-RAM ist bei Power-On/ESP.restart() leer (pulse_counter == 0)
+    // Bei Deep-Sleep-Wake-up ist RTC-RAM noch vorhanden und muss NICHT geladen werden
+    if (pulse_counter == 0) {
+        uint32_t max_index = 0;
+        uint32_t max_pulse = find_max_pulse_and_index_from_nvs(&max_index);
+        if (max_pulse > 0) {
+            pulse_counter = max_pulse;
+            Serial.printf("pulse_counter aus Ring-Speicher: %lu\n", pulse_counter);
+        } else {
+            pulse_counter = 0;
+            Serial.println("pulse_counter auf 0 initialisiert (keine Ring-Speicher-Daten)");
+        }
+    } else {
+        // RTC-RAM noch vorhanden (bei Deep-Sleep-Wake-up)
+        Serial.printf("pulse_counter aus RTC-RAM: %lu", pulse_counter);
+        if (!is_power_on) {
+            Serial.println(" (RTC-RAM behält Daten bei Deep-Sleep-Wake-up)");
+        } else {
+            Serial.println();
+        }
+    }
+}
+
+// ============================================
 // Ressourcen sauber beenden (Web-Server, WiFi, LittleFS)
 // ============================================
 void shutdown_resources() {
@@ -555,7 +671,8 @@ uint64_t calculate_next_wakeup_timer() {
 // ============================================
 // Deep-Sleep mit GPIO- und Timer-Wake-up konfigurieren
 // ============================================
-void enter_deep_sleep_with_gpio_and_timer_wakeup() {
+// enable_timer: true = Timer-Wake-up aktivieren, false = nur GPIO-Wake-up (Taster)
+void enter_deep_sleep_with_gpio_and_timer_wakeup(bool enable_timer = true) {
     Serial.println("Konfiguriere Deep-Sleep mit GPIO-Wake-up (Taster A)...");
     
     // Taster A (BUTTON_A_GPIO) als Wake-up-Source konfigurieren
@@ -574,10 +691,11 @@ void enter_deep_sleep_with_gpio_and_timer_wakeup() {
     // Prüfen, ob BUTTON_A_GPIO RTC-fähig ist (für Deep-Sleep-Wake-up)
     // Laut ESP-IDF-Dokumentation: Nur GPIOs 0-7 haben RTC-Funktionalität
     bool is_rtc_gpio = (gpio_num <= 7);
+    bool gpio_wakeup_configured = false;
     
     if (is_rtc_gpio) {
         // RTC-GPIO verwenden (empfohlen für Deep-Sleep-Wake-up)
-        Serial.printf("GPIO%d ist RTC-fähig → verwende RTC-GPIO-Funktionen\n", gpio_num);
+        Serial.printf("GPIO%d ist RTC-fähig → konfiguriere GPIO-Wake-up\n", gpio_num);
         
         // RTC-GPIO initialisieren
         rtc_gpio_init(gpio_num);
@@ -613,105 +731,123 @@ void enter_deep_sleep_with_gpio_and_timer_wakeup() {
         esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
         Serial.println("RTC_PERIPH Domain ausgeschaltet → HOLD wird automatisch verwendet");
         
-    } else {
-        // Normale GPIO-Funktionen verwenden (nicht RTC-fähig)
-        Serial.printf("GPIO%d ist NICHT RTC-fähig → verwende normale GPIO-Funktionen\n", gpio_num);
+        // WICHTIG: Kurze Verzögerung, damit Pull-Up/Pull-Down stabilisiert
+        delay(50);
         
-        // Level basierend auf GPIO-Modus bestimmen
-        if (gpio_mode == INPUT_PULLUP) {
-            wakeup_level = GPIO_INTR_LOW_LEVEL;
-            level_name = "LOW LEVEL (Taster gedrückt = LOW)";
-            gpio_set_direction(gpio_num, GPIO_MODE_INPUT);
-            gpio_set_pull_mode(gpio_num, GPIO_PULLUP_ONLY);
-        } else if (gpio_mode == INPUT_PULLDOWN) {
-            wakeup_level = GPIO_INTR_HIGH_LEVEL;
-            level_name = "HIGH LEVEL (Taster gedrückt = HIGH)";
-            gpio_set_direction(gpio_num, GPIO_MODE_INPUT);
-            gpio_set_pull_mode(gpio_num, GPIO_PULLDOWN_ONLY);
-        } else {
-            wakeup_level = GPIO_INTR_LOW_LEVEL;
-            level_name = "LOW LEVEL (Default)";
-            gpio_set_direction(gpio_num, GPIO_MODE_INPUT);
-            gpio_set_pull_mode(gpio_num, GPIO_FLOATING);
+        // Aktuellen GPIO-Zustand prüfen (für Debugging und Warnung)
+        int gpio_state = rtc_gpio_get_level(gpio_num);
+        Serial.printf("BUTTON_A_GPIO aktueller Zustand: %s\n", gpio_state ? "HIGH" : "LOW");
+        
+        // WICHTIG: Bei Level-Mode weckt ESP32C6 sofort, wenn GPIO bereits im Wake-up-Level ist!
+        // Daher prüfen und warnen, falls GPIO bereits im Wake-up-Level ist
+        if ((wakeup_level == GPIO_INTR_LOW_LEVEL && gpio_state == 0) ||
+            (wakeup_level == GPIO_INTR_HIGH_LEVEL && gpio_state == 1)) {
+            Serial.println("WARNUNG: BUTTON_A_GPIO ist bereits im Wake-up-Level! System würde sofort wecken.");
+            Serial.println("Stelle sicher, dass Taster nicht gedrückt ist, bevor Deep-Sleep startet!");
+            return;  // Deep-Sleep abbrechen
         }
         
-        // Für nicht-RTC-GPIOs: HOLD manuell aktivieren
-        // Laut Dokumentation wird HOLD automatisch verwendet, wenn RTC_PERIPH ausgeschaltet ist
-        gpio_hold_en(gpio_num);
-        Serial.println("GPIO-Hold manuell aktiviert (für nicht-RTC-GPIO)");
-    }
-    
-    // WICHTIG: Kurze Verzögerung, damit Pull-Up/Pull-Down stabilisiert
-    delay(50);
-    
-    // Aktuellen GPIO-Zustand prüfen (für Debugging und Warnung)
-    int gpio_state = is_rtc_gpio ? rtc_gpio_get_level(gpio_num) : gpio_get_level(gpio_num);
-    Serial.printf("BUTTON_A_GPIO aktueller Zustand: %s\n", gpio_state ? "HIGH" : "LOW");
-    
-    // WICHTIG: Bei Level-Mode weckt ESP32C6 sofort, wenn GPIO bereits im Wake-up-Level ist!
-    // Daher prüfen und warnen, falls GPIO bereits im Wake-up-Level ist
-    if ((wakeup_level == GPIO_INTR_LOW_LEVEL && gpio_state == 0) ||
-        (wakeup_level == GPIO_INTR_HIGH_LEVEL && gpio_state == 1)) {
-        Serial.println("WARNUNG: BUTTON_A_GPIO ist bereits im Wake-up-Level! System würde sofort wecken.");
-        Serial.println("Stelle sicher, dass Taster nicht gedrückt ist, bevor Deep-Sleep startet!");
-        if (!is_rtc_gpio) {
-            gpio_hold_dis(gpio_num);  // HOLD deaktivieren, falls aktiviert
-        }
-        return;  // Deep-Sleep abbrechen
-    }
-    
-    // GPIO-Wake-up aktivieren (ESP32C6 unterstützt nur gpio_wakeup, nicht ext0/ext1)
-    esp_err_t ret = esp_sleep_enable_gpio_wakeup();
-    if (ret != ESP_OK) {
-        Serial.printf("FEHLER: GPIO-Wake-up-Konfiguration fehlgeschlagen: %s\n", esp_err_to_name(ret));
-        Serial.println("Deep-Sleep wird ohne Wake-up-Konfiguration gestartet!");
-        if (!is_rtc_gpio) {
-            gpio_hold_dis(gpio_num);  // HOLD deaktivieren, falls aktiviert
-        }
-    } else {
-        // GPIO als Wake-up-Source setzen: Level basierend auf GPIO-Modus
-        // ESP32C6 unterstützt NUR Level-Mode (LOW_LEVEL oder HIGH_LEVEL)
-        ret = gpio_wakeup_enable(gpio_num, wakeup_level);
+        // GPIO-Wake-up aktivieren (ESP32C6 unterstützt nur gpio_wakeup, nicht ext0/ext1)
+        esp_err_t ret = esp_sleep_enable_gpio_wakeup();
         if (ret != ESP_OK) {
-            Serial.printf("FEHLER: gpio_wakeup_enable fehlgeschlagen: %s\n", esp_err_to_name(ret));
-            Serial.printf("Fehler-Code: %s\n", esp_err_to_name(ret));
-            if (!is_rtc_gpio) {
-                gpio_hold_dis(gpio_num);  // HOLD deaktivieren, falls aktiviert
+            Serial.printf("FEHLER: GPIO-Wake-up-Konfiguration fehlgeschlagen: %s\n", esp_err_to_name(ret));
+            Serial.println("Deep-Sleep wird ohne GPIO-Wake-up gestartet!");
+        } else {
+            // GPIO als Wake-up-Source setzen: Level basierend auf GPIO-Modus
+            // ESP32C6 unterstützt NUR Level-Mode (LOW_LEVEL oder HIGH_LEVEL)
+            ret = gpio_wakeup_enable(gpio_num, wakeup_level);
+            if (ret != ESP_OK) {
+                Serial.printf("FEHLER: gpio_wakeup_enable fehlgeschlagen: %s\n", esp_err_to_name(ret));
+                Serial.printf("Fehler-Code: %s\n", esp_err_to_name(ret));
+            } else {
+                gpio_wakeup_configured = true;
+                Serial.printf("GPIO-Wake-up konfiguriert: Taster A (BUTTON_A_GPIO) - %s\n", level_name);
+                Serial.printf("GPIO-Modus: %s\n", 
+                             gpio_mode == INPUT_PULLUP ? "INPUT_PULLUP" : 
+                             (gpio_mode == INPUT_PULLDOWN ? "INPUT_PULLDOWN" : "INPUT"));
+                Serial.println("HOLD-Funktion aktiv: Pull-Up/Pull-Down wird während Deep-Sleep gehalten");
             }
-        } else {
-            Serial.printf("Deep-Sleep konfiguriert: Wake-up bei Taster A (BUTTON_A_GPIO) via GPIO - %s\n", level_name);
-            Serial.printf("GPIO-Modus: %s\n", 
-                         gpio_mode == INPUT_PULLUP ? "INPUT_PULLUP" : 
-                         (gpio_mode == INPUT_PULLDOWN ? "INPUT_PULLDOWN" : "INPUT"));
-            Serial.println("HOLD-Funktion aktiv: Pull-Up/Pull-Down wird während Deep-Sleep gehalten");
         }
+    } else {
+        // Nicht-RTC-Pin: GPIO-Wake-up nicht möglich
+        Serial.printf("WARNUNG: GPIO%d ist NICHT RTC-fähig (nur GPIOs 0-7)\n", gpio_num);
+        Serial.println("GPIO-Wake-up (Taster A) kann nicht konfiguriert werden!");
+        Serial.println("Nur Timer-Wake-up möglich (falls aktiviert)");
     }
     
-    // Timer-Wake-up berechnen und aktivieren
-    uint64_t wakeup_time_us = calculate_next_wakeup_timer();
+    // Timer-Wake-up berechnen und aktivieren (nur wenn enable_timer == true)
+    // WICHTIG: Bei kritischer Akku-Spannung (<= BATTERY_VOLTAGE_PROTECTION) wird Timer deaktiviert,
+    // um weiteren Akku-Verschleiß durch automatische Wake-ups zu vermeiden
+    bool timer_activated = false;
+    uint64_t wakeup_time_us = 0;
+    struct tm next_wakeup_tm = {0};
     
-    if (wakeup_time_us > 0) {
-        esp_err_t ret = esp_sleep_enable_timer_wakeup(wakeup_time_us);
-        if (ret != ESP_OK) {
-            Serial.printf("FEHLER: Timer-Wake-up-Konfiguration fehlgeschlagen: %s\n", esp_err_to_name(ret));
-        } else {
-            Serial.printf("Timer-Wake-up aktiviert: %llu Sekunden (%.2f Minuten)\n", 
-                         wakeup_time_us / 1000000ULL, (float)wakeup_time_us / 60000000.0f);
+    if (enable_timer) {
+        wakeup_time_us = calculate_next_wakeup_timer();
+        
+        if (wakeup_time_us > 0) {
+            esp_err_t ret = esp_sleep_enable_timer_wakeup(wakeup_time_us);
+            if (ret != ESP_OK) {
+                Serial.printf("FEHLER: Timer-Wake-up-Konfiguration fehlgeschlagen: %s\n", esp_err_to_name(ret));
+            } else {
+                timer_activated = true;
+                // Berechne nächste Wake-up-Zeit für Ausgabe
+                struct tm timeinfo;
+                if (getLocalTime(&timeinfo)) {
+                    time_t current_time = mktime(&timeinfo);
+                    time_t next_wakeup_time = current_time + (wakeup_time_us / 1000000ULL);
+                    localtime_r(&next_wakeup_time, &next_wakeup_tm);
+                }
+            }
         }
+    } else {
+        Serial.println("Timer-Wake-up DEAKTIVIERT (nur GPIO-Wake-up aktiv)");
+        Serial.println("Nur manueller Wake-up über Taster A möglich");
+    }
+    
+    // Prüfen, ob mindestens eine Wake-up-Quelle konfiguriert wurde
+    // WICHTIG: Ohne Wake-up-Quelle würde ESP32C6 nicht mehr aufwachen!
+    if (!gpio_wakeup_configured && !timer_activated) {
+        Serial.println("FEHLER: Keine Wake-up-Quelle konfiguriert!");
+        Serial.println("Deep-Sleep wird ABGEBROCHEN - System bleibt aktiv");
+        Serial.println("Mögliche Ursachen:");
+        if (!is_rtc_gpio) {
+            Serial.println("  - GPIO ist nicht RTC-fähig (nur GPIOs 0-7)");
+        }
+        if (!enable_timer) {
+            Serial.println("  - Timer-Wake-up ist deaktiviert (Akku-Schutz)");
+        } else if (!timer_activated) {
+            Serial.println("  - Timer-Wake-up konnte nicht aktiviert werden");
+        }
+        return;  // Funktion beenden, Ressourcen bleiben aktiv
     }
     
     // LED ausschalten (HP-Core geht in Deep-Sleep)
     digitalWrite(LED_BUILTIN_GPIO, LED_OFF);
     Serial.println("Interne LED ausgeschaltet (Deep-Sleep)");
     
-    // Ressourcen sauber beenden
+    // Ressourcen sauber beenden (nur wenn Wake-up konfiguriert wurde)
     shutdown_resources();
     
-    // Finale Deep-Sleep-Ausgabe
+    // Finale Deep-Sleep-Ausgabe (dynamisch basierend auf aktivierten Wake-up-Quellen)
     Serial.println("=== Gehe in Deep-Sleep ===");
     Serial.println("Wake-up möglich durch:");
-    Serial.println("  - Taster A (GPIO-Wake-up)");
-    Serial.println("  - Timer (Cron-Intervall)");
+    if (gpio_wakeup_configured) {
+        Serial.println("  - Taster A (GPIO-Wake-up)");
+    } else {
+        Serial.println("  - Taster A: NICHT verfügbar (GPIO nicht RTC-fähig)");
+    }
+    if (timer_activated) {
+        Serial.printf("  - Timer (Cron-Intervall): %02d:%02d:00 (in %llu Sekunden = %.2f Minuten)\n",
+                     next_wakeup_tm.tm_hour, next_wakeup_tm.tm_min,
+                     wakeup_time_us / 1000000ULL, (float)wakeup_time_us / 60000000.0f);
+    } else {
+        if (enable_timer) {
+            Serial.println("  - Timer: FEHLER bei Aktivierung");
+        } else {
+            Serial.println("  - Timer: DEAKTIVIERT (Akku-Schutz)");
+        }
+    }
     Serial.flush();
     
     esp_deep_sleep_start();
@@ -796,7 +932,33 @@ bool load_config() {
         config_rtc.ntp_server[sizeof(config_rtc.ntp_server) - 1] = '\0';
     }
     
-    // WiFi-Credentials werden später beim Verbinden verwendet
+    // WiFi-Credentials laden (max. 2 Paare)
+    config_rtc.wifi_count = 0;
+    if (doc["wifiCredentials"].is<JsonArray>()) {
+        JsonArray credentials = doc["wifiCredentials"].as<JsonArray>();
+        uint8_t max_credentials = (credentials.size() > 2) ? 2 : credentials.size();
+        
+        for (uint8_t i = 0; i < max_credentials; i++) {
+            if (credentials[i]["ssid"].is<const char*>() && credentials[i]["password"].is<const char*>()) {
+                const char* ssid = credentials[i]["ssid"];
+                const char* password = credentials[i]["password"];
+                
+                strncpy(config_rtc.wifi_credentials[i].ssid, ssid, sizeof(config_rtc.wifi_credentials[i].ssid) - 1);
+                config_rtc.wifi_credentials[i].ssid[sizeof(config_rtc.wifi_credentials[i].ssid) - 1] = '\0';
+                
+                strncpy(config_rtc.wifi_credentials[i].password, password, sizeof(config_rtc.wifi_credentials[i].password) - 1);
+                config_rtc.wifi_credentials[i].password[sizeof(config_rtc.wifi_credentials[i].password) - 1] = '\0';
+                
+                config_rtc.wifi_count++;
+            }
+        }
+        
+        if (credentials.size() > 2) {
+            Serial.printf("WARNUNG: Mehr als 2 WiFi-Credentials gefunden, nur die ersten 2 werden verwendet\n");
+        }
+        Serial.printf("WiFi-Credentials geladen: %d Paar(e)\n", config_rtc.wifi_count);
+    }
+    
     config_rtc.config_loaded = true;
     
     Serial.println("Config.json erfolgreich geladen");
@@ -807,32 +969,8 @@ bool load_config() {
 // WiFi-Verbindung mit höchster RSSI
 // ============================================
 bool connect_wifi() {
-    if (!mount_littlefs()) {
-        return false;
-    }
-    
-    File configFile = LittleFS.open("/config.json", "r");
-    if (!configFile) {
-        return false;
-    }
-    
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, configFile);
-    configFile.close();
-    
-    if (error) {
-        return false;
-    }
-    
-    // Prüfe ob wifiCredentials ein Array ist
-    if (!doc["wifiCredentials"].is<JsonArray>()) {
-        Serial.println("wifiCredentials ist kein Array");
-        return false;
-    }
-    
-    JsonArray credentials = doc["wifiCredentials"].as<JsonArray>();
-    if (credentials.size() == 0) {
-        Serial.println("Keine WiFi-Credentials gefunden");
+    if (config_rtc.wifi_count == 0) {
+        Serial.println("Keine WiFi-Credentials verfügbar");
         return false;
     }
     
@@ -860,9 +998,9 @@ bool connect_wifi() {
     const char* best_ssid = NULL;
     const char* best_password = NULL;
     
-    for (int i = 0; i < credentials.size(); i++) {
-        const char* ssid = credentials[i]["ssid"];
-        const char* password = credentials[i]["password"];
+    for (uint8_t i = 0; i < config_rtc.wifi_count; i++) {
+        const char* ssid = config_rtc.wifi_credentials[i].ssid;
+        const char* password = config_rtc.wifi_credentials[i].password;
         
         for (int j = 0; j < n; j++) {
             // SSID in temporären String kopieren für sicheren Vergleich
@@ -897,10 +1035,6 @@ bool connect_wifi() {
     
     if (WiFi.status() == WL_CONNECTED) {
         Serial.printf("WiFi verbunden! IP: %s\n", WiFi.localIP().toString().c_str());
-        strncpy(config_rtc.wifi_ssid, best_ssid, sizeof(config_rtc.wifi_ssid) - 1);
-        config_rtc.wifi_ssid[sizeof(config_rtc.wifi_ssid) - 1] = '\0';
-        strncpy(config_rtc.wifi_password, best_password, sizeof(config_rtc.wifi_password) - 1);
-        config_rtc.wifi_password[sizeof(config_rtc.wifi_password) - 1] = '\0';
         return true;
     } else {
         Serial.println("WiFi-Verbindung fehlgeschlagen");
@@ -971,7 +1105,12 @@ String processor(const String& var) {
     if (var == "hostname") {
         return String(config_rtc.hostname);
     } else if (var == "wifi_ssid") {
-        return strlen(config_rtc.wifi_ssid) > 0 ? String(config_rtc.wifi_ssid) : String("Nicht verbunden");
+        // Zeige aktuell verbundenes SSID (falls verbunden)
+        if (WiFi.status() == WL_CONNECTED) {
+            return WiFi.SSID();
+        } else {
+            return String("Nicht verbunden");
+        }
     } else if (var == "wakeup_minutes") {
         return String(config_rtc.wakeup_minutes);
     } else if (var == "transfer_minutes") {
@@ -1016,19 +1155,19 @@ String processor(const String& var) {
         snprintf(buf, sizeof(buf), "%lu (0x%08lX)", RING_BUFFER_VERSION, RING_BUFFER_VERSION);
         return String(buf);
     } else if (var == "pulse_counter") {
-        // Formatierung: 8 Stellen mit führenden Nullen
-        char buf[9];
-        snprintf(buf, sizeof(buf), "%08lu", pulse_counter);
+        // Formatierung: 7 Stellen mit führenden Nullen (99999.99 = 9999999)
+        char buf[8];  // 7 Stellen + Null-Terminator
+        snprintf(buf, sizeof(buf), "%07lu", pulse_counter);
         return String(buf);
     } else if (var == "pulse_counter_left") {
-        // Linke 5 Stellen für CSS-Formatierung
+        // Linke 5 Stellen für CSS-Formatierung (Vorkommastellen)
         char buf[6];
-        snprintf(buf, sizeof(buf), "%05lu", pulse_counter / 1000);
+        snprintf(buf, sizeof(buf), "%05lu", pulse_counter / 100);
         return String(buf);
     } else if (var == "pulse_counter_right") {
-        // Rechte 3 Stellen für CSS-Formatierung
-        char buf[4];
-        snprintf(buf, sizeof(buf), "%03lu", pulse_counter % 1000);
+        // Rechte 2 Stellen für CSS-Formatierung (Nachkommastellen)
+        char buf[3];  // 2 Stellen + Null-Terminator
+        snprintf(buf, sizeof(buf), "%02lu", pulse_counter % 100);
         return String(buf);
     } else if (var == "wifi_info_style") {
         // WiFi-Info Sichtbarkeit: leer wenn verbunden, "display:none;" wenn nicht verbunden
@@ -1082,11 +1221,12 @@ void setupWebServer() {
             return true;  // Request erlauben
         });
     
-    // Reboot-Endpunkt (geschützt)
+    // Reboot-Endpunkt (nur POST mit cmd=reboot, keine Passwort-Abfrage)
     server.on("/reboot", HTTP_POST, [](AsyncWebServerRequest *request){
-        // Basic Auth prüfen
-        if (!request->authenticate("admin", config_rtc.adminpass)) {
-            return request->requestAuthentication();
+        // Prüfe POST-Parameter: cmd=reboot erforderlich
+        if (!request->hasParam("cmd", true) || request->getParam("cmd", true)->value() != "reboot") {
+            request->send(400, "text/plain", "Fehler: Parameter 'cmd=reboot' erforderlich");
+            return;
         }
         
         last_web_activity = millis();
@@ -1105,6 +1245,39 @@ void setupWebServer() {
         Serial.println("Starte Reboot...");
         Serial.flush();
         ESP.restart();
+    });
+    
+    // Reading-Endpunkt: Gibt pulse_counter im Format XXXXX.XX aus (ASCII, für Node-RED etc.)
+    server.on("/reading", HTTP_GET, [](AsyncWebServerRequest *request){
+        last_web_activity = millis();
+        
+        // Format: XXXXX.XX (5 Vorkommastellen + Punkt + 2 Nachkommastellen)
+        // Beispiel: pulse_counter = 582077 → "05820.77"
+        uint32_t vorkommastellen = pulse_counter / 100;
+        uint32_t nachkommastellen = pulse_counter % 100;
+        
+        char reading[9];  // 5 + 1 (Punkt) + 2 + Null-Terminator
+        snprintf(reading, sizeof(reading), "%05lu.%02lu", vorkommastellen, nachkommastellen);
+        
+        request->send(200, "text/plain", reading);
+    });
+    
+    // Version-Endpunkt: Gibt Version, Build-Datum und Projektname aus (ASCII)
+    server.on("/version", HTTP_GET, [](AsyncWebServerRequest *request){
+        last_web_activity = millis();
+        
+        // Format: v0.3 (Build 2025-12-30 - 17:00:47) Gas-O-Meter2
+        char version[80];  // Ausreichend groß für Format
+        snprintf(version, sizeof(version), "v%s (Build %s) %s", 
+                 PROJECT_VERSION, SKETCHCOMPILE, PROJECT_NAME);
+        
+        request->send(200, "text/plain", version);
+    });
+    
+    // Ping-Endpunkt: Gibt "pong" zurück (für Health-Checks)
+    server.on("/ping", HTTP_GET, [](AsyncWebServerRequest *request){
+        last_web_activity = millis();
+        request->send(200, "text/plain", "pong");
     });
     
     // Alle anderen Dateien aus Filesystem (außer config.json)
@@ -1150,58 +1323,46 @@ void setup() {
         ++wakeupCount;
     }
     
+    // Wake-up-Informationen ausgeben (kombiniert)
     Serial.println("\n=== Gas-O-Meter ===");
     Serial.printf("Wake-up Count: %d\n", wakeupCount);
     
-    // Wake-up-Grund detailliert ausgeben
-    if (isPowerOn) {
-        Serial.println("=== EVENT: Power-On ===");
-    } else {
-        switch (wakeup_reason) {
-            case ESP_SLEEP_WAKEUP_GPIO:
-                Serial.println("=== EVENT: Wake-up durch GPIO (Taster A) ===");
-                break;
-            case ESP_SLEEP_WAKEUP_TIMER:
-                Serial.println("=== EVENT: Wake-up durch Timer (Cron-Intervall) ===");
-                break;
-            case ESP_SLEEP_WAKEUP_EXT0:
-            case ESP_SLEEP_WAKEUP_EXT1:
-                Serial.println("=== EVENT: Wake-up durch GPIO (EXT) ===");
-                break;
-            case ESP_SLEEP_WAKEUP_TOUCHPAD:
-                Serial.println("=== EVENT: Wake-up durch Touchpad ===");
-                break;
-            case ESP_SLEEP_WAKEUP_ULP:
-                Serial.println("=== EVENT: Wake-up durch ULP ===");
-                break;
-            default:
-                Serial.printf("=== EVENT: Wake-up durch Unbekannt (0x%x) ===\n", wakeup_reason);
-                break;
-        }
-    }
-    
-    if (isPowerOn) {
-        Serial.println("Power-On erkannt");
-    } else {
-        Serial.println("Wake-up erkannt");
+    switch (wakeup_reason) {
+        case ESP_SLEEP_WAKEUP_UNDEFINED:
+            Serial.println("=== EVENT: Power-On ===");
+            break;
+        case ESP_SLEEP_WAKEUP_GPIO:
+            Serial.println("=== EVENT: Wake-up durch GPIO (Taster A) ===");
+            break;
+        case ESP_SLEEP_WAKEUP_TIMER:
+            Serial.println("=== EVENT: Wake-up durch Timer (Cron-Intervall) ===");
+            break;
+        case ESP_SLEEP_WAKEUP_EXT0:
+        case ESP_SLEEP_WAKEUP_EXT1:
+            Serial.println("=== EVENT: Wake-up durch GPIO (EXT) ===");
+            break;
+        case ESP_SLEEP_WAKEUP_TOUCHPAD:
+            Serial.println("=== EVENT: Wake-up durch Touchpad ===");
+            break;
+        case ESP_SLEEP_WAKEUP_ULP:
+            Serial.println("=== EVENT: Wake-up durch ULP ===");
+            break;
+        default:
+            Serial.printf("=== EVENT: Wake-up durch Unbekannt (0x%x) ===\n", wakeup_reason);
+            break;
     }
     
     // Interne LED initialisieren und sofort einschalten (HP-Core läuft)
     // WICHTIG: LED wird hier eingeschaltet, um zu zeigen, dass HP-Core aktiv ist
     pinMode(LED_BUILTIN_GPIO, OUTPUT);
     digitalWrite(LED_BUILTIN_GPIO, LED_ON);  // LED EIN (HP-Core aktiv)
-    Serial.printf("Interne LED initialisiert (GPIO%d) und eingeschaltet (ON=%s)\n", 
-                 LED_BUILTIN_GPIO, LED_ON == HIGH ? "HIGH" : "LOW");
+    Serial.printf("LED initialisiert (GPIO%d)\n", LED_BUILTIN_GPIO);
     
     // ADC initialisieren (analogReadMilliVolts - automatisch kalibriert)
     // WICHTIG: Spannungsprüfung VOR NVS-Initialisierung, um Akku zu schützen!
     esp_err_t adc_ret = init_adc();
     if (adc_ret != ESP_OK) {
-        Serial.printf("ADC Initialisierung fehlgeschlagen: %s\n", esp_err_to_name(adc_ret));
-        // Auch ohne ADC: LED einschalten (HP-Core läuft)
-        pinMode(LED_BUILTIN_GPIO, OUTPUT);
-        digitalWrite(LED_BUILTIN_GPIO, LED_ON);
-        Serial.println("Interne LED eingeschaltet (HP-Core aktiv, ADC-Fehler ignoriert)");
+        Serial.printf("ADC Fehler: %s\n", esp_err_to_name(adc_ret));
     } else {
         // Akku-Messung (analogReadMilliVolts gibt direkt Millivolt zurück)
         battery_adc_mv = read_adc_median_mv();
@@ -1211,84 +1372,52 @@ void setup() {
         Serial.printf("ADC: %d mV, Spannung: %.2f V, Prozent: %d%%\n", 
                      battery_adc_mv, battery_voltage, battery_percent);
         
-        // Stromversorgungs-Prüfung und Akku-Schutz (SOFORT, vor allen anderen Operationen)
-        if (battery_voltage < USB_DETECTION_THRESHOLD) {
-            // Spannung < 2V: USB-Stromversorgung angeschlossen (ESP32C6 würde sonst nicht starten)
+        // Stromversorgungs-Prüfung ZUERST (vor Akku-Schutz)
+        // WICHTIG: Bei USB-Stromversorgung kann Timer aktiv bleiben (keine Akku-Probleme)
+        bool is_usb_power = (battery_voltage < USB_DETECTION_THRESHOLD);
+        bool enable_timer_wakeup = true;  // Standard: Timer aktiviert
+        
+        if (is_usb_power) {
+            // USB-Stromversorgung: Timer kann aktiv bleiben (keine Akku-Probleme)
             Serial.println("USB-Stromversorgung erkannt - Betrieb fortgesetzt");
             Serial.printf("Spannung: %.2f V (USB-Schwelle: %.2f V)\n", 
                          battery_voltage, USB_DETECTION_THRESHOLD);
-        } else if (battery_voltage < BATTERY_VOLTAGE_20) {
-            // Spannung >= 2V aber < BATTERY_VOLTAGE_20: Akku zu niedrig → Deep-Sleep zum Schutz
-            Serial.println("Akku zu niedrig - Deep-Sleep zum Akku-Schutz");
-            Serial.printf("Spannung: %.2f V (Minimum: %.2f V)\n", 
-                         battery_voltage, BATTERY_VOLTAGE_20);
+            // enable_timer_wakeup bleibt true
+        } else {
+            // Akku-Betrieb: Timer-Wake-up deaktivieren bei kritischer Spannung
+            // WICHTIG: Bei Spannung <= BATTERY_VOLTAGE_PROTECTION macht automatisches Wake-up nur mehr Schaden
+            // Nur noch manueller Wake-up über Taster möglich
+            if (battery_voltage <= BATTERY_VOLTAGE_PROTECTION) {
+                enable_timer_wakeup = false;
+                Serial.println("WARNUNG: Akku-Spannung kritisch (<= BATTERY_VOLTAGE_PROTECTION)");
+                Serial.println("Timer-Wake-up wird DEAKTIVIERT - nur manueller Wake-up über Taster A möglich");
+                Serial.printf("Spannung: %.2f V (Schutz-Schwelle: %.2f V)\n", 
+                             battery_voltage, BATTERY_VOLTAGE_PROTECTION);
+            }
             
-            // Vor Deep-Sleep: pulse_counter prüfen und ggf. in Ring-Speicher schreiben
-            // (bei Akku-Low kann RTC-RAM verloren gehen)
-            Serial.println("Speichere pulse_counter in Ring-Speicher vor Deep-Sleep (Akku-Low)...");
-            write_pulse_counter_to_ring_buffer();
-            
-            // Deep-Sleep mit GPIO-Wake-up (Taster A) - spart Energie und schützt Akku
-            enter_deep_sleep_with_gpio_and_timer_wakeup();
-            // Ab hier wird Code nicht mehr ausgeführt (Deep-Sleep)
+            // Akku-Schutz: Deep-Sleep bei zu niedriger Spannung
+            if (battery_voltage < BATTERY_VOLTAGE_20) {
+                // Spannung >= 2V aber < BATTERY_VOLTAGE_20: Akku zu niedrig → Deep-Sleep zum Schutz
+                Serial.println("Akku zu niedrig - Deep-Sleep zum Akku-Schutz");
+                Serial.printf("Spannung: %.2f V (Minimum: %.2f V)\n", 
+                             battery_voltage, BATTERY_VOLTAGE_20);
+                
+                // Vor Deep-Sleep: pulse_counter prüfen und ggf. in Ring-Speicher schreiben
+                // (bei Akku-Low kann RTC-RAM verloren gehen)
+                Serial.println("Speichere pulse_counter in Ring-Speicher vor Deep-Sleep (Akku-Low)...");
+                write_pulse_counter_to_ring_buffer();
+                
+                // Deep-Sleep mit GPIO-Wake-up (Taster A) - spart Energie und schützt Akku
+                // Timer-Wake-up: Bei USB immer aktiv, sonst nur wenn Spannung > BATTERY_VOLTAGE_PROTECTION
+                enter_deep_sleep_with_gpio_and_timer_wakeup(enable_timer_wakeup);
+                // Ab hier wird Code nicht mehr ausgeführt (Deep-Sleep)
+                return;
+            }
         }
-        
-        // Ab hier: Spannung ist OK, HP-Core läuft → LED sicherstellen, dass sie eingeschaltet ist
-        // (LED sollte bereits eingeschaltet sein, aber zur Sicherheit nochmal setzen)
-        digitalWrite(LED_BUILTIN_GPIO, LED_ON);  // LED EIN (HP-Core aktiv)
-        Serial.println("Interne LED Status bestätigt (HP-Core aktiv, Spannung OK)");
         
         // NVS initialisieren (bei Power-On und Deep-Sleep-Wake-up)
         // WICHTIG: nvs_flash_init() ist idempotent - wenn bereits initialisiert, passiert nichts (keine Wear!)
-        // Standard-NVS-Partition initialisieren
-        esp_err_t nvs_err = nvs_flash_init();
-        if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-            // NVS-Partition wurde gelöscht oder hat neue Version - neu initialisieren
-            // WICHTIG: Nur bei Power-On löschen (bei Deep-Sleep-Wake-up sollte NVS noch vorhanden sein)
-            if (isPowerOn) {
-                Serial.println("Standard-NVS-Partition muss neu initialisiert werden...");
-                esp_err_t erase_err = nvs_flash_erase();
-                if (erase_err != ESP_OK) {
-                    Serial.printf("NVS-Löschung fehlgeschlagen: %s\n", esp_err_to_name(erase_err));
-                } else {
-                    nvs_err = nvs_flash_init();
-                }
-            } else {
-                Serial.println("WARNUNG: Standard-NVS-Partition benötigt Neuinitialisierung nach Deep-Sleep-Wake-up!");
-                Serial.println("Versuche erneut zu initialisieren (ohne Löschung)...");
-                nvs_err = nvs_flash_init();
-            }
-        }
-        if (nvs_err != ESP_OK) {
-            Serial.printf("Standard-NVS-Initialisierung fehlgeschlagen: %s\n", esp_err_to_name(nvs_err));
-        } else {
-            Serial.println("Standard-NVS erfolgreich initialisiert");
-        }
-        
-        // Pulse-NVS-Partition initialisieren
-        esp_err_t pulse_nvs_err = nvs_flash_init_partition(NVS_PARTITION_PULSE);
-        if (pulse_nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || pulse_nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-            // Pulse-NVS-Partition wurde gelöscht oder hat neue Version - neu initialisieren
-            // WICHTIG: Nur bei Power-On löschen (bei Deep-Sleep-Wake-up sollte NVS noch vorhanden sein)
-            if (isPowerOn) {
-                Serial.printf("Pulse-NVS-Partition '%s' muss neu initialisiert werden...\n", NVS_PARTITION_PULSE);
-                esp_err_t erase_err = nvs_flash_erase_partition(NVS_PARTITION_PULSE);
-                if (erase_err != ESP_OK) {
-                    Serial.printf("Pulse-NVS-Löschung fehlgeschlagen: %s\n", esp_err_to_name(erase_err));
-                } else {
-                    pulse_nvs_err = nvs_flash_init_partition(NVS_PARTITION_PULSE);
-                }
-            } else {
-                Serial.printf("WARNUNG: Pulse-NVS-Partition '%s' benötigt Neuinitialisierung nach Deep-Sleep-Wake-up!\n", NVS_PARTITION_PULSE);
-                Serial.println("Versuche erneut zu initialisieren (ohne Löschung)...");
-                pulse_nvs_err = nvs_flash_init_partition(NVS_PARTITION_PULSE);
-            }
-        }
-        if (pulse_nvs_err != ESP_OK) {
-            Serial.printf("Pulse-NVS-Initialisierung fehlgeschlagen: %s\n", esp_err_to_name(pulse_nvs_err));
-        } else {
-            Serial.printf("Pulse-NVS-Partition '%s' erfolgreich initialisiert\n", NVS_PARTITION_PULSE);
-        }
+        init_nvs_partitions(isPowerOn);
         
         // NVS-Ring-Speicher: Versionsnummer prüfen und ggf. initialisieren
         // Dies geschieht NUR beim ersten Boot nach Code-Upload oder partition.csv-Änderung
@@ -1311,44 +1440,10 @@ void setup() {
         );
         Serial.println("LP-Core Watchdog Task gestartet");
         
-        // ring_idx aus Ring-Speicher ermitteln (RTC-RAM wurde bei Power-On/ESP.restart() zurückgesetzt)
-        // Bei Deep-Sleep-Wake-up sollte ring_idx noch im RTC-RAM vorhanden sein
-        if (isPowerOn || ring_idx >= RING_BUFFER_SIZE) {
-            // Nur bei Power-On oder wenn ring_idx ungültig ist: aus Ring-Speicher ermitteln
-            uint32_t max_index = 0;
-            uint32_t max_pulse = find_max_pulse_and_index_from_nvs(&max_index);
-            if (max_pulse > 0) {
-                // Nächster freier Slot: (max_index + 1) % RING_BUFFER_SIZE
-                ring_idx = (max_index + 1) % RING_BUFFER_SIZE;
-                Serial.printf("ring_idx aus Ring-Speicher ermittelt: %lu (höchster Index: %lu)\n", ring_idx, max_index);
-            } else {
-                ring_idx = 0;  // Erster Slot (keine Daten vorhanden)
-                Serial.println("ring_idx auf 0 gesetzt (keine Daten im Ring-Speicher)");
-            }
-        } else {
-            Serial.printf("ring_idx aus RTC-RAM übernommen: %lu\n", ring_idx);
-        }
-        
-        // Beim ersten Boot (Power-On) oder nach ESP.restart(): pulse_counter aus Ring-Speicher laden
-        // WICHTIG: RTC-RAM ist bei Power-On/ESP.restart() leer (pulse_counter == 0)
-        // Bei Deep-Sleep-Wake-up ist RTC-RAM noch vorhanden und muss NICHT geladen werden
-        if (pulse_counter == 0) {
-            Serial.println("RTC-RAM leer → Lade pulse_counter aus Ring-Speicher...");
-            uint32_t max_index = 0;
-            uint32_t max_pulse = find_max_pulse_and_index_from_nvs(&max_index);
-            if (max_pulse > 0) {
-                pulse_counter = max_pulse;
-                Serial.printf("pulse_counter aus Ring-Speicher übernommen: %lu\n", pulse_counter);
-            } else {
-                pulse_counter = 0;
-                Serial.println("Keine Ring-Speicher-Daten gefunden, pulse_counter auf 0 initialisiert");
-            }
-        } else {
-            Serial.printf("RTC-RAM noch vorhanden (pulse_counter = %lu) → Keine NVS-Übertragung nötig\n", pulse_counter);
-            if (!isPowerOn) {
-                Serial.println("RTC-RAM behält Daten bei Deep-Sleep-Wake-up");
-            }
-        }
+        // ring_idx und pulse_counter initialisieren (kombiniert)
+        // ring_idx: Ring-Buffer-Index (aus RTC-RAM oder Ring-Speicher)
+        // pulse_counter: Puls-Zähler (aus RTC-RAM oder Ring-Speicher)
+        init_ring_buffer_and_pulse_counter(isPowerOn);
         
         // 1. Batteriespannung-Test und ggf. in Ring-Speicher schreiben
         // < 30% ODER USB: Schreibe in Ring-Speicher (RTC-RAM könnte verloren gehen)
@@ -1360,34 +1455,42 @@ void setup() {
         
         // 2. Config laden (idempotent: prüft intern, ob bereits geladen)
         // WICHTIG: Muss vor allen Aktionen geladen sein, da beide Stränge (Timer/Power-On/GPIO) Config benötigen
-        if (load_config()) {
-            Serial.println("Config erfolgreich geladen");
-            
-            // 3. Abhängig vom Wake-up-Grund: Unterschiedliche Aktionen
-            switch (wakeup_reason) {
-                case ESP_SLEEP_WAKEUP_TIMER:
-                    // Timer-Wake-up: Datenübertragung, kein WiFi/Web-Server
-                    Serial.println("=== Timer-Wake-up: Datenübertragung ===");
+        bool config_available = load_config();
+        
+        // 3. Abhängig vom Wake-up-Grund: Unterschiedliche Aktionen
+        switch (wakeup_reason) {
+            case ESP_SLEEP_WAKEUP_TIMER:
+                // Timer-Wake-up: Prüfen, ob Datenübertragung fällig ist
+                // Übertragung nur alle X Timer-Wake-ups (basierend auf transfer_minutes)
+                struct tm timeinfo;
+                if (getLocalTime(&timeinfo) && (timeinfo.tm_min % config_rtc.transfer_minutes == 0) && config_available) {
+                    Serial.printf("=== Timer-Wake-up: Datenübertragung (Minute %d, Intervall: %d Min) ===\n",
+                                 timeinfo.tm_min, config_rtc.transfer_minutes);
                     Serial.println("Hier sollten jetzt die Daten übertragen werden....................");
-                    
-                    // Deep-Sleep über loop() steuern (nicht sofort)
                     should_enter_deep_sleep = true;
                     deep_sleep_reason = "Timer-Wake-up: Datenübertragung abgeschlossen";
-                    break;
+                } else {
+                    uint8_t current_min = getLocalTime(&timeinfo) ? timeinfo.tm_min : 0;
+                    Serial.printf("=== Timer-Wake-up: Keine Übertragung (Minute %d, Intervall: %d Min) ===\n",
+                                 current_min, config_rtc.transfer_minutes);
+                    should_enter_deep_sleep = true;
+                    deep_sleep_reason = (!config_available) ? "Timer-Wake-up: Config-Fehler" : "Timer-Wake-up: Keine Übertragung fällig";
+                }
+                break;
+                
+            case ESP_SLEEP_WAKEUP_GPIO:
+            case ESP_SLEEP_WAKEUP_UNDEFINED:
+            default:
+                // Power-On oder GPIO-Wake-up: WiFi und Web-Server starten
+                if (config_available) {
+                    Serial.println("Config erfolgreich geladen");
                     
-                case ESP_SLEEP_WAKEUP_GPIO:
-                case ESP_SLEEP_WAKEUP_UNDEFINED:
-                default:
-                    // Power-On oder GPIO-Wake-up: WiFi und Web-Server starten
                     // WiFi verbinden
                     if (connect_wifi()) {
                         // mDNS starten (für .local Domain)
                         // HINWEIS: ESP32C6 ESPmDNS läuft automatisch asynchron im Hintergrund
                         if (MDNS.begin(config_rtc.hostname)) {
-                            Serial.println("mDNS gestartet");
-                            Serial.printf("Erreichbar unter: http://%s.local\n", config_rtc.hostname);
-                        } else {
-                            Serial.println("mDNS Fehler!");
+                            Serial.printf("mDNS: http://%s.local\n", config_rtc.hostname);
                         }
                         
                         // NTP-Zeitsynchronisation
@@ -1395,35 +1498,14 @@ void setup() {
                         
                         // Web-Server starten
                         setupWebServer();
-                        
-                        Serial.println("Web-Server gestartet");
-                        Serial.printf("Öffne: http://%s\n", WiFi.localIP().toString().c_str());
-                        Serial.printf("Oder: http://%s.local\n", config_rtc.hostname);
+                        Serial.printf("Web-Server: http://%s\n", WiFi.localIP().toString().c_str());
                     } else {
                         Serial.println("WiFi-Verbindung fehlgeschlagen");
                     }
-                    break;
-            }
-        } else {
-            Serial.println("WARNUNG: Config konnte nicht geladen werden!");
-            
-            // Auch ohne Config: Basierend auf Wake-up-Grund handeln
-            switch (wakeup_reason) {
-                case ESP_SLEEP_WAKEUP_TIMER:
-                    Serial.println("=== Timer-Wake-up: Datenübertragung ===");
-                    Serial.println("FEHLER: Config nicht verfügbar → Datenübertragung nicht möglich");
-                    
-                    // Deep-Sleep über loop() steuern (nicht sofort)
-                    should_enter_deep_sleep = true;
-                    deep_sleep_reason = "Timer-Wake-up: Config-Fehler → Deep-Sleep";
-                    break;
-                    
-                case ESP_SLEEP_WAKEUP_GPIO:
-                case ESP_SLEEP_WAKEUP_UNDEFINED:
-                default:
+                } else {
                     Serial.println("Config-Laden fehlgeschlagen → WiFi/Web-Server nicht gestartet");
-                    break;
-            }
+                }
+                break;
         }
     }  // Ende des else-Blocks (ADC erfolgreich)
 }
@@ -1458,8 +1540,17 @@ void loop() {
             Serial.println("Akku-Spannung OK (>= 30%) → pulse_counter bleibt im RTC-RAM (kein Schreiben nötig)");
         }
         
-        enter_deep_sleep_with_gpio_and_timer_wakeup();
-        return;  // Wird nie erreicht, aber für Klarheit
+        // Timer-Wake-up: Bei USB-Stromversorgung immer aktivieren
+        // Bei Akku-Betrieb: Nur aktivieren, wenn Spannung > BATTERY_VOLTAGE_PROTECTION
+        bool is_usb_power = (battery_voltage < USB_DETECTION_THRESHOLD);
+        bool enable_timer = is_usb_power || (battery_voltage > BATTERY_VOLTAGE_PROTECTION);
+        enter_deep_sleep_with_gpio_and_timer_wakeup(enable_timer);
+        
+        // Wenn wir hier ankommen, wurde Deep-Sleep nicht gestartet (z.B. keine Wake-up-Quelle)
+        // Flag zurücksetzen, um Endlosschleife zu vermeiden
+        should_enter_deep_sleep = false;
+        Serial.println("Deep-Sleep konnte nicht gestartet werden - System bleibt aktiv");
+        return;  // Loop beenden, wird beim nächsten Durchlauf erneut geprüft
     }
     
     delay(100);

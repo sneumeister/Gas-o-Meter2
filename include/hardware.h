@@ -81,7 +81,7 @@
 #define NTP_TIMEOUT_MS        5000            // Timeout für NTP-Synchronisation (ms)
 
 // Deep-Sleep Konfiguration
-#define WIFI_WAIT_FOR_SLEEP   5               // Minuten ohne Web-Server-Zugriff → Deep-Sleep
+#define WIFI_WAIT_FOR_SLEEP   3               // Minuten ohne Web-Server-Zugriff → Deep-Sleep
 
 // LP-Core Konfiguration
 #define LP_CORE_INTERVAL_US   2500000         // LP-Core Schleifen-Intervall: 2.5s (in Mikrosekunden)
@@ -95,7 +95,7 @@
 // Cron-ähnliche Logik: Wake-up erfolgt zu Minuten der Stunde, die durch diesen Wert teilbar sind
 // Beispiel: DEFAULT_WAKEUP_INTERVAL_MIN = 10 → Wake-up bei 0, 10, 20, 30, 40, 50 Minuten jeder Stunde
 // Muss Teiler von 60 sein: 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60
-#define DEFAULT_WAKEUP_INTERVAL_MIN  10  // Minuten
+#define DEFAULT_WAKEUP_INTERVAL_MIN  5  // Minuten
 #define DEFAULT_WAKEUP_INTERVAL_US   (DEFAULT_WAKEUP_INTERVAL_MIN * 60 * 1000000ULL)
 
 // Puffer-Zeit vor Wake-up-Berechnung (verhindert sofortiges Wake-up wenn kurz vor dem Zeitpunkt)
@@ -103,7 +103,9 @@
 #define WAKEUP_BUFFER_SEC  30  // Sekunden
 
 // Standard Transfer Interval (wird von config.json überschrieben) : x * DEFAULT_WAKEUP_INTERVAL_MIN
-#define DEFAULT_TRANSFER_INTERVAL_X  3  // Multiplikator für Transfer-Intervall
+// Cron-ähnliche Logik:
+// Beispiel: DEFAULT_WAKEUP_INTERVAL_MIN = 10 und DEFAULT_TRANSFER_INTERVAL_X = 2 → Wake-up bei 0, 20, 40, 60 Minuten jeder Stunde
+#define DEFAULT_TRANSFER_INTERVAL_X  2  // Multiplikator für Transfer-Intervall
 #define DEFAULT_TRANSFER_INTERVAL_US   (DEFAULT_TRANSFER_INTERVAL_X * DEFAULT_WAKEUP_INTERVAL_MIN * 60 * 1000000ULL)
 
 // ============================================
@@ -111,7 +113,7 @@
 // ============================================
 
 // Pulse-Zähler verwendet uint32_t (32-bit unsigned int)
-// Vom Gas-zähler max 99999999 (inklusive der 2 Nachkomastellen 99999.999)
+// Vom Gas-zähler max 9999999 (inklusive der 2 Nachkommastellen 99999.99)
 // Maximaler Wert: UINT32_MAX = 4294967295 (automatisch durch Datentyp)
 
 // Ringspeicher-Konfiguration

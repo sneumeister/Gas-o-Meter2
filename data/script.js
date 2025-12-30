@@ -43,8 +43,13 @@ function rebootDevice() {
     rebootButtonElement.textContent = 'Reboot wird durchgeführt...';
     
     // POST-Request an /reboot senden (ESP startet sofort neu)
+    // Parameter cmd=reboot erforderlich (Schutz vor versehentlichem Aufruf)
+    const formData = new FormData();
+    formData.append('cmd', 'reboot');
+    
     fetch('/reboot', {
-        method: 'POST'
+        method: 'POST',
+        body: formData
     })
     .then(response => {
         // Request erfolgreich gesendet (ESP rebootet jetzt)
