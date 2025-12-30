@@ -2,6 +2,7 @@
 .pio
 build/
 data/bootstrap.min.css
+*.backup
 
 # IDE
 .vscode/.browse.c_cpp.db*
@@ -34,3 +35,5 @@ Thumbs.db
 # CAD-Housing: nur die *.stp Dateien git'en, alles andere ignorieren
 CAD-housing/**
 !CAD-housing/*.stp
+!CAD-housing/*.png
+!CAD-housing/*.md
