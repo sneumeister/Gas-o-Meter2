@@ -3,6 +3,7 @@
 #include <LittleFS.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#define TEMPLATE_PLACEHOLDER '`'   // Als Compiler-Option -DTEMPLATE_PLACEHOLDER=96 in der platformio.ini setzen!
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include "esp_sleep.h"
@@ -966,6 +967,152 @@ bool load_config() {
 }
 
 // ============================================
+// Config speichern (RTC-RAM und config.json)
+// ============================================
+// Rückgabewert: true = erfolgreich, false = Fehler
+// wifi_credentials_changed wird auf true gesetzt, wenn WiFi-Credentials geändert wurden
+bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr) {
+    if (wifi_credentials_changed != nullptr) {
+        *wifi_credentials_changed = false;
+    }
+    
+    if (!mount_littlefs()) {
+        Serial.println("Fehler: LittleFS nicht gemountet");
+        return false;
+    }
+    
+    // Alte WiFi-Credentials speichern für Vergleich
+    struct {
+        uint8_t count;
+        char ssid[2][32];
+        char password[2][64];
+    } old_wifi;
+    old_wifi.count = config_rtc.wifi_count;
+    for (uint8_t i = 0; i < config_rtc.wifi_count && i < 2; i++) {
+        strncpy(old_wifi.ssid[i], config_rtc.wifi_credentials[i].ssid, sizeof(old_wifi.ssid[i]) - 1);
+        old_wifi.ssid[i][sizeof(old_wifi.ssid[i]) - 1] = '\0';
+        strncpy(old_wifi.password[i], config_rtc.wifi_credentials[i].password, sizeof(old_wifi.password[i]) - 1);
+        old_wifi.password[i][sizeof(old_wifi.password[i]) - 1] = '\0';
+    }
+    
+    // Werte in RTC Memory speichern
+    if (doc["hostname"].is<const char*>()) {
+        const char* hostname = doc["hostname"];
+        strncpy(config_rtc.hostname, hostname, sizeof(config_rtc.hostname) - 1);
+        config_rtc.hostname[sizeof(config_rtc.hostname) - 1] = '\0';
+    }
+    
+    if (doc["adminpass"].is<const char*>()) {
+        const char* adminpass = doc["adminpass"];
+        strncpy(config_rtc.adminpass, adminpass, sizeof(config_rtc.adminpass) - 1);
+        config_rtc.adminpass[sizeof(config_rtc.adminpass) - 1] = '\0';
+    }
+    
+    if (doc["wakeup_minutes"].is<uint8_t>()) {
+        config_rtc.wakeup_minutes = doc["wakeup_minutes"].as<uint8_t>();
+    }
+    
+    if (doc["transfer_minutes"].is<uint8_t>()) {
+        config_rtc.transfer_minutes = doc["transfer_minutes"].as<uint8_t>();
+    }
+    
+    if (doc["adc_voltage_offset"].is<float>()) {
+        config_rtc.adc_voltage_offset = doc["adc_voltage_offset"].as<float>();
+    }
+    
+    if (doc["ntp_server"].is<const char*>()) {
+        const char* ntp_server = doc["ntp_server"];
+        strncpy(config_rtc.ntp_server, ntp_server, sizeof(config_rtc.ntp_server) - 1);
+        config_rtc.ntp_server[sizeof(config_rtc.ntp_server) - 1] = '\0';
+    }
+    
+    // WiFi-Credentials speichern (max. 2 Paare)
+    config_rtc.wifi_count = 0;
+    if (doc["wifiCredentials"].is<JsonArray>()) {
+        JsonArray credentials = doc["wifiCredentials"].as<JsonArray>();
+        uint8_t max_credentials = (credentials.size() > 2) ? 2 : credentials.size();
+        
+        for (uint8_t i = 0; i < max_credentials; i++) {
+            if (credentials[i]["ssid"].is<const char*>() && credentials[i]["password"].is<const char*>()) {
+                const char* ssid = credentials[i]["ssid"];
+                const char* password = credentials[i]["password"];
+                
+                // Nur nicht-leere Sets speichern
+                if (strlen(ssid) > 0 || strlen(password) > 0) {
+                    strncpy(config_rtc.wifi_credentials[i].ssid, ssid, sizeof(config_rtc.wifi_credentials[i].ssid) - 1);
+                    config_rtc.wifi_credentials[i].ssid[sizeof(config_rtc.wifi_credentials[i].ssid) - 1] = '\0';
+                    
+                    strncpy(config_rtc.wifi_credentials[i].password, password, sizeof(config_rtc.wifi_credentials[i].password) - 1);
+                    config_rtc.wifi_credentials[i].password[sizeof(config_rtc.wifi_credentials[i].password) - 1] = '\0';
+                    
+                    config_rtc.wifi_count++;
+                }
+            }
+        }
+    }
+    
+    // Config in config.json speichern
+    // WICHTIG: Wir müssen ein neues JSON-Dokument erstellen, da das eingehende doc
+    // möglicherweise nicht alle Felder enthält (z.B. wenn nur WiFi-Credentials geändert wurden)
+    File configFile = LittleFS.open("/config.json", "w");
+    if (!configFile) {
+        Serial.println("Fehler: config.json konnte nicht zum Schreiben geöffnet werden");
+        return false;
+    }
+    
+    // Neues JSON-Dokument erstellen mit allen Werten
+    JsonDocument newDoc;
+    newDoc["hostname"] = config_rtc.hostname;
+    newDoc["adminpass"] = config_rtc.adminpass;
+    newDoc["wakeup_minutes"] = config_rtc.wakeup_minutes;
+    newDoc["tarnsfer_minutes"] = config_rtc.transfer_minutes;  // Tippfehler in JSON beibehalten
+    newDoc["adc_voltage_offset"] = config_rtc.adc_voltage_offset;
+    newDoc["ntp_server"] = config_rtc.ntp_server;
+    
+    // WiFi-Credentials als Array
+    JsonArray wifiArray = newDoc["wifiCredentials"].to<JsonArray>();
+    for (uint8_t i = 0; i < config_rtc.wifi_count; i++) {
+        JsonObject cred = wifiArray.add<JsonObject>();
+        cred["ssid"] = config_rtc.wifi_credentials[i].ssid;
+        cred["password"] = config_rtc.wifi_credentials[i].password;
+    }
+    
+    // JSON schreiben (mit Formatierung für bessere Lesbarkeit)
+    serializeJsonPretty(newDoc, configFile);
+    configFile.close();
+    
+    config_rtc.config_loaded = true;
+    
+    // Prüfen, ob WiFi-Credentials geändert wurden
+    if (wifi_credentials_changed != nullptr) {
+        bool changed = false;
+        
+        // Anzahl geändert?
+        if (old_wifi.count != config_rtc.wifi_count) {
+            changed = true;
+        } else {
+            // Einzelne Credentials vergleichen
+            for (uint8_t i = 0; i < config_rtc.wifi_count && i < 2; i++) {
+                if (strcmp(old_wifi.ssid[i], config_rtc.wifi_credentials[i].ssid) != 0 ||
+                    strcmp(old_wifi.password[i], config_rtc.wifi_credentials[i].password) != 0) {
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        
+        *wifi_credentials_changed = changed;
+        
+        if (changed) {
+            Serial.println("WiFi-Credentials wurden geändert");
+        }
+    }
+    
+    Serial.println("Config erfolgreich gespeichert (RTC-RAM und config.json)");
+    return true;
+}
+
+// ============================================
 // WiFi-Verbindung mit höchster RSSI
 // ============================================
 bool connect_wifi() {
@@ -1172,9 +1319,54 @@ String processor(const String& var) {
     } else if (var == "wifi_info_style") {
         // WiFi-Info Sichtbarkeit: leer wenn verbunden, "display:none;" wenn nicht verbunden
         return WiFi.status() == WL_CONNECTED ? String("") : String("display:none;");
+    } else if (var == "adminpass") {
+        // Für Config-Seite: Admin-Passwort anzeigen (wird vom Browser als Passwort-Feld behandelt)
+        return String(config_rtc.adminpass);
+    } else if (var == "adc_voltage_offset") {
+        // Für Config-Seite: ADC-Offset als String
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%.2f", config_rtc.adc_voltage_offset);
+        return String(buf);
+    } else if (var == "wifiCredentialsData") {
+        // WiFi-Credentials als JSON für JavaScript
+        String json = "[";
+        for (uint8_t i = 0; i < config_rtc.wifi_count; i++) {
+            if (i > 0) json += ",";
+            json += "{";
+            json += "\"ssid\":\"";
+            json += String(config_rtc.wifi_credentials[i].ssid);
+            json += "\",\"password\":\"";
+            json += String(config_rtc.wifi_credentials[i].password);
+            json += "\"";
+            json += "}";
+        }
+        json += "]";
+        return json;
+    } else if (var == "currentWifiData") {
+        // Aktuelle WiFi-Credentials für Vergleich (nur SSID, Passwort nicht ausgeben)
+        String json = "[";
+        if (WiFi.status() == WL_CONNECTED) {
+            String currentSSID = WiFi.SSID();
+            // Finde passendes Credential
+            for (uint8_t i = 0; i < config_rtc.wifi_count; i++) {
+                if (String(config_rtc.wifi_credentials[i].ssid) == currentSSID) {
+                    json += "{";
+                    json += "\"ssid\":\"";
+                    json += currentSSID;
+                    json += "\",\"password\":\"";
+                    json += String(config_rtc.wifi_credentials[i].password);
+                    json += "\"";
+                    json += "}";
+                    break;
+                }
+            }
+        }
+        json += "]";
+        return json;
+    } else {
+        // Unbekannte Variable - leeren String zurückgeben
+        return String();
     }
-    // Unbekannte Variable - leeren String zurückgeben
-    return String();
 }
 
 void setupWebServer() {
@@ -1209,17 +1401,98 @@ void setupWebServer() {
         request->send(response);
     });
     
-    // Config-Seite (passwortgeschützt)
-    server.serveStatic("/config", LittleFS, "/config.html")
-        .setFilter([](AsyncWebServerRequest *request){
-            // Basic Auth prüfen
-            if (!request->authenticate("admin", config_rtc.adminpass)) {
-                request->requestAuthentication();
-                return false;  // Request blockieren
+    // Config-Seite (passwortgeschützt) - mit Template-Processor
+    server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request){
+        // Basic Auth prüfen
+        if (!request->authenticate("admin", config_rtc.adminpass)) {
+            request->requestAuthentication();
+            return;
+        }
+        last_web_activity = millis();
+        
+        // Datei mit Template-Processor ausliefern
+        AsyncWebServerResponse *response = request->beginResponse(LittleFS, "/config.html", "text/html", false, processor);
+        response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        request->send(response);
+    });
+    
+    // Config speichern (POST)
+    server.on("/config/save", HTTP_POST, [](AsyncWebServerRequest *request){
+        last_web_activity = millis();
+        
+        // POST-Daten lesen
+        if (!request->hasParam("data", true)) {
+            request->send(400, "text/plain", "Fehler: Parameter 'data' fehlt");
+            return;
+        }
+        
+        // Zusätzliche Sicherheit: Aktuelles Passwort muss übergeben werden
+        // (verhindert Config-Injection ohne Admin-Passwort)
+        String current_password = "";
+        if (request->hasParam("current_password", true)) {
+            current_password = request->getParam("current_password", true)->value();
+        }
+        
+        // Authentifizierung prüfen:
+        // 1. Basic Auth mit aktuellem Passwort ODER
+        // 2. current_password Parameter mit aktuellem Passwort
+        bool auth_ok = false;
+        
+        // Prüfe Basic Auth
+        if (request->authenticate("admin", config_rtc.adminpass)) {
+            auth_ok = true;
+        }
+        // Prüfe current_password Parameter (falls Basic Auth fehlgeschlagen)
+        else if (current_password.length() > 0 && current_password == String(config_rtc.adminpass)) {
+            auth_ok = true;
+        }
+        
+        if (!auth_ok) {
+            // Wenn weder Basic Auth noch current_password korrekt sind
+            request->requestAuthentication();
+            return;
+        }
+        
+        String jsonData = request->getParam("data", true)->value();
+        
+        // JSON parsen
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, jsonData);
+        if (error) {
+            request->send(400, "text/plain", "Fehler: JSON ungültig");
+            return;
+        }
+        
+        // Config in RTC-RAM und config.json speichern
+        bool wifi_credentials_changed = false;
+        if (save_config(doc, &wifi_credentials_changed)) {
+            // Antwort senden, bevor Ressourcen heruntergefahren werden
+            request->send(200, "text/plain", "OK - Restart wird durchgeführt...");
+            delay(500);  // Kurze Verzögerung, damit die Antwort gesendet wird
+            
+            // Nach jeder Config-Speicherung: Sauberen Restart durchführen
+            // (sicherer, da alle Ressourcen neu initialisiert werden)
+            Serial.println("Restart durch Config-Änderung ausgelöst");
+            if (wifi_credentials_changed) {
+                Serial.println("  → WiFi-Credentials wurden geändert");
             }
-            last_web_activity = millis();
-            return true;  // Request erlauben
-        });
+            
+            // WICHTIG: pulse_counter vor ESP.restart() in Ring-Speicher speichern
+            // (RTC-RAM wird bei ESP.restart() zurückgesetzt)
+            Serial.println("Speichere pulse_counter in Ring-Speicher vor Reboot...");
+            write_pulse_counter_to_ring_buffer();
+            
+            // Ressourcen sauber beenden
+            shutdown_resources();
+            
+            Serial.println("Starte Reboot...");
+            Serial.flush();
+            ESP.restart();
+            return;  // Wird nie erreicht, aber für Klarheit
+        } else {
+            request->send(500, "text/plain", "Fehler beim Speichern");
+        }
+    });
     
     // Reboot-Endpunkt (nur POST mit cmd=reboot, keine Passwort-Abfrage)
     server.on("/reboot", HTTP_POST, [](AsyncWebServerRequest *request){
@@ -1278,6 +1551,192 @@ void setupWebServer() {
     server.on("/ping", HTTP_GET, [](AsyncWebServerRequest *request){
         last_web_activity = millis();
         request->send(200, "text/plain", "pong");
+    });
+    
+    // Zählerstand manuell setzen
+    server.on("/counter/set", HTTP_POST, [](AsyncWebServerRequest *request){
+        last_web_activity = millis();
+        
+        // POST-Parameter prüfen
+        if (!request->hasParam("value", true)) {
+            request->send(400, "text/plain", "Fehler: Parameter 'value' fehlt");
+            return;
+        }
+        
+        String valueStr = request->getParam("value", true)->value();
+        uint32_t new_value = (uint32_t)valueStr.toInt();
+        
+        // Validierung: Maximal 9999999 (99999.99)
+        if (new_value > 9999999) {
+            request->send(400, "text/plain", "Fehler: Wert zu groß (max. 99999.99)");
+            return;
+        }
+        
+        uint32_t old_value = pulse_counter;
+        
+        Serial.printf("Zählerstand manuell gesetzt: %lu → %lu\n", old_value, new_value);
+        
+        // Alten Wert in Ring-Speicher schreiben (falls > 0 und > max_pulse)
+        // Dies ist wichtig, damit der alte Wert nicht verloren geht
+        if (old_value > 0) {
+            // Prüfe, ob alter Wert größer als max_pulse im Ring-Speicher ist
+            uint32_t max_pulse = 0;
+            uint32_t max_index = 0;
+            max_pulse = find_max_pulse_and_index_from_nvs(&max_index);
+            
+            if (old_value > max_pulse) {
+                Serial.printf("Alter Wert (%lu) > max_pulse (%lu) → schreibe in Ring-Speicher\n", old_value, max_pulse);
+                write_pulse_counter_to_ring_buffer();
+            }
+        }
+        
+        // Neuen Wert in RTC-RAM setzen
+        pulse_counter = new_value;
+        
+        // WICHTIG: Stelle sicher, dass NVS initialisiert ist
+        init_pulse_nvs_minimal();
+        
+        // Öffne Ring-Speicher für Schreibzugriff
+        nvs_handle_t nvs_handle;
+        esp_err_t err = nvs_open_from_partition(NVS_PARTITION_PULSE, NVS_NAMESPACE_PULSE, NVS_READWRITE, &nvs_handle);
+        if (err != ESP_OK) {
+            Serial.printf("FEHLER beim Öffnen des NVS-Namespace: %s\n", esp_err_to_name(err));
+            request->send(500, "text/plain", "Fehler: NVS-Namespace konnte nicht geöffnet werden");
+            return;
+        }
+        
+        // Wenn neuer Wert < alter Wert: Stelle sicher, dass neuer Wert der höchste im Ring-Speicher ist
+        // Dazu müssen alle Werte > neuer Wert gelöscht werden
+        if (new_value < old_value) {
+            Serial.printf("Neuer Wert (%lu) < alter Wert (%lu) → lösche alle Werte > %lu im Ring-Speicher\n", 
+                         new_value, old_value, new_value);
+            
+            uint32_t deleted_count = 0;
+            
+            // Durchsuche alle möglichen Einträge im Ring-Speicher und lösche Werte > neuer Wert
+            for (uint32_t i = 0; i < RING_BUFFER_SIZE; i++) {
+                char key[MAX_KEY_LENGTH];
+                snprintf(key, sizeof(key), "%s%lu", NVS_KEY_PREFIX, i);
+                
+                uint32_t pulse_value = 0;
+                err = nvs_get_u32(nvs_handle, key, &pulse_value);
+                
+                if (err == ESP_OK) {
+                    // Wert gefunden
+                    if (pulse_value > new_value) {
+                        // Wert ist größer als neuer Wert → lösche ihn
+                        err = nvs_erase_key(nvs_handle, key);
+                        if (err == ESP_OK) {
+                            deleted_count++;
+                            Serial.printf("  Gelöscht: Index %lu = %lu (war > %lu)\n", i, pulse_value, new_value);
+                        }
+                    }
+                }
+                // ESP_ERR_NVS_NOT_FOUND ignorieren (Key existiert nicht)
+            }
+            
+            Serial.printf("Ring-Speicher bereinigt: %lu Einträge gelöscht\n", deleted_count);
+        }
+        
+        // Neuen Wert normal in Ring-Speicher schreiben (mit ring_idx)
+        // Ring-Index erhöhen
+        ring_idx = (ring_idx + 1) % RING_BUFFER_SIZE;
+        
+        char key[MAX_KEY_LENGTH];
+        snprintf(key, sizeof(key), "%s%lu", NVS_KEY_PREFIX, ring_idx);
+        
+        err = nvs_set_u32(nvs_handle, key, new_value);
+        if (err == ESP_OK) {
+            err = nvs_commit(nvs_handle);
+            if (err == ESP_OK) {
+                Serial.printf("Neuer Zählerstand (%lu) in Ring-Speicher geschrieben (Index: %lu)\n", new_value, ring_idx);
+            } else {
+                Serial.printf("FEHLER beim Committen: %s\n", esp_err_to_name(err));
+            }
+        } else {
+            Serial.printf("FEHLER beim Schreiben: %s\n", esp_err_to_name(err));
+        }
+        
+        nvs_close(nvs_handle);
+        
+        // Erfolgreiche Antwort
+        char response[100];
+        snprintf(response, sizeof(response), "Zählerstand gesetzt: %05lu.%02lu", new_value / 100, new_value % 100);
+        request->send(200, "text/plain", response);
+    });
+    
+    // WiFi-Scan-Endpunkt: Gibt verfügbare WLAN-Netzwerke zurück (passwortgeschützt)
+    server.on("/wifi/scan", HTTP_GET, [](AsyncWebServerRequest *request){
+        // Basic Auth prüfen
+        if (!request->authenticate("admin", config_rtc.adminpass)) {
+            request->requestAuthentication();
+            return;
+        }
+        last_web_activity = millis();
+        
+        // WiFi-Modus sicherstellen (Station-Modus für Scan erforderlich)
+        WiFiMode_t currentMode = WiFi.getMode();
+        if (currentMode == WIFI_OFF || currentMode == WIFI_AP) {
+            // WiFi in Station-Modus versetzen (falls nicht bereits)
+            WiFi.mode(WIFI_STA);
+            delay(100);
+        }
+        
+        // WiFi-Scan durchführen
+        Serial.println("WiFi-Scan wird durchgeführt...");
+        int n = WiFi.scanNetworks();
+        
+        if (n < 0) {
+            // Fehler beim Scan
+            request->send(500, "application/json", "{\"error\":\"WiFi-Scan fehlgeschlagen\"}");
+            return;
+        }
+        
+        if (n == 0) {
+            request->send(200, "application/json", "[]");
+            return;
+        }
+        
+        // Netzwerke nach RSSI sortieren (höchster zuerst)
+        struct NetworkInfo {
+            String ssid;
+            int rssi;
+            bool encrypted;
+        };
+        
+        NetworkInfo networks[n];
+        for (int i = 0; i < n; i++) {
+            networks[i].ssid = WiFi.SSID(i);
+            networks[i].rssi = WiFi.RSSI(i);
+            networks[i].encrypted = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+        }
+        
+        // Einfache Sortierung nach RSSI (Bubble Sort - ausreichend für max. 10 Netzwerke)
+        for (int i = 0; i < n - 1; i++) {
+            for (int j = 0; j < n - i - 1; j++) {
+                if (networks[j].rssi < networks[j + 1].rssi) {
+                    NetworkInfo temp = networks[j];
+                    networks[j] = networks[j + 1];
+                    networks[j + 1] = temp;
+                }
+            }
+        }
+        
+        // JSON erstellen (max. 10 stärkste Netzwerke)
+        JsonDocument doc;
+        JsonArray networksArray = doc.to<JsonArray>();
+        int maxNetworks = (n > 10) ? 10 : n;
+        
+        for (int i = 0; i < maxNetworks; i++) {
+            JsonObject network = networksArray.add<JsonObject>();
+            network["ssid"] = networks[i].ssid;
+            network["rssi"] = networks[i].rssi;
+            network["encrypted"] = networks[i].encrypted;
+        }
+        
+        String jsonResponse;
+        serializeJson(doc, jsonResponse);
+        request->send(200, "application/json", jsonResponse);
     });
     
     // Alle anderen Dateien aus Filesystem (außer config.json)

@@ -95,7 +95,7 @@
 // Cron-ähnliche Logik: Wake-up erfolgt zu Minuten der Stunde, die durch diesen Wert teilbar sind
 // Beispiel: DEFAULT_WAKEUP_INTERVAL_MIN = 10 → Wake-up bei 0, 10, 20, 30, 40, 50 Minuten jeder Stunde
 // Muss Teiler von 60 sein: 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60
-#define DEFAULT_WAKEUP_INTERVAL_MIN  5  // Minuten
+#define DEFAULT_WAKEUP_INTERVAL_MIN  10  // Minuten
 #define DEFAULT_WAKEUP_INTERVAL_US   (DEFAULT_WAKEUP_INTERVAL_MIN * 60 * 1000000ULL)
 
 // Puffer-Zeit vor Wake-up-Berechnung (verhindert sofortiges Wake-up wenn kurz vor dem Zeitpunkt)

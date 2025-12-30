@@ -5,87 +5,161 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gas-O-Meter Status</title>
     <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/bootstrap.min.css">
 </head>
 <body>
     <div class="container">
         <h1>Gas-O-Meter Status</h1>
         
         <div class="pulse-counter-display">
-            <span class="pulse-left">%pulse_counter_left%</span><span class="pulse-right">%pulse_counter_right%</span>
+            <span class="pulse-left">`pulse_counter_left`</span><span class="pulse-right">`pulse_counter_right`</span>
         </div>
         
-        <table id="statusTable">
-            <tr>
-                <th>Parameter</th>
-                <th>Wert</th>
-            </tr>
-            <tr>
-                <td>Projektname</td>
-                <td>%project_name%</td>
-            </tr>
-            <tr>
-                <td>Version</td>
-                <td>%project_version%</td>
-            </tr>
-            <tr>
-                <td>Build-Datum</td>
-                <td>%build_date%</td>
-            </tr>
-            <tr>
-                <td>NV-Speicher Magic-Key</td>
-                <td>%nv_magic_key%</td>
-            </tr>
-            <tr>
-                <td>Hostname</td>
-                <td>%hostname%</td>
-            </tr>
-            <tr>
-                <td>Admin-Passwort</td>
-                <td>***</td>
-            </tr>
-            <tr>
-                <td>WiFi SSID</td>
-                <td>%wifi_ssid%</td>
-            </tr>
-            <tr>
-                <td>Wake-up Intervall</td>
-                <td>%wakeup_minutes% Minuten</td>
-            </tr>
-            <tr>
-                <td>Transfer Intervall</td>
-                <td>%transfer_minutes% Minuten</td>
-            </tr>
-            <tr>
-                <td>NTP-Server</td>
-                <td>%ntp_server%</td>
-            </tr>
-            <tr>
-                <td>ADC-Wert (dezimal)</td>
-                <td>%adc_value%</td>
-            </tr>
-            <tr>
-                <td>Akku-Spannung</td>
-                <td>%battery_voltage% V</td>
-            </tr>
-            <tr>
-                <td>Akku-Ladestatus</td>
-                <td>%battery_percent%&#37;</td>
-            </tr>
-        </table>
+        <!-- Zählerstand korrigieren -->
+        <div class="text-center mb-3">
+            <button type="button" class="btn btn-info btn-sm" onclick="toggleCounterCorrection()">
+                📝 Zählerstand korrigieren...
+            </button>
+            <div id="counterCorrectionPanel" class="mt-3 p-3 bg-light rounded" style="display: none;">
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Neuer Zählerstand:</label>
+                    <table style="margin: 0 auto; border-collapse: separate; border-spacing: 8px;">
+                        <tr>
+                            <td style="text-align: center; vertical-align: middle;">
+                                <button type="button" class="btn btn-secondary btn-lg" 
+                                        onmousedown="startDecrement('counterLeft', 'counterRight')" 
+                                        onmouseup="stopCounter()" onmouseleave="stopCounter()"
+                                        ontouchstart="startDecrement('counterLeft', 'counterRight')" 
+                                        ontouchend="stopCounter()"
+                                        style="min-width: 60px; font-size: 1.5em; padding: 12px 20px;">
+                                    −
+                                </button>
+                            </td>
+                            <td style="text-align: center; vertical-align: middle;">
+                                <div class="d-flex" style="gap: 0;">
+                                    <input type="text" id="counterLeft" readonly value="00000" 
+                                           class="form-control text-center fw-bold"
+                                           style="width: 100px; font-size: 1.5em; background-color: #000000; color: #ffffff; border: 2px solid #667eea; border-radius: 8px 0 0 8px; font-family: 'Courier New', monospace; border-right: none;">
+                                    <input type="text" id="counterRight" readonly value="00" 
+                                           class="form-control text-center fw-bold"
+                                           style="width: 70px; font-size: 1.5em; background-color: #dc3545; color: #ffffff; border: 2px solid #667eea; border-radius: 0 8px 8px 0; font-family: 'Courier New', monospace; border-left: none;">
+                                </div>
+                            </td>
+                            <td style="text-align: center; vertical-align: middle;">
+                                <button type="button" class="btn btn-secondary btn-lg" 
+                                        onmousedown="startIncrement('counterLeft', 'counterRight')" 
+                                        onmouseup="stopCounter()" onmouseleave="stopCounter()"
+                                        ontouchstart="startIncrement('counterLeft', 'counterRight')" 
+                                        ontouchend="stopCounter()"
+                                        style="min-width: 60px; font-size: 1.5em; padding: 12px 20px;">
+                                    +
+                                </button>
+                            </td>
+                            <td style="text-align: center; vertical-align: middle;">
+                                <button type="button" class="btn btn-success" onclick="applyCounterCorrection()">
+                                    ✓ Übernehmen
+                                </button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td colspan="3" style="text-align: center; vertical-align: middle; padding: 0 8px;">
+                                <input type="range" id="counterSlider" min="0" max="9999999" value="0" 
+                                       class="form-range" 
+                                       oninput="updateCounterFromSlider()"
+                                       style="height: 8px; width: 100%;">
+                            </td>
+                            <td></td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </div>
         
-        <div class="status">
-            <p>Wake-up Count: %wakeup_count%</p>
-            <p>WiFi Status: %wifi_status%</p>
-            <p id="wifi_info" style="%wifi_info_style%">
-                IP-Adresse: %wifi_ip%<br>
-                RSSI: %wifi_rssi% dBm
-            </p>
-            <p>Systemzeit (UTC): %system_time%</p>
+        <!-- Parameter einblenden -->
+        <div class="text-center mb-3">
+            <button type="button" class="btn btn-info btn-sm" onclick="toggleParameters()">
+                📊 Parameter einblenden
+            </button>
+            <div id="parametersPanel" class="mt-3" style="display: none;">
+                <div class="d-flex justify-content-center">
+                    <table id="statusTable">
+                        <tr>
+                            <th>Parameter</th>
+                            <th>Wert</th>
+                        </tr>
+                        <tr>
+                            <td>Projektname</td>
+                            <td>`project_name`</td>
+                        </tr>
+                        <tr>
+                            <td>Version</td>
+                            <td>`project_version`</td>
+                        </tr>
+                        <tr>
+                            <td>Build-Datum</td>
+                            <td>`build_date`</td>
+                        </tr>
+                        <tr>
+                            <td>NV-Speicher Magic-Key</td>
+                            <td>`nv_magic_key`</td>
+                        </tr>
+                        <tr>
+                            <td>Hostname</td>
+                            <td>`hostname`</td>
+                        </tr>
+                        <tr>
+                            <td>Admin-Passwort</td>
+                            <td>***</td>
+                        </tr>
+                        <tr>
+                            <td>WiFi SSID</td>
+                            <td>`wifi_ssid`</td>
+                        </tr>
+                        <tr>
+                            <td>Wake-up Intervall</td>
+                            <td>`wakeup_minutes` Minuten</td>
+                        </tr>
+                        <tr>
+                            <td>Transfer Intervall</td>
+                            <td>`transfer_minutes` Minuten</td>
+                        </tr>
+                        <tr>
+                            <td>NTP-Server</td>
+                            <td>`ntp_server`</td>
+                        </tr>
+                        <tr>
+                            <td>ADC-Wert (dezimal)</td>
+                            <td>`adc_value`</td>
+                        </tr>
+                        <tr>
+                            <td>Akku-Spannung</td>
+                            <td>`battery_voltage` V</td>
+                        </tr>
+                        <tr>
+                            <td>Akku-Ladestatus</td>
+                            <td>`battery_percent`&#37;</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <div class="d-flex justify-content-center">
+            <div class="status">
+                <p>Wake-up Count: `wakeup_count`</p>
+                <p>WiFi Status: `wifi_status`</p>
+                <p id="wifi_info" style="`wifi_info_style`">
+                    IP-Adresse: `wifi_ip`<br>
+                    RSSI: `wifi_rssi` dBm
+                </p>
+                <p>Systemzeit (UTC): `system_time`</p>
+            </div>
         </div>
         
         <div class="refresh">
             <button onclick="location.reload()">Aktualisieren</button>
             <button onclick="autoRefresh()">Auto-Refresh: <span id="autoRefreshStatus">Aus</span></button>
+            <button onclick="window.location.href='/config'" style="background-color: #667eea; color: white;">Config</button>
             <button onclick="rebootDevice()" style="background-color: #dc3545; color: white;">Reboot</button>
         </div>
     </div>

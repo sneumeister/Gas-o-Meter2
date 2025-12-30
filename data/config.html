@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gas-O-Meter Konfiguration</title>
+    <link rel="stylesheet" href="/bootstrap.min.css">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .config-container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            padding: 30px;
+        }
+    </style>
+</head>
+<body>
+    <div class="config-container">
+        <h1 class="text-center mb-4" style="color: #667eea;">Gas-O-Meter Konfiguration</h1>
+        
+        <form id="configForm">
+            <div class="mb-3">
+                <label for="hostname" class="form-label">Hostname</label>
+                <input type="text" class="form-control" id="hostname" name="hostname" value="`hostname`" required>
+            </div>
+            
+            <div class="mb-3">
+                <label for="adminpass" class="form-label">Admin-Passwort</label>
+                <div id="adminpassLocked">
+                    <div class="input-group">
+                        <input type="password" class="form-control" id="adminpass" name="adminpass" value="`adminpass`" readonly disabled>
+                        <button class="btn btn-warning" type="button" onclick="unlockAdminPass()">
+                            🔓 Passwort ändern
+                        </button>
+                    </div>
+                </div>
+                <div id="adminpassUnlocked" style="display: none;">
+                    <div class="alert alert-warning mb-3">
+                        <strong>⚠️ Achtung:</strong> Passwort wird geändert. Beide Felder müssen übereinstimmen!
+                    </div>
+                    <div class="mb-3">
+                        <label for="adminpass_new" class="form-label">Neues Admin-Passwort</label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="adminpass_new" name="adminpass_new" placeholder="Neues Passwort eingeben">
+                            <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('adminpass_new', 'toggleAdminPassNew')">
+                                <span id="toggleAdminPassNewIcon">👁️</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="adminpass_confirm" class="form-label">Passwort wiederholen</label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="adminpass_confirm" name="adminpass_confirm" placeholder="Passwort wiederholen">
+                            <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('adminpass_confirm', 'toggleAdminPassConfirm')">
+                                <span id="toggleAdminPassConfirmIcon">👁️</span>
+                            </button>
+                        </div>
+                        <div id="adminpassMatch" class="invalid-feedback" style="display: none;">
+                            Passwörter stimmen nicht überein!
+                        </div>
+                        <div id="adminpassMatchOk" class="valid-feedback" style="display: none;">
+                            ✓ Passwörter stimmen überein
+                        </div>
+                    </div>
+                    <button class="btn btn-secondary btn-sm" type="button" onclick="lockAdminPass()">
+                        ✖ Änderung abbrechen
+                    </button>
+                </div>
+            </div>
+            
+            <div class="mb-3">
+                <h2 class="h5 mb-3">WiFi-Credentials</h2>
+                
+                <!-- Aufklappbarer Bereich: WLAN in der Nähe -->
+                <div class="mb-3">
+                    <button class="btn btn-outline-info btn-sm" type="button" id="wifiScanToggle" onclick="toggleWifiScan()">
+                        📡 WLAN in der Nähe...
+                    </button>
+                    <div class="collapse mt-2" id="wifiScanCollapse" style="display: none;">
+                        <div class="card card-body">
+                            <div id="wifiScanStatus" class="text-muted">Klicken Sie auf den Button, um verfügbare Netzwerke zu laden.</div>
+                            <div id="wifiNetworksList"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="wifiCredentials">
+                    <!-- Wird dynamisch durch JavaScript gefüllt -->
+                </div>
+                <button type="button" class="btn btn-info btn-sm" onclick="addWifiCredential()" id="addWifiBtn" style="display: none;">+ WiFi-Set hinzufügen</button>
+            </div>
+            
+            <div class="mb-3">
+                <label for="wakeup_minutes" class="form-label">Wake-up Intervall (Minuten)</label>
+                <input type="number" class="form-control" id="wakeup_minutes" name="wakeup_minutes" value="`wakeup_minutes`" min="1" max="60" required>
+            </div>
+            
+            <div class="mb-3">
+                <label for="transfer_minutes" class="form-label">Transfer Intervall (Minuten)</label>
+                <input type="number" class="form-control" id="transfer_minutes" name="transfer_minutes" value="`transfer_minutes`" min="1" max="60" required>
+            </div>
+            
+            <div class="mb-3">
+                <label for="adc_voltage_offset" class="form-label">ADC Spannungs-Offset (V)</label>
+                <input type="number" class="form-control" id="adc_voltage_offset" name="adc_voltage_offset" value="`adc_voltage_offset`" step="0.01" required>
+            </div>
+            
+            <div class="mb-3">
+                <label for="ntp_server" class="form-label">NTP-Server</label>
+                <input type="text" class="form-control" id="ntp_server" name="ntp_server" value="`ntp_server`" required>
+            </div>
+            
+            <div class="d-flex gap-2 mt-4">
+                <button type="button" class="btn btn-secondary" onclick="reloadConfig()">Konfig Neuladen</button>
+                <button type="button" class="btn btn-success" onclick="saveConfig()">Konfig Speichern</button>
+                <button type="button" class="btn btn-primary" onclick="window.location.href='/'">Zurück</button>
+            </div>
+        </form>
+    </div>
+    
+    <!-- Versteckte Daten für JavaScript -->
+    <script id="wifiCredentialsData" type="application/json">`wifiCredentialsData`</script>
+    <script id="currentWifiData" type="application/json">`currentWifiData`</script>
+    
+    <script src="/config.js"></script>
+</body>
+</html>
