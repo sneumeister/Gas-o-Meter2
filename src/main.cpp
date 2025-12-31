@@ -1370,6 +1370,13 @@ String processor(const String& var) {
 }
 
 void setupWebServer() {
+    // WICHTIG: LittleFS muss gemountet sein, bevor Web-Server startet
+    // (auch wenn Config bereits aus RTC-RAM geladen wurde)
+    if (!mount_littlefs()) {
+        Serial.println("FEHLER: LittleFS konnte nicht gemountet werden - Web-Server kann nicht starten!");
+        return;
+    }
+    
     // Root auf index.html umleiten
     server.rewrite("/", "/index.html");
     
