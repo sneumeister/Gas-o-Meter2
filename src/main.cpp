@@ -3,8 +3,12 @@
 #include <LittleFS.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
+// === Alternativer PLACEHOLDER für processor() im ESPAsyncWebServer ===
+#ifndef TEMPLATE_PLACEHOLDER
 #define TEMPLATE_PLACEHOLDER '`'   // Als Compiler-Option -DTEMPLATE_PLACEHOLDER=96 in der platformio.ini setzen!
+#endif
 #include <ESPAsyncWebServer.h>
+// =====================================================================
 #include <ArduinoJson.h>
 #include "esp_sleep.h"
 #include "driver/gpio.h"
@@ -633,6 +637,26 @@ void shutdown_resources() {
 }
 
 // ============================================
+// Zentrale Reboot-Funktion
+// ============================================
+void perform_reboot(const char* reason) {
+    Serial.printf("Reboot wird durchgeführt: %s\n", reason);
+    
+    // WICHTIG: pulse_counter vor ESP.restart() in Ring-Speicher speichern
+    // (RTC-RAM wird bei ESP.restart() zurückgesetzt)
+    Serial.println("Speichere pulse_counter in Ring-Speicher vor Reboot...");
+    write_pulse_counter_to_ring_buffer();
+    
+    // Ressourcen sauber beenden
+    shutdown_resources();
+    
+    Serial.println("Starte Reboot...");
+    Serial.flush();
+    delay(200);  // Zusätzliche Verzögerung vor Reboot
+    ESP.restart();
+}
+
+// ============================================
 // Berechne nächsten Timer-Wake-up-Zeitpunkt (Cron-ähnlich)
 // ============================================
 uint64_t calculate_next_wakeup_timer() {
@@ -971,13 +995,19 @@ bool load_config() {
 // ============================================
 // Rückgabewert: true = erfolgreich, false = Fehler
 // wifi_credentials_changed wird auf true gesetzt, wenn WiFi-Credentials geändert wurden
-bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr) {
+bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, String* errorMessage = nullptr) {
     if (wifi_credentials_changed != nullptr) {
         *wifi_credentials_changed = false;
+    }
+    if (errorMessage != nullptr) {
+        *errorMessage = "";
     }
     
     if (!mount_littlefs()) {
         Serial.println("Fehler: LittleFS nicht gemountet");
+        if (errorMessage != nullptr) {
+            *errorMessage = "Fehler: LittleFS nicht gemountet";
+        }
         return false;
     }
     
@@ -995,35 +1025,87 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr) {
         old_wifi.password[i][sizeof(old_wifi.password[i]) - 1] = '\0';
     }
     
-    // Werte in RTC Memory speichern
+    // Werte in RTC Memory speichern mit Validierung
     if (doc["hostname"].is<const char*>()) {
         const char* hostname = doc["hostname"];
-        strncpy(config_rtc.hostname, hostname, sizeof(config_rtc.hostname) - 1);
-        config_rtc.hostname[sizeof(config_rtc.hostname) - 1] = '\0';
+        if (strlen(hostname) > 0 && strlen(hostname) < sizeof(config_rtc.hostname)) {
+            strncpy(config_rtc.hostname, hostname, sizeof(config_rtc.hostname) - 1);
+            config_rtc.hostname[sizeof(config_rtc.hostname) - 1] = '\0';
+        } else {
+            Serial.println("FEHLER: Hostname ungültig (leer oder zu lang)");
+            if (errorMessage != nullptr) {
+                *errorMessage = "Fehler: Hostname ungültig (leer oder zu lang)";
+            }
+            return false;
+        }
     }
     
     if (doc["adminpass"].is<const char*>()) {
         const char* adminpass = doc["adminpass"];
-        strncpy(config_rtc.adminpass, adminpass, sizeof(config_rtc.adminpass) - 1);
-        config_rtc.adminpass[sizeof(config_rtc.adminpass) - 1] = '\0';
+        if (strlen(adminpass) > 0 && strlen(adminpass) < sizeof(config_rtc.adminpass)) {
+            strncpy(config_rtc.adminpass, adminpass, sizeof(config_rtc.adminpass) - 1);
+            config_rtc.adminpass[sizeof(config_rtc.adminpass) - 1] = '\0';
+        } else {
+            Serial.println("FEHLER: Admin-Passwort ungültig (leer oder zu lang)");
+            if (errorMessage != nullptr) {
+                *errorMessage = "Fehler: Admin-Passwort ungültig (leer oder zu lang)";
+            }
+            return false;
+        }
     }
     
     if (doc["wakeup_minutes"].is<uint8_t>()) {
-        config_rtc.wakeup_minutes = doc["wakeup_minutes"].as<uint8_t>();
+        uint8_t wakeup_minutes = doc["wakeup_minutes"].as<uint8_t>();
+        if (wakeup_minutes >= 1 && wakeup_minutes <= 60) {
+            config_rtc.wakeup_minutes = wakeup_minutes;
+        } else {
+            Serial.printf("FEHLER: Wake-up Intervall ungültig (%d, muss zwischen 1-60 sein)\n", wakeup_minutes);
+            if (errorMessage != nullptr) {
+                *errorMessage = "Fehler: Wake-up Intervall ungültig (muss zwischen 1-60 sein)";
+            }
+            return false;
+        }
     }
     
     if (doc["transfer_minutes"].is<uint8_t>()) {
-        config_rtc.transfer_minutes = doc["transfer_minutes"].as<uint8_t>();
+        uint8_t transfer_minutes = doc["transfer_minutes"].as<uint8_t>();
+        if (transfer_minutes >= 1 && transfer_minutes <= 60) {
+            config_rtc.transfer_minutes = transfer_minutes;
+        } else {
+            Serial.printf("FEHLER: Transfer Intervall ungültig (%d, muss zwischen 1-60 sein)\n", transfer_minutes);
+            if (errorMessage != nullptr) {
+                *errorMessage = "Fehler: Transfer Intervall ungültig (muss zwischen 1-60 sein)";
+            }
+            return false;
+        }
     }
     
     if (doc["adc_voltage_offset"].is<float>()) {
-        config_rtc.adc_voltage_offset = doc["adc_voltage_offset"].as<float>();
+        float adc_voltage_offset = doc["adc_voltage_offset"].as<float>();
+        // Keine strenge Begrenzung, aber prüfe auf sinnvolle Werte (z.B. -10V bis +10V)
+        if (adc_voltage_offset >= -10.0f && adc_voltage_offset <= 10.0f) {
+            config_rtc.adc_voltage_offset = adc_voltage_offset;
+        } else {
+            Serial.printf("FEHLER: ADC Spannungs-Offset ungültig (%.2f, muss zwischen -10.0 und +10.0 sein)\n", adc_voltage_offset);
+            if (errorMessage != nullptr) {
+                *errorMessage = "Fehler: ADC Spannungs-Offset ungültig (muss zwischen -10.0 und +10.0 sein)";
+            }
+            return false;
+        }
     }
     
     if (doc["ntp_server"].is<const char*>()) {
         const char* ntp_server = doc["ntp_server"];
-        strncpy(config_rtc.ntp_server, ntp_server, sizeof(config_rtc.ntp_server) - 1);
-        config_rtc.ntp_server[sizeof(config_rtc.ntp_server) - 1] = '\0';
+        if (strlen(ntp_server) > 0 && strlen(ntp_server) < sizeof(config_rtc.ntp_server)) {
+            strncpy(config_rtc.ntp_server, ntp_server, sizeof(config_rtc.ntp_server) - 1);
+            config_rtc.ntp_server[sizeof(config_rtc.ntp_server) - 1] = '\0';
+        } else {
+            Serial.println("FEHLER: NTP-Server ungültig (leer oder zu lang)");
+            if (errorMessage != nullptr) {
+                *errorMessage = "Fehler: NTP-Server ungültig (leer oder zu lang)";
+            }
+            return false;
+        }
     }
     
     // WiFi-Credentials speichern (max. 2 Paare)
@@ -1037,8 +1119,23 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr) {
                 const char* ssid = credentials[i]["ssid"];
                 const char* password = credentials[i]["password"];
                 
-                // Nur nicht-leere Sets speichern
-                if (strlen(ssid) > 0 || strlen(password) > 0) {
+                // Nur nicht-leere Sets speichern (mindestens SSID muss vorhanden sein)
+                if (strlen(ssid) > 0) {
+                    if (strlen(ssid) >= sizeof(config_rtc.wifi_credentials[i].ssid)) {
+                        Serial.printf("FEHLER: WiFi SSID zu lang (max. %d Zeichen)\n", sizeof(config_rtc.wifi_credentials[i].ssid) - 1);
+                        if (errorMessage != nullptr) {
+                            *errorMessage = "Fehler: WiFi SSID zu lang (max. 31 Zeichen)";
+                        }
+                        return false;
+                    }
+                    if (strlen(password) >= sizeof(config_rtc.wifi_credentials[i].password)) {
+                        Serial.printf("FEHLER: WiFi Passwort zu lang (max. %d Zeichen)\n", sizeof(config_rtc.wifi_credentials[i].password) - 1);
+                        if (errorMessage != nullptr) {
+                            *errorMessage = "Fehler: WiFi Passwort zu lang (max. 63 Zeichen)";
+                        }
+                        return false;
+                    }
+                    
                     strncpy(config_rtc.wifi_credentials[i].ssid, ssid, sizeof(config_rtc.wifi_credentials[i].ssid) - 1);
                     config_rtc.wifi_credentials[i].ssid[sizeof(config_rtc.wifi_credentials[i].ssid) - 1] = '\0';
                     
@@ -1049,6 +1146,15 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr) {
                 }
             }
         }
+    }
+    
+    // Validierung: Mindestens ein WiFi-Set muss vorhanden sein
+    if (config_rtc.wifi_count == 0) {
+        Serial.println("FEHLER: Mindestens ein WiFi-Set (SSID) muss angegeben werden");
+        if (errorMessage != nullptr) {
+            *errorMessage = "Fehler: Mindestens ein WiFi-Set (SSID) muss angegeben werden";
+        }
+        return false;
     }
     
     // Config in config.json speichern
@@ -1419,7 +1525,10 @@ void setupWebServer() {
         
         // Datei mit Template-Processor ausliefern
         AsyncWebServerResponse *response = request->beginResponse(LittleFS, "/config.html", "text/html", false, processor);
+        // HTTP-Standard Cache-Control-Header: Browser soll Seite nicht cachen
         response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        response->addHeader("Pragma", "no-cache");  // HTTP/1.0 Kompatibilität
+        response->addHeader("Expires", "0");  // Sofort abgelaufen
         request->send(response);
     });
     
@@ -1462,42 +1571,90 @@ void setupWebServer() {
         
         String jsonData = request->getParam("data", true)->value();
         
+        // DEBUG: Zeige empfangene JSON-Daten
+        Serial.println("=== Empfangene Config-Daten ===");
+        Serial.println(jsonData);
+        Serial.println("===============================");
+        
         // JSON parsen
         JsonDocument doc;
         DeserializationError error = deserializeJson(doc, jsonData);
         if (error) {
+            Serial.printf("JSON Parse Fehler: %s\n", error.c_str());
             request->send(400, "text/plain", "Fehler: JSON ungültig");
             return;
         }
         
+        // DEBUG: Zeige geparste Werte
+        Serial.println("=== Geparste Config-Werte ===");
+        if (doc["hostname"].is<const char*>()) {
+            Serial.printf("  hostname: %s\n", doc["hostname"].as<const char*>());
+        }
+        if (doc["adminpass"].is<const char*>()) {
+            Serial.printf("  adminpass: %s (Länge: %d)\n", 
+                         doc["adminpass"].as<const char*>(), 
+                         strlen(doc["adminpass"].as<const char*>()));
+        }
+        if (doc["wakeup_minutes"].is<uint8_t>()) {
+            Serial.printf("  wakeup_minutes: %d\n", doc["wakeup_minutes"].as<uint8_t>());
+        }
+        if (doc["transfer_minutes"].is<uint8_t>()) {
+            Serial.printf("  transfer_minutes: %d\n", doc["transfer_minutes"].as<uint8_t>());
+        }
+        if (doc["adc_voltage_offset"].is<float>()) {
+            Serial.printf("  adc_voltage_offset: %.3f V\n", doc["adc_voltage_offset"].as<float>());
+        }
+        if (doc["ntp_server"].is<const char*>()) {
+            Serial.printf("  ntp_server: %s\n", doc["ntp_server"].as<const char*>());
+        }
+        if (doc["wifiCredentials"].is<JsonArray>()) {
+            JsonArray credentials = doc["wifiCredentials"].as<JsonArray>();
+            Serial.printf("  wifiCredentials: %d Set(s)\n", credentials.size());
+            for (size_t i = 0; i < credentials.size() && i < 2; i++) {
+                if (credentials[i]["ssid"].is<const char*>()) {
+                    Serial.printf("    [%d] SSID: %s\n", i, credentials[i]["ssid"].as<const char*>());
+                }
+                if (credentials[i]["password"].is<const char*>()) {
+                    const char* pwd = credentials[i]["password"].as<const char*>();
+                    Serial.printf("    [%d] Password: %s (Länge: %d)\n", i, 
+                                 (strlen(pwd) > 0 ? "***" : "(leer)"), strlen(pwd));
+                }
+            }
+        }
+        Serial.println("==============================");
+        
         // Config in RTC-RAM und config.json speichern
         bool wifi_credentials_changed = false;
-        if (save_config(doc, &wifi_credentials_changed)) {
-            // Antwort senden, bevor Ressourcen heruntergefahren werden
-            request->send(200, "text/plain", "OK - Restart wird durchgeführt...");
-            delay(500);  // Kurze Verzögerung, damit die Antwort gesendet wird
+        String errorMessage = "";
+        if (save_config(doc, &wifi_credentials_changed, &errorMessage)) {
+            // Config erfolgreich gespeichert
+            // WICHTIG: RTC-Config invalidieren, damit beim nächsten Start config.json geladen wird
+            config_rtc.config_loaded = false;
             
-            // Nach jeder Config-Speicherung: Sauberen Restart durchführen
-            // (sicherer, da alle Ressourcen neu initialisiert werden)
-            Serial.println("Restart durch Config-Änderung ausgelöst");
+            // JSON-Antwort senden
+            JsonDocument responseDoc;
+            responseDoc["success"] = true;
+            responseDoc["message"] = "Konfiguration erfolgreich gespeichert";
+            responseDoc["wifi_changed"] = wifi_credentials_changed;
+            String responseJson;
+            serializeJson(responseDoc, responseJson);
+            request->send(200, "application/json", responseJson);
+            
+            Serial.println("Config erfolgreich gespeichert (config.json)");
+            Serial.println("  → RTC-Config invalidiert - wird beim nächsten Start aus config.json geladen");
             if (wifi_credentials_changed) {
                 Serial.println("  → WiFi-Credentials wurden geändert");
             }
-            
-            // WICHTIG: pulse_counter vor ESP.restart() in Ring-Speicher speichern
-            // (RTC-RAM wird bei ESP.restart() zurückgesetzt)
-            Serial.println("Speichere pulse_counter in Ring-Speicher vor Reboot...");
-            write_pulse_counter_to_ring_buffer();
-            
-            // Ressourcen sauber beenden
-            shutdown_resources();
-            
-            Serial.println("Starte Reboot...");
-            Serial.flush();
-            ESP.restart();
-            return;  // Wird nie erreicht, aber für Klarheit
+            // KEIN Reboot hier - erfolgt manuell über /reboot Endpunkt
+            return;
         } else {
-            request->send(500, "text/plain", "Fehler beim Speichern");
+            // Fehler beim Speichern: 400 (Bad Request) für ungültige Config, 500 für Systemfehler
+            // errorMessage enthält die spezifische Fehlermeldung
+            if (errorMessage.length() > 0) {
+                request->send(400, "text/plain", errorMessage);
+            } else {
+                request->send(400, "text/plain", "Fehler: Ungültige Konfiguration");
+            }
         }
     });
     
@@ -1511,20 +1668,12 @@ void setupWebServer() {
         
         last_web_activity = millis();
         request->send(200, "text/plain", "Reboot wird durchgeführt...");
-        delay(500);  // Kurze Verzögerung, damit die Antwort gesendet wird
-        Serial.println("Reboot durch Web-Interface ausgelöst");
         
-        // WICHTIG: pulse_counter vor ESP.restart() in Ring-Speicher speichern
-        // (RTC-RAM wird bei ESP.restart() zurückgesetzt)
-        Serial.println("Speichere pulse_counter in Ring-Speicher vor Reboot...");
-        write_pulse_counter_to_ring_buffer();
+        // Warte auf Antwort-Übertragung
+        vTaskDelay(pdMS_TO_TICKS(500));  // 500ms reichen für Start der Übertragung
         
-        // Ressourcen sauber beenden
-        shutdown_resources();
-        
-        Serial.println("Starte Reboot...");
-        Serial.flush();
-        ESP.restart();
+        // Zentrale Reboot-Funktion verwenden
+        perform_reboot("Reboot durch Web-Interface ausgelöst");
     });
     
     // Reading-Endpunkt: Gibt pulse_counter im Format XXXXX.XX aus (ASCII, für Node-RED etc.)
@@ -1985,10 +2134,17 @@ void loop() {
         unsigned long inactivity_ms = millis() - last_web_activity;
         unsigned long sleep_threshold_ms = WIFI_WAIT_FOR_SLEEP * 60 * 1000UL;  // Minuten in Millisekunden
         
-        if (inactivity_ms >= sleep_threshold_ms && !should_enter_deep_sleep) {
+        // Zusätzliche Sicherheit: Prüfe, ob Aktivität sehr aktuell ist (innerhalb der letzten 30 Sekunden)
+        // Dies verhindert Deep-Sleep, wenn gerade eine Anfrage bearbeitet wird oder Stay-Alive aktiv ist
+        bool recent_activity = (inactivity_ms < 30000);  // 30 Sekunden
+        
+        if (inactivity_ms >= sleep_threshold_ms && !should_enter_deep_sleep && !recent_activity) {
             Serial.printf("Keine Web-Server-Aktivität seit %lu Minuten → Deep-Sleep anfordern\n", WIFI_WAIT_FOR_SLEEP);
             should_enter_deep_sleep = true;
             deep_sleep_reason = "Web-Server-Inaktivität";
+        } else if (recent_activity && inactivity_ms >= sleep_threshold_ms) {
+            // Aktivität war sehr aktuell, aber Timeout erreicht → warte noch etwas
+            Serial.printf("Aktive Verbindung erkannt (letzte Aktivität vor %lu ms) → Deep-Sleep verzögert\n", inactivity_ms);
         }
     }
     

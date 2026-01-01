@@ -19,6 +19,22 @@
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
             padding: 30px;
         }
+        .spinner-border {
+            display: inline-block;
+            width: 2rem;
+            height: 2rem;
+            vertical-align: text-bottom;
+            border: 0.25em solid currentColor;
+            border-right-color: transparent;
+            border-radius: 50%;
+            animation: spinner-border 0.75s linear infinite;
+        }
+        @keyframes spinner-border {
+            to { transform: rotate(360deg); }
+        }
+        .text-primary {
+            color: #667eea !important;
+        }
     </style>
 </head>
 <body>
@@ -120,6 +136,7 @@
             <div class="d-flex gap-2 mt-4">
                 <button type="button" class="btn btn-secondary" onclick="reloadConfig()">Konfig Neuladen</button>
                 <button type="button" class="btn btn-success" onclick="saveConfig()">Konfig Speichern</button>
+                <button type="button" class="btn btn-danger" onclick="rebootDevice()">Reboot</button>
                 <button type="button" class="btn btn-primary" onclick="window.location.href='/'">Zurück</button>
             </div>
         </form>

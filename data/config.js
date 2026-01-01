@@ -1,9 +1,126 @@
 // WiFi-Credentials dynamisch verwalten
 let wifiCredentials = [];
 
+// Reboot-Funktion - vereinfacht: Countdown, dann Link anzeigen
+function rebootDevice() {
+    // Sicherheitsfrage
+    if (!confirm("Möchten Sie das Gerät wirklich neu starten?")) {
+        return;
+    }
+    
+    // Prüfe, ob Hostname geändert wurde (aus dem Formular)
+    const hostnameInput = document.getElementById('hostname');
+    const originalHostname = hostnameInput ? (hostnameInput.getAttribute('value') || 
+                                             hostnameInput.defaultValue || 
+                                             hostnameInput.value) : null;
+    const newHostname = hostnameInput ? hostnameInput.value.trim() : null;
+    const hostnameChanged = originalHostname && newHostname && (originalHostname !== newHostname);
+    
+    // Bestimme Ziel-URL für nach dem Reboot
+    let targetUrl;
+    if (hostnameChanged && newHostname) {
+        // Hostname wurde geändert: Verwende neue mDNS-URL
+        targetUrl = `http://${newHostname}.local/`;
+    } else {
+        // Hostname nicht geändert: Verwende aktuelle URL
+        targetUrl = window.location.origin + '/';
+    }
+    
+    // POST-Request an /reboot senden
+    const rebootUrl = window.location.origin + '/reboot';
+    const formData = new FormData();
+    formData.append('cmd', 'reboot');
+    
+    fetch(rebootUrl, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => {
+        console.log("Reboot-Request erfolgreich gesendet");
+    })
+    .catch(error => {
+        console.log("Request-Fehler (erwartet nach Reboot):", error);
+    });
+    
+    // Countdown: 5 Sekunden
+    let waitTime = 5;
+    const rebootButton = document.querySelector('button[onclick="rebootDevice()"]');
+    
+    const countdownInterval = setInterval(() => {
+        if (waitTime > 0) {
+            if (rebootButton) {
+                rebootButton.textContent = `Reboot wird durchgeführt... ${waitTime}s`;
+            }
+            waitTime--;
+        } else {
+            clearInterval(countdownInterval);
+            
+            // Nach Countdown: UI ändern - Formular ausblenden, Link anzeigen
+            showRebootLink(targetUrl, newHostname);
+        }
+    }, 1000);
+}
+
+// Zeige Link zur neuen URL nach Reboot
+function showRebootLink(targetUrl, newHostname) {
+    // 1. Erfolgs-Fenster entfernen (falls vorhanden)
+    const successAlerts = document.querySelectorAll('.alert-success');
+    successAlerts.forEach(alert => alert.remove());
+    
+    // 2. Formular ausblenden
+    const configForm = document.getElementById('configForm');
+    if (configForm) {
+        configForm.style.display = 'none';
+    }
+    
+    // 3. Erstelle neuen Inhalt mit Link
+    const linkContainer = document.createElement('div');
+    linkContainer.className = 'text-center';
+    linkContainer.style.cssText = 'padding: 40px 20px;';
+    
+    const infoText = document.createElement('p');
+    infoText.className = 'mb-4';
+    infoText.style.cssText = 'font-size: 1.1em; color: #333;';
+    infoText.textContent = 'Warten Sie, bis das System wieder online ist, und klicken Sie dann auf diesen Link:';
+    
+    const linkElement = document.createElement('a');
+    linkElement.href = targetUrl;
+    linkElement.className = 'btn btn-primary btn-lg';
+    linkElement.style.cssText = 'font-size: 1.2em; padding: 15px 30px; text-decoration: none; display: inline-block; margin-top: 20px;';
+    linkElement.textContent = targetUrl;
+    
+    linkContainer.appendChild(infoText);
+    linkContainer.appendChild(document.createElement('br'));
+    linkContainer.appendChild(linkElement);
+    
+    // Füge neuen Inhalt nach der Überschrift ein
+    const configContainer = document.querySelector('.config-container');
+    if (configContainer) {
+        // Füge nach der Überschrift ein
+        const heading = configContainer.querySelector('h1');
+        if (heading && heading.nextSibling) {
+            configContainer.insertBefore(linkContainer, heading.nextSibling);
+        } else {
+            configContainer.appendChild(linkContainer);
+        }
+    }
+}
+
+// Stay-Alive-Mechanismus für Config-Seite
+let stayAliveInterval = null;
+let originalHostname = null;  // Ursprünglicher Hostname beim Laden der Seite
+
 // Beim Laden: Aktuelle Config laden und Event-Listener registrieren
 window.addEventListener('load', () => {
     loadWifiCredentials();
+    
+    // Ursprünglichen Hostname speichern (für Stay-Alive und Config-Save)
+    const hostnameInput = document.getElementById('hostname');
+    if (hostnameInput) {
+        originalHostname = hostnameInput.getAttribute('value') || 
+                          hostnameInput.defaultValue || 
+                          hostnameInput.value;
+    }
     
     // Event-Listener für Admin-Passwort-Validierung
     const adminpassNew = document.getElementById('adminpass_new');
@@ -13,7 +130,76 @@ window.addEventListener('load', () => {
         adminpassNew.addEventListener('input', checkAdminPassMatch);
         adminpassConfirm.addEventListener('input', checkAdminPassMatch);
     }
+    
+    // Stay-Alive-Mechanismus starten: Regelmäßige Ping-Anfragen, um ESP32 wach zu halten
+    // Intervall: 2 Minuten (weniger als WIFI_WAIT_FOR_SLEEP = 3 Minuten)
+    startStayAlive();
 });
+
+// Stay-Alive beim Verlassen der Seite stoppen
+window.addEventListener('beforeunload', () => {
+    stopStayAlive();
+});
+
+// Stay-Alive starten
+function startStayAlive() {
+    // Bereits laufendes Interval stoppen, falls vorhanden
+    stopStayAlive();
+    
+    // Ping alle 2 Minuten (120 Sekunden) - weniger als WIFI_WAIT_FOR_SLEEP (3 Minuten)
+    stayAliveInterval = setInterval(() => {
+        // Bestimme die richtige URL für Ping (ähnlich wie bei Config-Save)
+        let pingUrl;
+        const hostnameInput = document.getElementById('hostname');
+        if (hostnameInput && originalHostname) {
+            const currentHostname = hostnameInput.value.trim();
+            const hostnameChanged = (originalHostname !== currentHostname);
+            
+            if (hostnameChanged) {
+                // Hostname wurde geändert: Verwende IP-Adresse oder ursprünglichen Hostname
+                const currentHost = window.location.hostname;
+                
+                // Prüfe, ob es bereits eine IP-Adresse ist
+                if (currentHost.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+                    // Es ist bereits eine IP-Adresse → verwende diese
+                    pingUrl = window.location.protocol + '//' + currentHost + 
+                             (window.location.port ? ':' + window.location.port : '') + '/ping';
+                } else {
+                    // Es ist ein Hostname → versuche ursprünglichen Hostname zu verwenden
+                    const port = window.location.port ? ':' + window.location.port : '';
+                    pingUrl = window.location.protocol + '//' + originalHostname + '.local' + port + '/ping';
+                }
+            } else {
+                // Hostname nicht geändert: Verwende relativen Pfad (funktioniert immer)
+                pingUrl = '/ping';
+            }
+        } else {
+            // Fallback: Verwende relativen Pfad
+            pingUrl = '/ping';
+        }
+        
+        fetch(pingUrl, {
+            method: 'GET',
+            cache: 'no-cache'
+        })
+        .then(response => {
+            if (response.ok) {
+                console.log('Stay-Alive: ESP32 ist wach');
+            }
+        })
+        .catch(error => {
+            console.log('Stay-Alive: Fehler (ESP32 möglicherweise im Deep-Sleep):', error.message);
+        });
+    }, 120000); // 2 Minuten = 120000 ms
+}
+
+// Stay-Alive stoppen
+function stopStayAlive() {
+    if (stayAliveInterval) {
+        clearInterval(stayAliveInterval);
+        stayAliveInterval = null;
+    }
+}
 
 // WLAN-Scan-Bereich aufklappen/zuklappen
 function toggleWifiScan() {
@@ -256,8 +442,9 @@ function removeWifiCredential(index) {
 
 function reloadConfig() {
     if (confirm("Möchten Sie die Konfiguration wirklich neu laden? Alle nicht gespeicherten Änderungen gehen verloren.")) {
-        // Einfach die Seite neu laden - die Config wird automatisch aus RTC-RAM geladen
-        window.location.reload();
+        // Seite neu laden - Cache-Control-Header sollten ausreichen
+        // Die Config wird automatisch aus RTC-RAM geladen
+        window.location.reload(true);  // true = Hard Reload (ignoriert Cache)
     }
 }
 
@@ -297,31 +484,88 @@ function saveConfig() {
         }
     }
     
-    // Sammle alle Formular-Daten
+    // Sammle alle Formular-Daten mit Validierung
+    const hostname = document.getElementById('hostname').value.trim();
+    const wakeupMinutesStr = document.getElementById('wakeup_minutes').value.trim();
+    const transferMinutesStr = document.getElementById('transfer_minutes').value.trim();
+    const adcOffsetStr = document.getElementById('adc_voltage_offset').value.trim();
+    const ntpServer = document.getElementById('ntp_server').value.trim();
+    
+    // Validierung: Hostname
+    if (hostname.length === 0) {
+        alert("Bitte geben Sie einen Hostname an.");
+        return;
+    }
+    
+    // Validierung: Wake-up Intervall
+    const wakeup_minutes = parseInt(wakeupMinutesStr);
+    if (isNaN(wakeup_minutes) || wakeup_minutes < 1 || wakeup_minutes > 60) {
+        alert("Bitte geben Sie ein gültiges Wake-up Intervall zwischen 1 und 60 Minuten an.");
+        document.getElementById('wakeup_minutes').focus();
+        return;
+    }
+    
+    // Validierung: Transfer Intervall
+    const transfer_minutes = parseInt(transferMinutesStr);
+    if (isNaN(transfer_minutes) || transfer_minutes < 1 || transfer_minutes > 60) {
+        alert("Bitte geben Sie ein gültiges Transfer Intervall zwischen 1 und 60 Minuten an.");
+        document.getElementById('transfer_minutes').focus();
+        return;
+    }
+    
+    // Validierung: ADC Spannungs-Offset
+    const adc_voltage_offset = parseFloat(adcOffsetStr);
+    if (isNaN(adc_voltage_offset)) {
+        alert("Bitte geben Sie einen gültigen ADC Spannungs-Offset ein.");
+        document.getElementById('adc_voltage_offset').focus();
+        return;
+    }
+    
+    // Validierung: NTP-Server
+    if (ntpServer.length === 0) {
+        alert("Bitte geben Sie einen NTP-Server an.");
+        document.getElementById('ntp_server').focus();
+        return;
+    }
+    
+    // Validierung: Admin-Passwort
+    if (adminpass.length === 0) {
+        alert("Bitte geben Sie ein Admin-Passwort an.");
+        return;
+    }
+    
     const formData = {
-        hostname: document.getElementById('hostname').value.trim(),
+        hostname: hostname,
         adminpass: adminpass,
-        wakeup_minutes: parseInt(document.getElementById('wakeup_minutes').value),
-        transfer_minutes: parseInt(document.getElementById('transfer_minutes').value),
-        adc_voltage_offset: parseFloat(document.getElementById('adc_voltage_offset').value),
-        ntp_server: document.getElementById('ntp_server').value.trim(),
+        wakeup_minutes: wakeup_minutes,
+        transfer_minutes: transfer_minutes,
+        adc_voltage_offset: adc_voltage_offset,
+        ntp_server: ntpServer,
         wifiCredentials: []
     };
     
     // Sammle WiFi-Credentials aus den gerenderten Feldern
-    const wifiContainer = document.getElementById('wifiCredentials');
-    const wifiSets = wifiContainer.querySelectorAll('.wifi-credential-set');
-    
-    for (let i = 0; i < wifiSets.length; i++) {
-        const ssid = document.getElementById(`wifi_ssid_${i}`).value.trim();
-        const password = document.getElementById(`wifi_password_${i}`).value.trim();
+    // Verwende die Anzahl der WiFi-Sets aus dem wifiCredentials Array
+    for (let i = 0; i < wifiCredentials.length; i++) {
+        const ssidInput = document.getElementById(`wifi_ssid_${i}`);
+        const passwordInput = document.getElementById(`wifi_password_${i}`);
         
-        // Nur nicht-leere Sets hinzufügen (mindestens SSID muss vorhanden sein)
-        if (ssid.length > 0) {
-            formData.wifiCredentials.push({
-                ssid: ssid,
-                password: password  // Passwort kann leer sein (offenes Netzwerk)
-            });
+        // Prüfe, ob die Input-Felder existieren (könnten entfernt worden sein)
+        if (ssidInput && passwordInput) {
+            const ssid = ssidInput.value.trim();
+            const password = passwordInput.value.trim();
+            
+            // Verwende eingegebene Werte, oder falls leer, die ursprünglichen Werte
+            const finalSsid = ssid.length > 0 ? ssid : (wifiCredentials[i].ssid || '');
+            const finalPassword = password.length > 0 ? password : (wifiCredentials[i].password || '');
+            
+            // Nur nicht-leere Sets hinzufügen (mindestens SSID muss vorhanden sein)
+            if (finalSsid.length > 0) {
+                formData.wifiCredentials.push({
+                    ssid: finalSsid,
+                    password: finalPassword  // Passwort kann leer sein (offenes Netzwerk)
+                });
+            }
         }
     }
     
@@ -331,22 +575,19 @@ function saveConfig() {
         return;
     }
     
-    // Validierung
-    if (formData.hostname.length === 0) {
-        alert("Bitte geben Sie einen Hostname an.");
-        return;
-    }
-    
-    if (formData.adminpass.length === 0) {
-        alert("Bitte geben Sie ein Admin-Passwort an.");
-        return;
-    }
-    
     // 2-stufige Sicherheitsabfrage
-    const currentWifi = getCurrentWifiCredentials();
-    const wifiChanged = hasWifiChanged(currentWifi, formData.wifiCredentials);
+    // Vergleiche die ursprünglich konfigurierten WiFi-Credentials mit den neuen
+    const originalWifi = getOriginalWifiCredentials();
+    const wifiChanged = hasWifiChanged(originalWifi, formData.wifiCredentials);
     
-    if (wifiChanged) {
+    // Zusätzlich prüfen, ob das aktuell verbundene Netzwerk noch vorhanden ist
+    const currentWifi = getCurrentWifiCredentials();
+    const currentWifiStillAvailable = currentWifi.length > 0 && 
+        formData.wifiCredentials.some(cred => 
+            cred.ssid === currentWifi[0].ssid && cred.password === currentWifi[0].password
+        );
+    
+    if (wifiChanged && !currentWifiStillAvailable) {
         if (!confirm("WARNUNG: Die WiFi-Credentials unterscheiden sich vom aktuell verbundenen Netzwerk!\n\n" +
                     "Möglicherweise können Sie nach dem Speichern keine Verbindung mehr herstellen.\n\n" +
                     "Möchten Sie trotzdem fortfahren?")) {
@@ -358,6 +599,14 @@ function saveConfig() {
                 "Das Gerät wird die neue Konfiguration übernehmen und neu starten.")) {
         return;
     }
+    
+    // Prüfe, was geändert wurde (für intelligente Reload-Strategie)
+    // originalWifi und wifiChanged wurden bereits oben berechnet (Zeile 393-394)
+    const originalHostname = document.getElementById('hostname').getAttribute('value') || 
+                             document.getElementById('hostname').defaultValue || 
+                             document.getElementById('hostname').value;
+    const newHostname = formData.hostname;
+    const hostnameChanged = (originalHostname !== newHostname);
     
     // Sende Daten an Server
     const formDataToSend = new FormData();
@@ -374,7 +623,20 @@ function saveConfig() {
     // Basic-Auth-Credentials aus dem aktuellen Passwort-Feld (für Fallback)
     const authHeader = 'Basic ' + btoa('admin:' + currentAdminPass);
     
-    fetch('/config/save', {
+    // WICHTIG: Wenn Hostname geändert wurde, aber ESP32 noch nicht neu gestartet wurde,
+    // verwende die aktuelle URL (window.location.origin), da der Browser bereits eine Verbindung hat.
+    // Der Browser hat die Seite bereits geladen, also sollte die Verbindung funktionieren.
+    // Wenn der neue Hostname noch nicht aufgelöst werden kann, wird der Browser die IP-Adresse verwenden.
+    let saveUrl = window.location.origin + '/config/save';
+    
+    // Debug: Zeige verwendete URL in Konsole
+    console.log('Config-Save: URL =', saveUrl);
+    console.log('Config-Save: Hostname geändert =', hostnameChanged);
+    console.log('Config-Save: Original Hostname =', originalHostname);
+    console.log('Config-Save: Neuer Hostname =', newHostname);
+    console.log('Config-Save: window.location.hostname =', window.location.hostname);
+    
+    fetch(saveUrl, {
         method: 'POST',
         headers: {
             'Authorization': authHeader
@@ -382,23 +644,145 @@ function saveConfig() {
         body: formDataToSend
     })
     .then(response => {
-        if (response.ok) {
-            alert("Konfiguration erfolgreich gespeichert!");
-            window.location.reload();
-        } else {
-            response.text().then(text => {
-                alert("Fehler beim Speichern: " + text);
+        // WICHTIG: Warte auf vollständige Antwort (response.ok prüft nur Status, nicht ob Daten vollständig sind)
+        if (!response.ok) {
+            // 4xx-Fehler: Server hat Fehler zurückgegeben
+            return response.text().then(text => {
+                throw new Error(text || `HTTP ${response.status}`);
             });
+        }
+        
+        // 200-OK: Parse JSON-Antwort
+        return response.json();
+    })
+    .then(data => {
+        // JSON-Antwort erfolgreich empfangen
+        if (data.success) {
+            // Zeige Erfolgsmeldung mit empfangenen JSON-Daten (für Debugging)
+            const successAlert = document.createElement('div');
+            successAlert.className = 'alert alert-success alert-dismissible fade show';
+            successAlert.setAttribute('role', 'alert');
+            successAlert.style.cssText = 'margin-bottom: 20px;';
+            
+            let alertMessage = `<strong>✓ ${data.message}</strong><br>`;
+            alertMessage += `Die Änderungen wurden in config.json geschrieben.<br>`;
+            if (data.wifi_changed) {
+                alertMessage += `<strong style="color: #dc3545;">⚠️ WiFi-Credentials wurden geändert!</strong><br>`;
+            }
+            alertMessage += `<strong>Bitte betätigen Sie den "Reboot"-Button, damit die Änderungen wirksam werden.</strong><br><br>`;
+            
+            // Zeige empfangene JSON-Daten (für Debugging)
+            alertMessage += `<details style="margin-top: 10px;">`;
+            alertMessage += `<summary style="cursor: pointer; color: #667eea;">📋 Empfangene JSON-Daten anzeigen (Debugging)</summary>`;
+            alertMessage += `<pre style="background: #f8f9fa; padding: 10px; border-radius: 4px; margin-top: 10px; font-size: 0.85em; overflow-x: auto;">`;
+            alertMessage += JSON.stringify(data, null, 2);
+            alertMessage += `</pre>`;
+            alertMessage += `</details>`;
+            
+            alertMessage += `<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>`;
+            
+            successAlert.innerHTML = alertMessage;
+            
+            // Füge Alert am Anfang des Containers ein
+            const container = document.querySelector('.config-container');
+            if (container) {
+                container.insertBefore(successAlert, container.firstChild);
+            } else {
+                // Fallback: Am Anfang des Body einfügen
+                document.body.insertBefore(successAlert, document.body.firstChild);
+            }
+            
+            // Scroll zum Alert
+            successAlert.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            
+            // WICHTIG: Wenn Passwort geändert wurde, aber ESP32 noch nicht neu gestartet wurde,
+            // muss das adminpass Feld aktualisiert werden, damit beim nächsten Speichern
+            // das richtige Passwort verwendet wird
+            const adminpassNew = document.getElementById('adminpass_new');
+            const adminpassUnlocked = document.getElementById('adminpassUnlocked');
+            if (adminpassUnlocked && adminpassUnlocked.style.display !== 'none' && adminpassNew) {
+                const newPass = adminpassNew.value.trim();
+                if (newPass.length > 0) {
+                    // Passwort wurde geändert: Aktualisiere das gesperrte adminpass Feld
+                    // WICHTIG: Das alte Passwort bleibt im Feld, bis ESP32 neu gestartet wurde
+                    // Beim nächsten Speichern wird das alte Passwort für current_password verwendet
+                    // (Server erwartet noch das alte Passwort, da RTC-RAM noch nicht aktualisiert wurde)
+                    // Das neue Passwort wird im adminpass Feld gespeichert (für nach dem Reboot)
+                    document.getElementById('adminpass').value = newPass;
+                    document.getElementById('adminpass').setAttribute('value', newPass);
+                    // Passwort-Felder zurücksetzen und sperren
+                    lockAdminPass();
+                }
+            }
+            
+            // WICHTIG: Wenn Hostname geändert wurde, aber noch nicht neu gestartet wurde,
+            // sollte eine Warnung angezeigt werden
+            if (hostnameChanged) {
+                // Prüfe, ob die aktuelle URL mit dem neuen Hostname übereinstimmt
+                const currentHost = window.location.hostname;
+                const newHostnameLower = newHostname.toLowerCase();
+                
+                // Wenn die aktuelle URL nicht mit dem neuen Hostname übereinstimmt,
+                // könnte der Server noch mit dem alten Hostname laufen
+                // In diesem Fall: Warnung anzeigen
+                if (!currentHost.includes(newHostnameLower) && !currentHost.includes('local')) {
+                    // Zusätzliche Warnung hinzufügen
+                    const warningDiv = document.createElement('div');
+                    warningDiv.className = 'alert alert-warning mt-2';
+                    warningDiv.innerHTML = `
+                        <strong>⚠️ Wichtig:</strong> Der Hostname wurde geändert, aber das Gerät wurde noch nicht neu gestartet.<br>
+                        Die aktuelle URL (<code>${window.location.href}</code>) stimmt möglicherweise nicht mit dem neuen Hostname überein.<br>
+                        <strong>Bitte starten Sie das Gerät neu, bevor Sie weitere Änderungen vornehmen.</strong>
+                    `;
+                    successAlert.appendChild(warningDiv);
+                }
+            }
+        } else {
+            throw new Error(data.message || 'Unbekannter Fehler');
         }
     })
     .catch(error => {
-        alert("Fehler beim Speichern: " + error.message);
+        // Fehler beim Speichern (4xx oder NetworkError)
+        console.error("Fehler beim Speichern:", error);
+        console.error("Fehler-Details:", {
+            message: error.message,
+            name: error.name,
+            stack: error.stack,
+            url: saveUrl,
+            hostnameChanged: hostnameChanged
+        });
+        
+        // Prüfe, ob es ein NetworkError ist und ob Hostname geändert wurde
+        if (error.message.includes('NetworkError') || error.message.includes('Failed to fetch') || error.name === 'TypeError') {
+            // Möglicherweise liegt es daran, dass Hostname geändert wurde, aber ESP32 noch nicht neu gestartet wurde
+            if (hostnameChanged) {
+                alert("Fehler beim Speichern: " + error.message + 
+                      "\n\n⚠️ Mögliche Ursache: Der Hostname wurde geändert, aber das Gerät wurde noch nicht neu gestartet." +
+                      "\nDie aktuelle URL (" + window.location.href + ") stimmt möglicherweise nicht mit dem neuen Hostname überein." +
+                      "\n\nVersucht wurde: " + saveUrl +
+                      "\n\nBitte starten Sie das Gerät zuerst neu, bevor Sie weitere Änderungen vornehmen.");
+            } else {
+                alert("Fehler beim Speichern: " + error.message + 
+                      "\n\nVersucht wurde: " + saveUrl +
+                      "\n\nBitte überprüfen Sie Ihre Eingaben und versuchen Sie es erneut.");
+            }
+        } else {
+            alert("Fehler beim Speichern: " + error.message + 
+                  "\n\nVersucht wurde: " + saveUrl +
+                  "\n\nBitte überprüfen Sie Ihre Eingaben und versuchen Sie es erneut.");
+        }
     });
 }
 
+function getOriginalWifiCredentials() {
+    // Hole die ursprünglich konfigurierten WiFi-Credentials (aus wifiCredentialsData)
+    // Diese wurden beim Laden der Seite in wifiCredentials gespeichert
+    return wifiCredentials || [];
+}
+
 function getCurrentWifiCredentials() {
-    // Versuche, aktuelle WiFi-Credentials aus der Seite zu extrahieren
-    // (werden vom Server als verstecktes Element eingefügt)
+    // Versuche, aktuell verbundenes WiFi-Netzwerk aus der Seite zu extrahieren
+    // (wird vom Server als verstecktes Element eingefügt)
     const currentWifiElement = document.getElementById('currentWifiData');
     if (currentWifiElement) {
         try {
@@ -410,16 +794,30 @@ function getCurrentWifiCredentials() {
     return [];
 }
 
-function hasWifiChanged(current, newCredentials) {
+function hasWifiChanged(original, newCredentials) {
     // Prüfe, ob sich die WiFi-Credentials geändert haben
-    if (current.length !== newCredentials.length) {
+    // Normalisiere beide Arrays (entferne leere SSIDs)
+    const originalFiltered = original.filter(cred => cred.ssid && cred.ssid.trim().length > 0);
+    const newFiltered = newCredentials.filter(cred => cred.ssid && cred.ssid.trim().length > 0);
+    
+    if (originalFiltered.length !== newFiltered.length) {
         return true;
     }
     
-    // Prüfe jedes Set
-    for (let i = 0; i < current.length; i++) {
-        const found = newCredentials.find(cred => 
-            cred.ssid === current[i].ssid && cred.password === current[i].password
+    // Prüfe jedes Set: Jedes ursprüngliche Set muss in den neuen vorhanden sein
+    for (let i = 0; i < originalFiltered.length; i++) {
+        const found = newFiltered.find(cred => 
+            cred.ssid === originalFiltered[i].ssid && cred.password === originalFiltered[i].password
+        );
+        if (!found) {
+            return true;
+        }
+    }
+    
+    // Umgekehrt: Jedes neue Set muss auch in den ursprünglichen vorhanden sein
+    for (let i = 0; i < newFiltered.length; i++) {
+        const found = originalFiltered.find(cred => 
+            cred.ssid === newFiltered[i].ssid && cred.password === newFiltered[i].password
         );
         if (!found) {
             return true;
@@ -429,3 +827,266 @@ function hasWifiChanged(current, newCredentials) {
     return false;
 }
 
+function showRebootProgress(hostnameChanged, wifiChanged, newHostname) {
+    // Erstelle Overlay mit Countdown
+    const overlay = document.createElement('div');
+    overlay.id = 'rebootOverlay';
+    overlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
+        color: white;
+    `;
+    
+    const container = document.createElement('div');
+    container.style.cssText = `
+        text-align: center;
+        padding: 20px;
+        background: white;
+        border-radius: 12px;
+        color: #333;
+        max-width: 350px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    `;
+    
+    const title = document.createElement('h4');
+    title.textContent = 'Warten auf Reboot...';
+    title.style.marginBottom = '20px';
+    title.style.color = '#667eea';
+    title.style.fontSize = '1.2em';
+    
+    // Grafischer Countdown-Ring mit Retry-Counter in der Mitte
+    const countdownContainer = document.createElement('div');
+    countdownContainer.style.cssText = `
+        position: relative;
+        width: 120px;
+        height: 120px;
+        margin: 0 auto 20px;
+    `;
+    
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', '120');
+    svg.setAttribute('height', '120');
+    svg.style.transform = 'rotate(-90deg)';
+    
+    // Hintergrund-Kreis
+    const bgCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    bgCircle.setAttribute('cx', '60');
+    bgCircle.setAttribute('cy', '60');
+    bgCircle.setAttribute('r', '50');
+    bgCircle.setAttribute('fill', 'none');
+    bgCircle.setAttribute('stroke', '#e0e0e0');
+    bgCircle.setAttribute('stroke-width', '8');
+    
+    // Countdown-Kreis (animiert)
+    const countdownCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    countdownCircle.id = 'countdownCircle';
+    countdownCircle.setAttribute('cx', '60');
+    countdownCircle.setAttribute('cy', '60');
+    countdownCircle.setAttribute('r', '50');
+    countdownCircle.setAttribute('fill', 'none');
+    countdownCircle.setAttribute('stroke', '#667eea');
+    countdownCircle.setAttribute('stroke-width', '8');
+    countdownCircle.setAttribute('stroke-linecap', 'round');
+    countdownCircle.setAttribute('stroke-dasharray', '314.16'); // 2 * π * 50
+    countdownCircle.setAttribute('stroke-dashoffset', '0');
+    countdownCircle.style.transition = 'stroke-dashoffset 1s linear';
+    
+    svg.appendChild(bgCircle);
+    svg.appendChild(countdownCircle);
+    
+    // Retry-Counter in der Mitte
+    const counterText = document.createElement('div');
+    counterText.id = 'retryCounter';
+    counterText.style.cssText = `
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 2.5em;
+        font-weight: bold;
+        color: #667eea;
+        line-height: 1;
+    `;
+    counterText.textContent = '10';
+    
+    countdownContainer.appendChild(svg);
+    countdownContainer.appendChild(counterText);
+    
+    const message = document.createElement('p');
+    message.id = 'rebootMessage';
+    message.textContent = 'Konfiguration gespeichert. Warte auf Neustart...';
+    message.style.marginBottom = '10px';
+    message.style.minHeight = '40px';
+    message.style.fontSize = '0.9em';
+    
+    const statusText = document.createElement('div');
+    statusText.id = 'rebootStatus';
+    statusText.style.cssText = 'font-size: 0.85em; color: #666; margin-top: 10px;';
+    statusText.textContent = 'Warte auf Reboot...';
+    
+    container.appendChild(title);
+    container.appendChild(countdownContainer);
+    container.appendChild(message);
+    container.appendChild(statusText);
+    overlay.appendChild(container);
+    document.body.appendChild(overlay);
+    
+    // Countdown und Reload-Logik
+    let attempt = 0;
+    const maxAttempts = 25; // 25 Versuche
+    const attemptDelay = 5000; // 5 Sekunden zwischen Versuchen
+    const initialCountdown = 10; // 10 Sekunden Countdown vor ersten Versuch
+    let countdownValue = initialCountdown;
+    
+    // SVG-Kreis-Umfang berechnen
+    const circumference = 2 * Math.PI * 50; // 314.16
+    
+    const updateCountdown = () => {
+        // Retry-Counter aktualisieren
+        counterText.textContent = countdownValue.toString();
+        
+        // SVG-Kreis animieren (von voll zu leer)
+        const offset = circumference - (countdownValue / initialCountdown) * circumference;
+        countdownCircle.setAttribute('stroke-dashoffset', offset.toString());
+        
+        // Status-Text aktualisieren
+        if (countdownValue > 0) {
+            statusText.textContent = `Warte ${countdownValue} Sekunden auf Reboot...`;
+        } else {
+            statusText.textContent = `Versuche Verbindung (${attempt}/${maxAttempts})...`;
+        }
+    };
+    
+    updateCountdown();
+    
+    // Countdown-Intervall (1 Sekunde)
+    const countdownInterval = setInterval(() => {
+        countdownValue--;
+        if (countdownValue < 0) {
+            countdownValue = 0; // Bei 0 bleiben
+        }
+        updateCountdown();
+        
+        // Wenn Countdown bei 0 angekommen ist, stoppe den Intervall
+        if (countdownValue === 0) {
+            clearInterval(countdownInterval);
+        }
+    }, 1000);
+    
+    const tryReload = () => {
+        attempt++;
+        
+        // Warnung bei kritischen Änderungen
+        if (attempt === 1) {
+            if (wifiChanged) {
+                message.innerHTML = '<strong style="color: #dc3545;">⚠️ WiFi-Credentials wurden geändert!</strong><br>Die IP-Adresse könnte sich geändert haben.';
+            } else if (hostnameChanged) {
+                message.innerHTML = '<strong style="color: #ffc107;">⚠️ Hostname wurde geändert!</strong><br>Versuche neue URL: <code>http://' + 
+                                   newHostname + '.local</code>';
+            } else {
+                message.textContent = 'Konfiguration gespeichert. Warte auf Neustart...';
+            }
+        }
+        
+        // Status-Text aktualisieren
+        statusText.textContent = `Versuche Verbindung (${attempt}/${maxAttempts})...`;
+        
+        // Retry-Counter für Versuche anzeigen (rückwärts von maxAttempts)
+        const retriesLeft = maxAttempts - attempt + 1;
+        counterText.textContent = retriesLeft.toString();
+        
+        // SVG-Kreis für Versuche (von voll zu leer)
+        const attemptOffset = circumference - ((maxAttempts - attempt + 1) / maxAttempts) * circumference;
+        countdownCircle.setAttribute('stroke-dashoffset', attemptOffset.toString());
+        
+        // Nach Reboot: Lade immer die index-Seite (nicht /config)
+        // Dies ist sinnvoll, da nach Reboot die Config-Seite möglicherweise nicht mehr erreichbar ist
+        // (z.B. wenn Hostname geändert wurde oder WiFi-Credentials geändert wurden)
+        let reloadUrl;
+        
+        if (hostnameChanged && attempt <= 5) {
+            // Hostname geändert: Versuche neue mDNS-URL mit index-Seite
+            reloadUrl = `http://${newHostname}.local/`;
+        } else if (wifiChanged && attempt <= 10) {
+            // WiFi geändert: Versuche index.html (keine Auth nötig)
+            reloadUrl = window.location.origin + '/';
+        } else {
+            // Standard: Lade index-Seite
+            reloadUrl = window.location.origin + '/';
+        }
+        
+        // Versuche HEAD-Request mit 5 Sekunden Timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 Sekunden Timeout
+        
+        fetch(reloadUrl, { 
+            method: 'HEAD',
+            cache: 'no-cache',
+            signal: controller.signal
+        })
+        .then(response => {
+            clearTimeout(timeoutId);
+            if (response.ok || response.status === 401) { // 401 = Server antwortet (Auth nötig)
+                clearInterval(countdownInterval);
+                message.innerHTML = '<strong style="color: #28a745;">✓ Server erreichbar!</strong><br>Lade Seite neu...';
+                statusText.textContent = '';
+                counterText.textContent = '✓';
+                countdownCircle.setAttribute('stroke', '#28a745');
+                setTimeout(() => {
+                    window.location.href = reloadUrl;
+                }, 500);
+            } else {
+                throw new Error('Server nicht erreichbar');
+            }
+        })
+        .catch(error => {
+            clearTimeout(timeoutId);
+            if (attempt >= maxAttempts) {
+                clearInterval(countdownInterval);
+                let errorMsg = '<strong style="color: #dc3545;">⚠️ Server nicht erreichbar nach ' + maxAttempts + ' Versuchen</strong><br><br>';
+                errorMsg += 'Mögliche Ursachen:<br>';
+                if (wifiChanged) {
+                    errorMsg += '• WiFi-Credentials wurden geändert → Neue IP-Adresse<br>';
+                }
+                if (hostnameChanged) {
+                    errorMsg += '• Hostname wurde geändert → Neue URL: <code>http://' + newHostname + '.local</code><br>';
+                }
+                errorMsg += '<br>Bitte versuchen Sie:<br>';
+                errorMsg += '1. Router-Admin-Panel prüfen (neue IP-Adresse)<br>';
+                if (hostnameChanged) {
+                    errorMsg += '2. Neue URL manuell aufrufen: <code>http://' + newHostname + '.local</code><br>';
+                }
+                errorMsg += '3. Seite manuell neu laden';
+                
+                message.innerHTML = errorMsg;
+                statusText.textContent = '';
+                counterText.textContent = '0';
+                countdownCircle.setAttribute('stroke', '#dc3545');
+                
+                const manualButton = document.createElement('button');
+                manualButton.className = 'btn btn-primary mt-3';
+                manualButton.textContent = 'Seite manuell neu laden';
+                manualButton.onclick = () => {
+                    // Hard Reload - Cache-Control-Header sollten ausreichen
+                    window.location.reload(true);  // true = Hard Reload (ignoriert Cache)
+                };
+                container.appendChild(manualButton);
+            } else {
+                // Nächster Versuch nach 5 Sekunden
+                setTimeout(tryReload, attemptDelay);
+            }
+        });
+    };
+    
+    // Starte erste Reload-Versuche nach 10 Sekunden (Countdown)
+    setTimeout(tryReload, initialCountdown * 1000);
+}
