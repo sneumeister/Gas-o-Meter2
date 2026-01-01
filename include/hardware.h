@@ -81,7 +81,13 @@
 #define NTP_TIMEOUT_MS        5000            // Timeout für NTP-Synchronisation (ms)
 
 // Deep-Sleep Konfiguration
-#define WIFI_WAIT_FOR_SLEEP   3               // Minuten ohne Web-Server-Zugriff → Deep-Sleep
+#define WIFI_WAIT_FOR_SLEEP   5               // Minuten ohne Web-Server-Zugriff → Deep-Sleep
+
+// Access Point Konfiguration
+#define AP_IP_ADDRESS_1       10               // AP IP-Adresse: 10.0.0.1
+#define AP_IP_ADDRESS_2       0
+#define AP_IP_ADDRESS_3       0
+#define AP_IP_ADDRESS_4       1
 
 // LP-Core Konfiguration
 #define LP_CORE_INTERVAL_US   2500000         // LP-Core Schleifen-Intervall: 2.5s (in Mikrosekunden)

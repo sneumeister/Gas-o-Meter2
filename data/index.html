@@ -23,54 +23,55 @@
             <div id="counterCorrectionPanel" class="mt-3 p-3 bg-light rounded" style="display: none;">
                 <div class="mb-3">
                     <label class="form-label fw-bold">Neuer Zählerstand:</label>
-                    <table style="margin: 0 auto; border-collapse: separate; border-spacing: 8px;">
-                        <tr>
-                            <td style="text-align: center; vertical-align: middle;">
-                                <button type="button" class="btn btn-secondary btn-lg" 
-                                        onmousedown="startDecrement('counterLeft', 'counterRight')" 
-                                        onmouseup="stopCounter()" onmouseleave="stopCounter()"
-                                        ontouchstart="startDecrement('counterLeft', 'counterRight')" 
-                                        ontouchend="stopCounter()"
-                                        style="min-width: 60px; font-size: 1.5em; padding: 12px 20px;">
-                                    −
-                                </button>
-                            </td>
-                            <td style="text-align: center; vertical-align: middle;">
-                                <div class="d-flex" style="gap: 0;">
-                                    <input type="text" id="counterLeft" readonly value="00000" 
-                                           class="form-control text-center fw-bold"
-                                           style="width: 100px; font-size: 1.5em; background-color: #000000; color: #ffffff; border: 2px solid #667eea; border-radius: 8px 0 0 8px; font-family: 'Courier New', monospace; border-right: none;">
-                                    <input type="text" id="counterRight" readonly value="00" 
-                                           class="form-control text-center fw-bold"
-                                           style="width: 70px; font-size: 1.5em; background-color: #dc3545; color: #ffffff; border: 2px solid #667eea; border-radius: 0 8px 8px 0; font-family: 'Courier New', monospace; border-left: none;">
-                                </div>
-                            </td>
-                            <td style="text-align: center; vertical-align: middle;">
-                                <button type="button" class="btn btn-secondary btn-lg" 
-                                        onmousedown="startIncrement('counterLeft', 'counterRight')" 
-                                        onmouseup="stopCounter()" onmouseleave="stopCounter()"
-                                        ontouchstart="startIncrement('counterLeft', 'counterRight')" 
-                                        ontouchend="stopCounter()"
-                                        style="min-width: 60px; font-size: 1.5em; padding: 12px 20px;">
-                                    +
-                                </button>
-                            </td>
-                            <td style="text-align: center; vertical-align: middle;">
-                                <button type="button" class="btn btn-success" onclick="applyCounterCorrection()">
-                                    ✓ Übernehmen
-                                </button>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td colspan="3" style="text-align: center; vertical-align: middle; padding: 0 8px;">
-                                <input type="range" id="counterSlider" min="0" max="9999999" value="0" 
-                                       class="form-range" 
-                                       oninput="updateCounterFromSlider()"
-                                       style="height: 8px; width: 100%;">
-                            </td>
-                            <td></td>
-                        </tr>
-                    </table>
+                    <div class="counter-controls">
+                        <table style="margin: 0 auto; border-collapse: separate; border-spacing: 2px; box-sizing: border-box;">
+                            <tr>
+                                <td style="text-align: right; vertical-align: middle; padding-right: 4px;">
+                                    <button type="button" class="btn btn-secondary btn-lg counter-btn" 
+                                            onmousedown="startDecrement('counterLeft', 'counterRight')" 
+                                            onmouseup="stopCounter()" onmouseleave="stopCounter()"
+                                            ontouchstart="startDecrement('counterLeft', 'counterRight')" 
+                                            ontouchend="stopCounter()"
+                                            style="min-width: 60px; font-size: 1.5em; padding: 12px 20px;">
+                                        −
+                                    </button>
+                                </td>
+                                <td style="text-align: center; vertical-align: middle; box-sizing: border-box;">
+                                    <div class="d-flex justify-content-center counter-input-container" style="gap: 0; box-sizing: border-box;">
+                                        <input type="text" id="counterLeft" readonly value="00000" 
+                                               class="form-control text-center fw-bold counter-input"
+                                               style="width: 100px; font-size: 1.5em; background-color: #000000; color: #ffffff; border: 2px solid #667eea; border-radius: 8px 0 0 8px; font-family: 'Courier New', monospace; border-right: none !important; margin-right: 0 !important; padding-right: 8px !important; box-sizing: border-box;">
+                                        <input type="text" id="counterRight" readonly value="00" 
+                                               class="form-control text-center fw-bold counter-input"
+                                               style="width: 70px; font-size: 1.5em; background-color: #dc3545; color: #ffffff; border: 2px solid #667eea; border-radius: 0 8px 8px 0; font-family: 'Courier New', monospace; border-left: none !important; margin-left: 0 !important; padding-left: 8px !important; box-sizing: border-box;">
+                                    </div>
+                                </td>
+                                <td style="text-align: left; vertical-align: middle; padding-left: 4px;">
+                                    <button type="button" class="btn btn-secondary btn-lg counter-btn" 
+                                            onmousedown="startIncrement('counterLeft', 'counterRight')" 
+                                            onmouseup="stopCounter()" onmouseleave="stopCounter()"
+                                            ontouchstart="startIncrement('counterLeft', 'counterRight')" 
+                                            ontouchend="stopCounter()"
+                                            style="min-width: 60px; font-size: 1.5em; padding: 12px 20px;">
+                                        +
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td colspan="3" style="text-align: center; vertical-align: middle; padding: 15px 8px 10px 8px;">
+                                    <input type="range" id="counterSlider" min="0" max="9999999" value="0" 
+                                           class="form-range" 
+                                           oninput="updateCounterFromSlider()"
+                                           style="height: 10px; width: 100%; max-width: 400px;">
+                                </td>
+                            </tr>
+                        </table>
+                        <div class="text-center mt-3">
+                            <button type="button" class="btn btn-success btn-apply" onclick="applyCounterCorrection()" style="min-width: 150px;">
+                                ✓ Übernehmen
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

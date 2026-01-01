@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gas-O-Meter Konfiguration</title>
+    <link rel="stylesheet" href="/style.css">
     <link rel="stylesheet" href="/bootstrap.min.css">
     <style>
         body {
@@ -34,6 +35,9 @@
         }
         .text-primary {
             color: #667eea !important;
+        }
+        .form-label {
+            font-weight: bold;
         }
     </style>
 </head>
@@ -133,11 +137,11 @@
                 <input type="text" class="form-control" id="ntp_server" name="ntp_server" value="`ntp_server`" required>
             </div>
             
-            <div class="d-flex gap-2 mt-4">
-                <button type="button" class="btn btn-secondary" onclick="reloadConfig()">Konfig Neuladen</button>
-                <button type="button" class="btn btn-success" onclick="saveConfig()">Konfig Speichern</button>
-                <button type="button" class="btn btn-danger" onclick="rebootDevice()">Reboot</button>
-                <button type="button" class="btn btn-primary" onclick="window.location.href='/'">Zurück</button>
+            <div class="refresh">
+                <button type="button" onclick="reloadConfig()">Konfig Neuladen</button>
+                <button type="button" onclick="saveConfig()" style="background-color: #28a745; color: white;">Konfig Speichern</button>
+                <button type="button" onclick="rebootDevice()" style="background-color: #dc3545; color: white;">Reboot</button>
+                <button type="button" onclick="window.location.href='/'" style="background-color: #667eea; color: white;">Zurück</button>
             </div>
         </form>
     </div>

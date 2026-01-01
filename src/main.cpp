@@ -324,7 +324,7 @@ void lp_core_watchdog_task(void *parameter) {
     // Wenn nach MAX_RETRIES immer noch nicht erfolgreich → Task beenden
     while (1) {
         // Prüfe ob LP-Core läuft (lp_core_running == 0 bedeutet: nicht gestartet oder gestoppt)
-        if (lp_core_running == 0) {
+    if (lp_core_running == 0) {
             // LP-Core läuft nicht → versuche zu starten
             retry_count++;
             Serial.printf("LP-Core läuft nicht (lp_core_running == 0) → Starte LP-Core... (Versuch %d/%d)\n", 
@@ -332,14 +332,14 @@ void lp_core_watchdog_task(void *parameter) {
             
             if (retry_count >= MAX_RETRIES) {
                 Serial.printf("FEHLER: LP-Core konnte nach %d Versuchen nicht gestartet werden. Watch-Dog-Task beendet!\n", MAX_RETRIES);
-                vTaskDelete(NULL);
-                return;
-            }
+            vTaskDelete(NULL);
+            return;
+        }
             
             // Versuche LP-Core zu starten
             if (start_lp_core()) {
                 // start_lp_core() gab true zurück - warte auf Watchdog-Timeout und prüfe dann
-                last_lp_core_value = lp_core_running;
+        last_lp_core_value = lp_core_running;
                 Serial.printf("LP-Core Start aufgerufen (Zähler: %lu) - warte auf Watchdog-Timeout für Prüfung...\n", last_lp_core_value);
             } else {
                 // start_lp_core() gab false zurück
@@ -351,26 +351,26 @@ void lp_core_watchdog_task(void *parameter) {
         } else {
             // LP-Core sollte laufen (lp_core_running > 0) → Watchdog-Prüfung
             // Warte LP_CORE_WATCHDOG_MS bevor Prüfung (gibt LP-Core Zeit, Counter zu erhöhen)
-            vTaskDelay(pdMS_TO_TICKS(LP_CORE_WATCHDOG_MS));
-            
-            uint32_t current_lp_core_value = lp_core_running;
-            
-            // Prüfe ob Zähler sich erhöht hat
-            if (current_lp_core_value == last_lp_core_value) {
-                // Zähler hat sich nicht erhöht → LP-Core läuft nicht mehr!
-                Serial.printf("WARNUNG: LP-Core Watchdog-Timeout! (Zähler: %lu, erwartet: > %lu)\n", 
-                             current_lp_core_value, last_lp_core_value);
+        vTaskDelay(pdMS_TO_TICKS(LP_CORE_WATCHDOG_MS));
+        
+        uint32_t current_lp_core_value = lp_core_running;
+        
+        // Prüfe ob Zähler sich erhöht hat
+        if (current_lp_core_value == last_lp_core_value) {
+            // Zähler hat sich nicht erhöht → LP-Core läuft nicht mehr!
+            Serial.printf("WARNUNG: LP-Core Watchdog-Timeout! (Zähler: %lu, erwartet: > %lu)\n", 
+                         current_lp_core_value, last_lp_core_value);
                 Serial.println("Setze lp_core_running auf 0 und versuche LP-Core neu zu starten...");
-                
+            
                 // Setze lp_core_running auf 0, damit wir in die Start-Schleife kommen
                 lp_core_running = 0;
                 retry_count = 0;  // Reset Retry-Counter für Neustart-Versuche
                 continue;  // Gehe zurück in Start-Schleife
             } else {
                 // Zähler hat sich erhöht → LP-Core läuft korrekt
-                Serial.printf("LP-Core Watchdog OK (Zähler: %lu → %lu)\n", 
-                             last_lp_core_value, current_lp_core_value);
-                last_lp_core_value = current_lp_core_value;
+            Serial.printf("LP-Core Watchdog OK (Zähler: %lu → %lu)\n", 
+                         last_lp_core_value, current_lp_core_value);
+            last_lp_core_value = current_lp_core_value;
                 retry_count = 0;  // Reset Retry-Counter bei erfolgreichem Betrieb
             }
         }
@@ -755,43 +755,43 @@ void enter_deep_sleep_with_gpio_and_timer_wakeup(bool enable_timer = true) {
         // Für Deep-Sleep empfohlen: RTC_PERIPH ausschalten, HOLD wird automatisch verwendet
         esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
         Serial.println("RTC_PERIPH Domain ausgeschaltet → HOLD wird automatisch verwendet");
-        
-        // WICHTIG: Kurze Verzögerung, damit Pull-Up/Pull-Down stabilisiert
-        delay(50);
-        
-        // Aktuellen GPIO-Zustand prüfen (für Debugging und Warnung)
+    
+    // WICHTIG: Kurze Verzögerung, damit Pull-Up/Pull-Down stabilisiert
+    delay(50);
+    
+    // Aktuellen GPIO-Zustand prüfen (für Debugging und Warnung)
         int gpio_state = rtc_gpio_get_level(gpio_num);
-        Serial.printf("BUTTON_A_GPIO aktueller Zustand: %s\n", gpio_state ? "HIGH" : "LOW");
-        
-        // WICHTIG: Bei Level-Mode weckt ESP32C6 sofort, wenn GPIO bereits im Wake-up-Level ist!
-        // Daher prüfen und warnen, falls GPIO bereits im Wake-up-Level ist
-        if ((wakeup_level == GPIO_INTR_LOW_LEVEL && gpio_state == 0) ||
-            (wakeup_level == GPIO_INTR_HIGH_LEVEL && gpio_state == 1)) {
-            Serial.println("WARNUNG: BUTTON_A_GPIO ist bereits im Wake-up-Level! System würde sofort wecken.");
-            Serial.println("Stelle sicher, dass Taster nicht gedrückt ist, bevor Deep-Sleep startet!");
-            return;  // Deep-Sleep abbrechen
-        }
-        
-        // GPIO-Wake-up aktivieren (ESP32C6 unterstützt nur gpio_wakeup, nicht ext0/ext1)
-        esp_err_t ret = esp_sleep_enable_gpio_wakeup();
-        if (ret != ESP_OK) {
-            Serial.printf("FEHLER: GPIO-Wake-up-Konfiguration fehlgeschlagen: %s\n", esp_err_to_name(ret));
+    Serial.printf("BUTTON_A_GPIO aktueller Zustand: %s\n", gpio_state ? "HIGH" : "LOW");
+    
+    // WICHTIG: Bei Level-Mode weckt ESP32C6 sofort, wenn GPIO bereits im Wake-up-Level ist!
+    // Daher prüfen und warnen, falls GPIO bereits im Wake-up-Level ist
+    if ((wakeup_level == GPIO_INTR_LOW_LEVEL && gpio_state == 0) ||
+        (wakeup_level == GPIO_INTR_HIGH_LEVEL && gpio_state == 1)) {
+        Serial.println("WARNUNG: BUTTON_A_GPIO ist bereits im Wake-up-Level! System würde sofort wecken.");
+        Serial.println("Stelle sicher, dass Taster nicht gedrückt ist, bevor Deep-Sleep startet!");
+        return;  // Deep-Sleep abbrechen
+    }
+    
+    // GPIO-Wake-up aktivieren (ESP32C6 unterstützt nur gpio_wakeup, nicht ext0/ext1)
+    esp_err_t ret = esp_sleep_enable_gpio_wakeup();
+    if (ret != ESP_OK) {
+        Serial.printf("FEHLER: GPIO-Wake-up-Konfiguration fehlgeschlagen: %s\n", esp_err_to_name(ret));
             Serial.println("Deep-Sleep wird ohne GPIO-Wake-up gestartet!");
+    } else {
+        // GPIO als Wake-up-Source setzen: Level basierend auf GPIO-Modus
+        // ESP32C6 unterstützt NUR Level-Mode (LOW_LEVEL oder HIGH_LEVEL)
+        ret = gpio_wakeup_enable(gpio_num, wakeup_level);
+        if (ret != ESP_OK) {
+            Serial.printf("FEHLER: gpio_wakeup_enable fehlgeschlagen: %s\n", esp_err_to_name(ret));
+            Serial.printf("Fehler-Code: %s\n", esp_err_to_name(ret));
         } else {
-            // GPIO als Wake-up-Source setzen: Level basierend auf GPIO-Modus
-            // ESP32C6 unterstützt NUR Level-Mode (LOW_LEVEL oder HIGH_LEVEL)
-            ret = gpio_wakeup_enable(gpio_num, wakeup_level);
-            if (ret != ESP_OK) {
-                Serial.printf("FEHLER: gpio_wakeup_enable fehlgeschlagen: %s\n", esp_err_to_name(ret));
-                Serial.printf("Fehler-Code: %s\n", esp_err_to_name(ret));
-            } else {
                 gpio_wakeup_configured = true;
                 Serial.printf("GPIO-Wake-up konfiguriert: Taster A (BUTTON_A_GPIO) - %s\n", level_name);
-                Serial.printf("GPIO-Modus: %s\n", 
-                             gpio_mode == INPUT_PULLUP ? "INPUT_PULLUP" : 
-                             (gpio_mode == INPUT_PULLDOWN ? "INPUT_PULLDOWN" : "INPUT"));
-                Serial.println("HOLD-Funktion aktiv: Pull-Up/Pull-Down wird während Deep-Sleep gehalten");
-            }
+            Serial.printf("GPIO-Modus: %s\n", 
+                         gpio_mode == INPUT_PULLUP ? "INPUT_PULLUP" : 
+                         (gpio_mode == INPUT_PULLDOWN ? "INPUT_PULLDOWN" : "INPUT"));
+            Serial.println("HOLD-Funktion aktiv: Pull-Up/Pull-Down wird während Deep-Sleep gehalten");
+        }
         }
     } else {
         // Nicht-RTC-Pin: GPIO-Wake-up nicht möglich
@@ -1296,6 +1296,73 @@ bool connect_wifi() {
 }
 
 // ============================================
+// Access Point starten (offenes WLAN)
+// ============================================
+bool start_access_point() {
+    Serial.println("Starte Access Point...");
+    
+    // WiFi komplett zurücksetzen (wichtig nach fehlgeschlagener STA-Verbindung)
+    // WiFi.disconnect(true) löscht gespeicherte WiFi-Konfigurationen im NVS
+    // Dies ist wichtig, da das NVS voll sein könnte durch alte WiFi-Profile
+    WiFi.disconnect(true);  // true = WiFi komplett deaktivieren und gespeicherte Konfiguration löschen
+    delay(200);
+    WiFi.mode(WIFI_OFF);    // WiFi komplett ausschalten
+    delay(200);
+    
+    // WiFi-Modus auf AP setzen
+    WiFi.mode(WIFI_AP);
+    delay(200);
+    
+    // AP mit Hostname als SSID starten (offen, kein Passwort)
+    // Parameter: SSID, Passwort (leer = offen), Kanal 1, versteckt=0, max_connections=4
+    bool ap_started = WiFi.softAP(config_rtc.hostname, "", 1, 0, 4);
+    
+    if (ap_started) {
+        IPAddress apIP(AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
+        WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+        
+        Serial.printf("Access Point gestartet: %s\n", config_rtc.hostname);
+        Serial.printf("AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+        Serial.println("WLAN ist offen (kein Passwort)");
+        return true;
+    } else {
+        Serial.println("FEHLER: Access Point konnte nicht gestartet werden");
+        Serial.println("Mögliche Ursache: NVS-Speicher voll (ESP_ERR_NVS_NOT_ENOUGH_SPACE)");
+        Serial.println("HINWEIS: WiFi.disconnect(true) sollte alte WiFi-Profile löschen, aber NVS könnte trotzdem voll sein");
+        Serial.println("Versuche alternativen Ansatz: WiFi-Konfiguration löschen und erneut versuchen...");
+        
+        // Zweiter Versuch: WiFi komplett neu initialisieren
+        WiFi.disconnect(true);
+        delay(500);
+        WiFi.mode(WIFI_OFF);
+        delay(500);
+        WiFi.mode(WIFI_AP);
+        delay(500);
+        
+        // Erneut versuchen mit kürzerem SSID (falls Hostname zu lang)
+        String ap_ssid = String(config_rtc.hostname);
+        if (ap_ssid.length() > 31) {
+            ap_ssid = ap_ssid.substring(0, 31);
+            Serial.printf("SSID zu lang, gekürzt auf: %s\n", ap_ssid.c_str());
+        }
+        
+        bool ap_started_retry = WiFi.softAP(ap_ssid.c_str(), "", 1, 0, 4);
+        if (ap_started_retry) {
+            IPAddress apIP(AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
+            WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+            
+            Serial.printf("Access Point gestartet (nach Retry): %s\n", ap_ssid.c_str());
+            Serial.printf("AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+            return true;
+        } else {
+            Serial.println("FEHLER: Access Point konnte auch nach Retry nicht gestartet werden");
+            Serial.println("HINWEIS: NVS könnte voll sein. Versuchen Sie einen vollständigen Reboot oder NVS-Erase.");
+            return false;
+        }
+    }
+}
+
+// ============================================
 // NTP-Zeitsynchronisation
 // ============================================
 bool sync_ntp_time() {
@@ -1470,8 +1537,8 @@ String processor(const String& var) {
         json += "]";
         return json;
     } else {
-        // Unbekannte Variable - leeren String zurückgeben
-        return String();
+    // Unbekannte Variable - leeren String zurückgeben
+    return String();
     }
 }
 
@@ -1480,11 +1547,17 @@ void setupWebServer() {
     // (auch wenn Config bereits aus RTC-RAM geladen wurde)
     if (!mount_littlefs()) {
         Serial.println("FEHLER: LittleFS konnte nicht gemountet werden - Web-Server kann nicht starten!");
-        return;
-    }
-    
+            return;
+        }
+        
     // Root auf index.html umleiten
     server.rewrite("/", "/index.html");
+        
+    // ============================================
+    // 404 Handler für unbekannte URLs
+    server.onNotFound([](AsyncWebServerRequest *request){
+        request->send(404, "text/plain", "Not Found");
+    });
     
     // Index.html Handler: ADC-Werte aktualisieren, dann Template-Processing mit ESPAsyncWebServer Template-Processor
     server.on("/index.html", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -1742,7 +1815,7 @@ void setupWebServer() {
             
             if (old_value > max_pulse) {
                 Serial.printf("Alter Wert (%lu) > max_pulse (%lu) → schreibe in Ring-Speicher\n", old_value, max_pulse);
-                write_pulse_counter_to_ring_buffer();
+        write_pulse_counter_to_ring_buffer();
             }
         }
         
@@ -1909,7 +1982,7 @@ void setupWebServer() {
             }
             
             return true;
-        });
+    });
     
     server.begin();
     server_started = true;  // Flag setzen: Web-Server läuft
@@ -2012,20 +2085,20 @@ void setup() {
             
             // Akku-Schutz: Deep-Sleep bei zu niedriger Spannung
             if (battery_voltage < BATTERY_VOLTAGE_20) {
-                // Spannung >= 2V aber < BATTERY_VOLTAGE_20: Akku zu niedrig → Deep-Sleep zum Schutz
-                Serial.println("Akku zu niedrig - Deep-Sleep zum Akku-Schutz");
-                Serial.printf("Spannung: %.2f V (Minimum: %.2f V)\n", 
-                             battery_voltage, BATTERY_VOLTAGE_20);
-                
+            // Spannung >= 2V aber < BATTERY_VOLTAGE_20: Akku zu niedrig → Deep-Sleep zum Schutz
+            Serial.println("Akku zu niedrig - Deep-Sleep zum Akku-Schutz");
+            Serial.printf("Spannung: %.2f V (Minimum: %.2f V)\n", 
+                         battery_voltage, BATTERY_VOLTAGE_20);
+            
                 // Vor Deep-Sleep: pulse_counter prüfen und ggf. in Ring-Speicher schreiben
-                // (bei Akku-Low kann RTC-RAM verloren gehen)
-                Serial.println("Speichere pulse_counter in Ring-Speicher vor Deep-Sleep (Akku-Low)...");
-                write_pulse_counter_to_ring_buffer();
-                
-                // Deep-Sleep mit GPIO-Wake-up (Taster A) - spart Energie und schützt Akku
+            // (bei Akku-Low kann RTC-RAM verloren gehen)
+            Serial.println("Speichere pulse_counter in Ring-Speicher vor Deep-Sleep (Akku-Low)...");
+            write_pulse_counter_to_ring_buffer();
+            
+            // Deep-Sleep mit GPIO-Wake-up (Taster A) - spart Energie und schützt Akku
                 // Timer-Wake-up: Bei USB immer aktiv, sonst nur wenn Spannung > BATTERY_VOLTAGE_PROTECTION
                 enter_deep_sleep_with_gpio_and_timer_wakeup(enable_timer_wakeup);
-                // Ab hier wird Code nicht mehr ausgeführt (Deep-Sleep)
+            // Ab hier wird Code nicht mehr ausgeführt (Deep-Sleep)
                 return;
             }
         }
@@ -2033,28 +2106,28 @@ void setup() {
         // NVS initialisieren (bei Power-On und Deep-Sleep-Wake-up)
         // WICHTIG: nvs_flash_init() ist idempotent - wenn bereits initialisiert, passiert nichts (keine Wear!)
         init_nvs_partitions(isPowerOn);
-        
-        // NVS-Ring-Speicher: Versionsnummer prüfen und ggf. initialisieren
-        // Dies geschieht NUR beim ersten Boot nach Code-Upload oder partition.csv-Änderung
+            
+            // NVS-Ring-Speicher: Versionsnummer prüfen und ggf. initialisieren
+            // Dies geschieht NUR beim ersten Boot nach Code-Upload oder partition.csv-Änderung
         if (isPowerOn) {
             Serial.println("Prüfe NVS-Ring-Speicher-Version...");
             Serial.printf("Erwartete Version (Build-Timestamp): %lu\n", RING_BUFFER_VERSION);
             check_and_init_pulse_ring_nvs();
         }
-        
-        // LP-Core Watchdog Task starten (asynchron)
-        // Der Task prüft automatisch lp_core_running und startet LP-Core bei Bedarf
+            
+            // LP-Core Watchdog Task starten (asynchron)
+            // Der Task prüft automatisch lp_core_running und startet LP-Core bei Bedarf
         // WICHTIG: Task wird sowohl bei Power-On als auch bei Deep-Sleep-Wake-up gestartet
-        xTaskCreate(
-            lp_core_watchdog_task,      // Task-Funktion
-            "LP_Core_Watchdog",          // Task-Name
-            4096,                        // Stack-Größe (Bytes)
-            NULL,                        // Parameter
-            1,                           // Priorität (niedrig, da nicht kritisch)
-            NULL                         // Task-Handle (nicht benötigt)
-        );
-        Serial.println("LP-Core Watchdog Task gestartet");
-        
+            xTaskCreate(
+                lp_core_watchdog_task,      // Task-Funktion
+                "LP_Core_Watchdog",          // Task-Name
+                4096,                        // Stack-Größe (Bytes)
+                NULL,                        // Parameter
+                1,                           // Priorität (niedrig, da nicht kritisch)
+                NULL                         // Task-Handle (nicht benötigt)
+            );
+            Serial.println("LP-Core Watchdog Task gestartet");
+            
         // ring_idx und pulse_counter initialisieren (kombiniert)
         // ring_idx: Ring-Buffer-Index (aus RTC-RAM oder Ring-Speicher)
         // pulse_counter: Puls-Zähler (aus RTC-RAM oder Ring-Speicher)
@@ -2098,30 +2171,41 @@ void setup() {
             default:
                 // Power-On oder GPIO-Wake-up: WiFi und Web-Server starten
                 if (config_available) {
-                    Serial.println("Config erfolgreich geladen");
-                    
-                    // WiFi verbinden
-                    if (connect_wifi()) {
+            Serial.println("Config erfolgreich geladen");
+            
+            // WiFi verbinden
+                    bool wifi_connected = false;
+            if (connect_wifi()) {
+                        wifi_connected = true;
                         // mDNS starten (für .local Domain)
                         // HINWEIS: ESP32C6 ESPmDNS läuft automatisch asynchron im Hintergrund
                         if (MDNS.begin(config_rtc.hostname)) {
                             Serial.printf("mDNS: http://%s.local\n", config_rtc.hostname);
                         }
                         
-                        // NTP-Zeitsynchronisation
-                        sync_ntp_time();
-                        
-                        // Web-Server starten
-                        setupWebServer();
+                // NTP-Zeitsynchronisation
+                sync_ntp_time();
+                
+                // Web-Server starten
+                setupWebServer();
                         Serial.printf("Web-Server: http://%s\n", WiFi.localIP().toString().c_str());
                     } else {
-                        Serial.println("WiFi-Verbindung fehlgeschlagen");
-                    }
-                } else {
+                        Serial.println("WiFi-Verbindung fehlgeschlagen → Starte Access Point");
+                        
+                        // Access Point starten
+                        if (start_access_point()) {
+                            // Web-Server starten (ohne mDNS und NTP im AP-Modus)
+                            setupWebServer();
+                            Serial.printf("Web-Server (AP-Modus): http://%s\n", WiFi.softAPIP().toString().c_str());
+            } else {
+                            Serial.println("FEHLER: Weder WiFi-Verbindung noch Access Point möglich");
+                        }
+            }
+        } else {
                     Serial.println("Config-Laden fehlgeschlagen → WiFi/Web-Server nicht gestartet");
-                }
-                break;
         }
+                break;
+    }
     }  // Ende des else-Blocks (ADC erfolgreich)
 }
 

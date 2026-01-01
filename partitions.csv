@@ -2,9 +2,18 @@
 # Partition Table für ESP32C6 (2MB Flash)
 # 
 # Standard Partitionen
-nvs,      data, nvs,     0x9000,  0x5000,
-otadata,  data, ota,     0xe000,  0x2000,
-app0,     app,  ota_0,   0x10000, 0x140000,
+# NVS: Erhöht auf 40 KB (0xA000) für WiFi + BLE + ZigBee
+# - WiFi: ~12-16 KB
+# - BLE: ~8-12 KB
+# - ZigBee: ~12-16 KB
+# - Reserve: ~4-8 KB
+nvs,      data, nvs,     0x9000,  0xA000,
+# otadata muss genau 0x2000 (8 KB) groß sein
+otadata,  data, ota,     0x13000, 0x2000,
+# app0 muss bei 64 KB (0x10000) Alignment beginnen
+# Daher beginnt app0 bei 0x20000 (nächstes Alignment nach 0x15000)
+# Platz zwischen 0x15000 und 0x20000 (44 KB) bleibt ungenutzt
+app0,     app,  ota_0,   0x20000, 0x130000,
 #
 # Custom Partitionen
 # NVS Partition für Pulse-Zähler Ringspeicher (96 KB)
@@ -12,4 +21,3 @@ pulse_nv, data, nvs,     0x150000, 0x18000,
 #
 # LittleFS Partition für config.json und andere Dateien (256 KB)
 storage,   data, littlefs,  0x168000, 0x40000,
-

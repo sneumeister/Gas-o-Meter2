@@ -17,12 +17,13 @@ function rebootDevice() {
     const hostnameChanged = originalHostname && newHostname && (originalHostname !== newHostname);
     
     // Bestimme Ziel-URL für nach dem Reboot
+    // WICHTIG: Im AP-Modus verwenden wir den Hostname (mDNS), nicht die IP-Adresse
     let targetUrl;
-    if (hostnameChanged && newHostname) {
-        // Hostname wurde geändert: Verwende neue mDNS-URL
+    if (newHostname) {
+        // Hostname verfügbar: Verwende immer mDNS-URL (auch im AP-Modus)
         targetUrl = `http://${newHostname}.local/`;
     } else {
-        // Hostname nicht geändert: Verwende aktuelle URL
+        // Kein Hostname verfügbar: Verwende aktuelle URL (Fallback)
         targetUrl = window.location.origin + '/';
     }
     

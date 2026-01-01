@@ -42,6 +42,7 @@ h1 {
     color: #ffffff;
     padding: 10px 15px;
     border-radius: 8px 0 0 8px;
+    margin-right: 0;
 }
 
 .pulse-right {
@@ -49,6 +50,7 @@ h1 {
     color: #ffffff;
     padding: 10px 15px;
     border-radius: 0 8px 8px 0;
+    margin-left: 0;
 }
 
 table {
@@ -95,6 +97,10 @@ tr:last-child td {
 .refresh {
     text-align: center;
     margin-top: 20px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
 }
 
 button {
@@ -107,6 +113,8 @@ button {
     font-size: 1em;
     margin: 5px;
     transition: background 0.3s;
+    min-height: 44px; /* Mindestgröße für Touch-Bedienung */
+    touch-action: manipulation; /* Verhindert Doppel-Tap-Zoom */
 }
 
 button:hover {
@@ -121,6 +129,42 @@ button:active {
     font-weight: bold;
 }
 
+/* Counter-Korrektur Buttons */
+.btn-lg {
+    min-width: 50px;
+    min-height: 50px;
+    font-size: 1.5em;
+    padding: 12px 20px;
+}
+
+/* Eingabefelder für Counter */
+#counterLeft, #counterRight {
+    min-height: 50px;
+    font-size: 1.5em !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+}
+
+/* Allgemein: Kein Abstand zwischen Counter-Eingabefeldern (für alle Bildschirmgrößen) */
+.counter-input {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+}
+
+/* Spezifisch: Schwarzes Feld rechts ohne Margin */
+#counterLeft {
+    margin-right: 0 !important;
+    border-right: none !important;
+}
+
+/* Spezifisch: Rotes Feld links ohne Margin */
+#counterRight {
+    margin-left: 0 !important;
+    border-left: none !important;
+}
+
 @media (max-width: 600px) {
     .container {
         padding: 15px;
@@ -133,6 +177,181 @@ button:active {
     th, td {
         padding: 8px 10px;
         font-size: 0.9em;
+    }
+    
+    /* Buttons auf mobilen Geräten größer und vollständig nutzbar */
+    button {
+        padding: 14px 20px;
+        font-size: 1em;
+        min-height: 48px;
+        width: 100%;
+        max-width: 300px;
+        margin: 8px auto;
+    }
+    
+    /* Ausnahme: Buttons in input-group sollen nicht 100% breit sein (für Bootstrap input-group Layout) */
+    .input-group button,
+    .input-group .btn {
+        width: auto !important;
+        max-width: none !important;
+        margin: 0 !important;
+    }
+    
+    .refresh {
+        flex-direction: column;
+        align-items: center;
+    }
+    
+    .refresh button {
+        width: 100%;
+        max-width: 280px;
+    }
+    
+    /* Counter-Korrektur: Tabelle für mobile Geräte anpassen */
+    #counterCorrectionPanel {
+        overflow-x: hidden; /* Verhindert horizontales Scrollen */
+        width: 100%;
+        box-sizing: border-box;
+    }
+    
+    #counterCorrectionPanel .counter-controls {
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+    }
+    
+    #counterCorrectionPanel table {
+        width: 100%;
+        max-width: 100%;
+        margin: 0 auto;
+        border-spacing: 4px; /* Reduziert Abstand zwischen Zellen */
+        box-sizing: border-box;
+    }
+    
+    /* Desktop: Buttons direkt neben Counter-Display */
+    @media (min-width: 601px) {
+        #counterCorrectionPanel table {
+            border-spacing: 2px; /* Minimaler Abstand auf Desktop */
+            width: auto; /* Nur so breit wie nötig */
+        }
+        #counterCorrectionPanel table td:first-child {
+            text-align: right; /* Minus-Button rechtsbündig */
+            padding-right: 4px;
+        }
+        #counterCorrectionPanel table td:last-child {
+            text-align: left; /* Plus-Button linksbündig */
+            padding-left: 4px;
+        }
+    }
+    
+    #counterCorrectionPanel table td {
+        padding: 4px 2px;
+        box-sizing: border-box;
+    }
+    
+    /* +/- Buttons auf mobilen Geräten */
+    #counterCorrectionPanel .btn-lg {
+        min-width: 45px !important;
+        max-width: 50px !important;
+        min-height: 50px;
+        font-size: 1.5em;
+        padding: 10px 8px;
+        box-sizing: border-box;
+    }
+    
+    /* Eingabefelder für Counter auf mobilen Geräten */
+    #counterLeft {
+        width: 85px !important;
+        max-width: 85px !important;
+        font-size: 1.4em !important;
+        margin-right: 0 !important;
+        box-sizing: border-box;
+    }
+    
+    #counterRight {
+        width: 60px !important;
+        max-width: 60px !important;
+        font-size: 1.4em !important;
+        margin-left: 0 !important;
+        box-sizing: border-box;
+    }
+    
+    /* Allgemein: Kein Abstand zwischen Counter-Eingabefeldern */
+    .counter-input {
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+    }
+    
+    /* Container für Counter-Eingabefelder */
+    .counter-input-container {
+        gap: 0 !important;
+    }
+    
+    /* Negative Margins für direkten Kontakt (falls nötig) */
+    #counterRight {
+        margin-left: -2px !important; /* Kompensiert Border-Überlappung */
+    }
+    
+    /* Slider auf mobilen Geräten */
+    #counterSlider {
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box;
+    }
+    
+    /* Übernehmen-Button auf mobilen Geräten */
+    #counterCorrectionPanel .btn-apply {
+        width: 100%;
+        max-width: 250px;
+        margin: 10px auto;
+        display: block;
+        min-height: 50px;
+        font-size: 1.1em;
+    }
+    
+    /* Counter-Controls Container */
+    .counter-controls {
+        width: 100%;
+    }
+    
+    /* Counter-Buttons auf mobilen Geräten */
+    .counter-btn {
+        min-width: 55px !important;
+        min-height: 55px !important;
+    }
+    
+    /* Slider auf mobilen Geräten */
+    #counterSlider {
+        width: 100% !important;
+        margin: 10px 0;
+    }
+    
+    /* Pulse-Counter Display auf mobilen Geräten */
+    .pulse-counter-display {
+        font-size: 2.2em;
+    }
+    
+    .pulse-left, .pulse-right {
+        padding: 8px 12px;
+    }
+    
+    /* Info-Buttons (Zählerstand korrigieren, Parameter einblenden) */
+    .btn-info {
+        width: 100%;
+        max-width: 300px;
+        margin: 8px auto;
+        display: block;
+        min-height: 48px;
+    }
+    
+    /* Parameter-Panel auf mobilen Geräten */
+    #parametersPanel {
+        overflow-x: auto;
+    }
+    
+    #parametersPanel table {
+        font-size: 0.9em;
+        min-width: 280px;
     }
 }
 
