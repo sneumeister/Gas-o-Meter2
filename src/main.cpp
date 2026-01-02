@@ -1490,8 +1490,8 @@ String processor(const String& var) {
         snprintf(buf, sizeof(buf), "%02lu", pulse_counter % 100);
         return String(buf);
     } else if (var == "wifi_info_style") {
-        // WiFi-Info Sichtbarkeit: leer wenn verbunden, "display:none;" wenn nicht verbunden
-        return WiFi.status() == WL_CONNECTED ? String("") : String("display:none;");
+        // WiFi-Info Sichtbarkeit: "display:block;" wenn verbunden, "display:none;" wenn nicht verbunden
+        return WiFi.status() == WL_CONNECTED ? String("display:block;") : String("display:none;");
     } else if (var == "adminpass") {
         // Für Config-Seite: Admin-Passwort anzeigen (wird vom Browser als Passwort-Feld behandelt)
         return String(config_rtc.adminpass);
@@ -1591,7 +1591,7 @@ void setupWebServer() {
     server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request){
         // Basic Auth prüfen
         if (!request->authenticate("admin", config_rtc.adminpass)) {
-            request->requestAuthentication();
+            request->requestAuthentication("GasOMeterKonfiguration");
             return;
         }
         last_web_activity = millis();
@@ -1638,7 +1638,7 @@ void setupWebServer() {
         
         if (!auth_ok) {
             // Wenn weder Basic Auth noch current_password korrekt sind
-            request->requestAuthentication();
+            request->requestAuthentication("GasOMeterKonfiguration");
             return;
         }
         
@@ -1898,7 +1898,7 @@ void setupWebServer() {
     server.on("/wifi/scan", HTTP_GET, [](AsyncWebServerRequest *request){
         // Basic Auth prüfen
         if (!request->authenticate("admin", config_rtc.adminpass)) {
-            request->requestAuthentication();
+            request->requestAuthentication("GasOMeterKonfiguration");
             return;
         }
         last_web_activity = millis();
