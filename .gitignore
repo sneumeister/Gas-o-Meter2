@@ -1,5 +1,5 @@
 # Build-Artefakte
-.pio
+.pio/
 build/
 data/bootstrap.min.css
 *.backup
@@ -11,6 +11,9 @@ data/bootstrap.min.css
 .vscode/ipch
 .cursor
 docs/CHAT_HISTORY*
+docs/CONVERSION*
+docs/DETAILED*
+docs/FUNCTION_C*
 
 # Sensible Konfiguration
 data/config.json
@@ -19,7 +22,7 @@ data/config.json
 managed_components/
 dependencies.lock
 sdkconfig
-sdkconfig.old
+sdkconfig.*.old
 
 # System-Dateien
 .DS_Store

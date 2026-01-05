@@ -1,8 +1,32 @@
 #ifndef HARDWARE_H
 #define HARDWARE_H
 
-#include <Arduino.h>
+// ============================================
+// Framework-Erkennung und Header-Includes
+// ============================================
+
+#ifdef ARDUINO
+    // Arduino Framework
+    #include <Arduino.h>
+#else
+    // ESP-IDF Framework
+    #include "driver/gpio.h"
+    #include "freertos/FreeRTOS.h"
+    #include "freertos/task.h"
+#endif
+
 #include "hal/adc_types.h"
+
+// ============================================
+// Arduino HIGH/LOW Definitionen (für beide Frameworks)
+// ============================================
+// HIGH/LOW werden von Arduino.h definiert, für ESP-IDF müssen wir sie selbst definieren
+#ifndef HIGH
+    #define HIGH    1
+#endif
+#ifndef LOW
+    #define LOW     0
+#endif
 
 // ============================================
 // Hardware Pin-Definitionen
@@ -17,13 +41,40 @@
 // HINWEIS: Bei einigen Boards ist die LED active-low (ON = LOW, OFF = HIGH)
 // Falls die LED nicht leuchtet, versuchen Sie LOW statt HIGH
 #define LED_BUILTIN_GPIO   15  // Interne LED
+
+// ============================================
+// Framework-spezifische Definitionen
+// ============================================
+
+#ifdef ARDUINO
+    // Arduino Pin-Modi
+    // INPUT_PULLUP und INPUT_PULLDOWN werden von Arduino.h definiert
+    // (werden hier nicht neu definiert, da sie bereits in Arduino.h vorhanden sind)
+    
+    #define BUTTON_A_GPIO_MODE  INPUT_PULLUP
+    #define REED_GPIO_MODE      INPUT          // Kein Pull-Up/Pull-Down (externer Pull-Up)
+    #define BUTTON_B_GPIO_MODE  INPUT_PULLUP
+#else
+    // ESP-IDF Pin-Modi
+    // Explizite Casts zu int, um deprecated-Warnungen zu vermeiden (ESP-IDF 5.x)
+    #define BUTTON_A_GPIO_MODE  ((int)(GPIO_MODE_INPUT) | (int)(GPIO_PULLUP_ONLY))
+    #define REED_GPIO_MODE      GPIO_MODE_INPUT  // Kein Pull-Up/Pull-Down (externer Pull-Up)
+    #define BUTTON_B_GPIO_MODE  ((int)(GPIO_MODE_INPUT) | (int)(GPIO_PULLUP_ONLY))
+    
+    // Arduino GPIO-Modi für Kompatibilität (ESP-IDF)
+    // Explizite Casts zu int, um deprecated-Warnungen zu vermeiden (ESP-IDF 5.x)
+    #define INPUT_PULLUP      ((int)(GPIO_MODE_INPUT) | (int)(GPIO_PULLUP_ONLY))
+    #define INPUT_PULLDOWN    ((int)(GPIO_MODE_INPUT) | (int)(GPIO_PULLDOWN_ONLY))
+#endif
+
+// Logik-Level (identisch für beide Frameworks)
 #define LED_OFF            HIGH  // LED AUS (bei HIGH!)
 #define LED_ON             LOW   // LED AN (bei LOW!)
 
-// Pin-Modi Definitionen (für Setup)
-#define BUTTON_A_GPIO_MODE  INPUT_PULLUP
-#define REED_GPIO_MODE      INPUT          // Kein Pull-Up/Pull-Down (externer Pull-Up)
-#define BUTTON_B_GPIO_MODE  INPUT_PULLUP
+// Antennenumschaltung Logik-Level (identisch für beide Frameworks)
+#define ANTENNA_RF_SWITCH_ENABLE LOW  // RF-Switch aktivieren
+#define ANTENNA_INTERNAL        LOW   // Logik-Level für interne Antenne (GPIO14)
+#define ANTENNA_EXTERNAL        HIGH  // Logik-Level für externe Antenne (GPIO14)
 
 // ADC-Pins für Akku-Monitoring
 #define BATTERY_ADC_PIN    0   // Akku-Monitoring ADC Pin (GPIO0)
@@ -33,9 +84,6 @@
 // Antennenumschaltung (ESP32C6: RF-Switch + Antennenauswahl)
 #define ANTENNA_RF_SWITCH_GPIO  3   // GPIO3: RF-Switch aktivieren (LOW = aktiviert)
 #define ANTENNA_SELECT_GPIO     14  // GPIO14: Antennenauswahl (LOW = intern, HIGH = extern)
-#define ANTENNA_RF_SWITCH_ENABLE LOW  // RF-Switch aktivieren
-#define ANTENNA_INTERNAL        LOW   // Logik-Level für interne Antenne (GPIO14)
-#define ANTENNA_EXTERNAL        HIGH  // Logik-Level für externe Antenne (GPIO14)
 
 // ============================================
 // ADC-Konfiguration
@@ -196,24 +244,43 @@ inline uint8_t VOLTAGE_TO_PERCENT(float voltage) {
 // Antennenumschaltung Helper Makros
 // ============================================
 
-// Antennenumschaltung initialisieren und direkt Antenne auswählen
-// Parameter: ANTENNA_INTERNAL oder ANTENNA_EXTERNAL
-// Beispiel: INIT_ANTENNA_SWITCH(ANTENNA_EXTERNAL)
-#define INIT_ANTENNA_SWITCH(antenna_type) \
-    do { \
-        pinMode(ANTENNA_RF_SWITCH_GPIO, OUTPUT); \
-        pinMode(ANTENNA_SELECT_GPIO, OUTPUT); \
-        digitalWrite(ANTENNA_RF_SWITCH_GPIO, ANTENNA_RF_SWITCH_ENABLE); \
-        delay(100); /* Stabilisierung */ \
-        digitalWrite(ANTENNA_SELECT_GPIO, antenna_type); \
-    } while(0)
+#ifdef ARDUINO
+    // Arduino-Version der Antennenumschaltung
+    #define INIT_ANTENNA_SWITCH(antenna_type) \
+        do { \
+            pinMode(ANTENNA_RF_SWITCH_GPIO, OUTPUT); \
+            pinMode(ANTENNA_SELECT_GPIO, OUTPUT); \
+            digitalWrite(ANTENNA_RF_SWITCH_GPIO, ANTENNA_RF_SWITCH_ENABLE); \
+            delay(100); /* Stabilisierung */ \
+            digitalWrite(ANTENNA_SELECT_GPIO, antenna_type); \
+        } while(0)
 
-// Antenne nachträglich ändern (wenn bereits initialisiert)
-#define SET_ANTENNA_INTERNAL() \
-    digitalWrite(ANTENNA_SELECT_GPIO, ANTENNA_INTERNAL)
+    #define SET_ANTENNA_INTERNAL() \
+        digitalWrite(ANTENNA_SELECT_GPIO, ANTENNA_INTERNAL)
 
-#define SET_ANTENNA_EXTERNAL() \
-    digitalWrite(ANTENNA_SELECT_GPIO, ANTENNA_EXTERNAL)
+    #define SET_ANTENNA_EXTERNAL() \
+        digitalWrite(ANTENNA_SELECT_GPIO, ANTENNA_EXTERNAL)
+#else
+    // ESP-IDF-Version der Antennenumschaltung
+    #define INIT_ANTENNA_SWITCH(antenna_type) \
+        do { \
+            gpio_config_t io_conf = {}; \
+            io_conf.pin_bit_mask = (1ULL << ANTENNA_RF_SWITCH_GPIO) | (1ULL << ANTENNA_SELECT_GPIO); \
+            io_conf.mode = GPIO_MODE_OUTPUT; \
+            io_conf.pull_up_en = GPIO_PULLUP_DISABLE; \
+            io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE; \
+            io_conf.intr_type = GPIO_INTR_DISABLE; \
+            gpio_config(&io_conf); \
+            gpio_set_level((gpio_num_t)ANTENNA_RF_SWITCH_GPIO, ANTENNA_RF_SWITCH_ENABLE); \
+            vTaskDelay(pdMS_TO_TICKS(100)); /* Stabilisierung */ \
+            gpio_set_level((gpio_num_t)ANTENNA_SELECT_GPIO, antenna_type); \
+        } while(0)
+
+    #define SET_ANTENNA_INTERNAL() \
+        gpio_set_level((gpio_num_t)ANTENNA_SELECT_GPIO, ANTENNA_INTERNAL)
+
+    #define SET_ANTENNA_EXTERNAL() \
+        gpio_set_level((gpio_num_t)ANTENNA_SELECT_GPIO, ANTENNA_EXTERNAL)
+#endif
 
 #endif // HARDWARE_H
-

@@ -1,23 +1,25 @@
 # Name,   Type, SubType, Offset,  Size, Flags
-# Partition Table für ESP32C6 (2MB Flash)
+# Partition Table für ESP32C6 (4MB Flash)
 # 
 # Standard Partitionen
-# NVS: Erhöht auf 40 KB (0xA000) für WiFi + BLE + ZigBee
+# NVS: 28 KB (0x7000) für WiFi + BLE + ZigBee
 # - WiFi: ~12-16 KB
 # - BLE: ~8-12 KB
 # - ZigBee: ~12-16 KB
 # - Reserve: ~4-8 KB
-nvs,      data, nvs,     0x9000,  0xA000,
-# otadata muss genau 0x2000 (8 KB) groß sein
-otadata,  data, ota,     0x13000, 0x2000,
-# app0 muss bei 64 KB (0x10000) Alignment beginnen
-# Daher beginnt app0 bei 0x20000 (nächstes Alignment nach 0x15000)
-# Platz zwischen 0x15000 und 0x20000 (44 KB) bleibt ungenutzt
-app0,     app,  ota_0,   0x20000, 0x130000,
+# Endet bei 0x9000 + 0x7000 = 0x10000 (64 KB Alignment für factory)
+nvs,      data, nvs,     0x9000,  0x7000,
+# factory beginnt bei 64 KB (0x10000) - Standard-Offset für ESP-IDF
+# ESP-IDF flasht die App automatisch bei 0x10000
+# otadata entfernt, da keine OTA-Updates verwendet werden
+factory,  app,  factory, 0x10000, 0x140000,
 #
 # Custom Partitionen
-# NVS Partition für Pulse-Zähler Ringspeicher (96 KB)
-pulse_nv, data, nvs,     0x150000, 0x18000,
+# NVS Partition für Pulse-Zähler Ringspeicher (256 KB für 12000 Einträge mit Reserve)
+# Offset: 0x10000 + 0x140000 = 0x150000
+# Berechnung: 12000 Einträge × ~27 Bytes/Eintrag = ~324 KB, daher 256 KB mit Reserve
+pulse_nv, data, nvs,     0x150000, 0x40000,
 #
 # LittleFS Partition für config.json und andere Dateien (256 KB)
-storage,   data, littlefs,  0x168000, 0x40000,
+# Offset: 0x150000 + 0x40000 = 0x190000
+storage,   data, littlefs,  0x190000, 0x40000,
