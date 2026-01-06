@@ -3073,6 +3073,8 @@ extern "C" void app_main(void) {
     // Logging initialisieren (automatisch in ESP-IDF)
     esp_log_level_set("*", ESP_LOG_INFO);
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
+    // WiFi-Debug-Nachrichten reduzieren (muss ganz am Anfang stehen)
+    SET_WIFI_LOG_LEVEL();
     
     // Event-System initialisieren (für WiFi, etc.)
     esp_netif_init();

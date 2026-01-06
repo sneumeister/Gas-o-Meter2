@@ -13,9 +13,21 @@
     #include "driver/gpio.h"
     #include "freertos/FreeRTOS.h"
     #include "freertos/task.h"
+    #include "esp_log.h"
 #endif
 
 #include "hal/adc_types.h"
+
+
+// WiFi Log-Level Konfiguration (nur ESP-IDF)
+#ifndef ARDUINO
+    // WiFi-Debug-Nachrichten reduzieren (nur WARNINGS und ERRORS)
+    // WICHTIG: esp_log.h muss vor diesem Makro eingebunden sein
+    #define SET_WIFI_LOG_LEVEL() esp_log_level_set("wifi", ESP_LOG_WARN)
+#else
+    // Arduino: NOP (keine ESP-IDF Log-Funktionen)
+    #define SET_WIFI_LOG_LEVEL()  ((void)0)
+#endif
 
 // ============================================
 // Arduino HIGH/LOW Definitionen (für beide Frameworks)
