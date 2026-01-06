@@ -2713,7 +2713,7 @@ static esp_err_t counter_set_handler(httpd_req_t *req) {
     
     // Erfolgreiche Antwort
     char response[100];
-    snprintf(response, sizeof(response), "Zählerstand gesetzt: %05lu.%02lu", new_value / 100, new_value % 100);
+    snprintf(response, sizeof(response), "Zählerstand gesetzt und in NVS gespeichert: %05lu.%02lu", new_value / 100, new_value % 100);
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
