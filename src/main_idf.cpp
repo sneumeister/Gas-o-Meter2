@@ -16,6 +16,7 @@
 #include "esp_sleep.h"
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
+#include "ulp_lp_core.h"  // LP-Core Management APIs
 #include <time.h>
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -35,7 +36,67 @@
 // Logging-Tag
 static const char *TAG = "gas-o-meter";
 
-bool start_lp_core() { return false; }  // LP-Core kommt später....
+// LP-Core Binary Header (generiert durch ulp_embed_binary in src/CMakeLists.txt)
+// ulp_embed_binary() erstellt automatisch ulp_main.h mit:
+//   - Binary-Symbolen: ulp_main_bin_start, ulp_main_bin_end (für ulp_lp_core_load_binary())
+//   - Exportierten globalen Variablen aus LP-Core Code mit "ulp_" Präfix:
+//       extern uint32_t ulp_pulse_counter;      // Siehe Kommentar bei Zeile 135
+//       extern uint32_t ulp_lp_core_running;     // Siehe Kommentar bei Zeile 135
+// ulp_app_name="ulp_main" → Header-File: ulp_main.h
+// WICHTIG: Keine expliziten extern-Deklarationen nötig - alles erfolgt implizit über dieses Include!
+// WICHTIG: Alle Zugriffe auf ULP-Variablen müssen mit volatile-Casts erfolgen (siehe Kommentar bei Zeile 135)
+#include "ulp_main.h"
+// Manuelle Deklaration für das LP-Core Programm-Image
+extern "C" {
+    extern const uint8_t ulp_main_bin_start[] asm("_binary_ulp_main_bin_start");
+    extern const uint8_t ulp_main_bin_end[]   asm("_binary_ulp_main_bin_end");
+}
+
+
+// LP-Core Initialisierung und Start
+// Läuft auf dem HP-Core und startet den LP-Core-Prozessor
+bool start_lp_core(void) {
+    ESP_LOGI(TAG, "Starte LP-Core...");
+    
+    // REED-Pin als RTC-GPIO initialisieren (erforderlich für LP-Core-Zugriff)
+    // GPIO2 auf ESP32C6
+    rtc_gpio_init((gpio_num_t)REED_GPIO);
+    rtc_gpio_set_direction((gpio_num_t)REED_GPIO, RTC_GPIO_MODE_INPUT_ONLY);
+    // Kein Pull-Up/Pull-Down (externer Pull-Up) - beide Pulls deaktivieren = Float
+    rtc_gpio_pullup_dis((gpio_num_t)REED_GPIO);
+    rtc_gpio_pulldown_dis((gpio_num_t)REED_GPIO);
+    
+    ESP_LOGI(TAG, "REED-Pin (GPIO%d) als RTC-GPIO initialisiert", REED_GPIO);
+    
+    // LP-Core Binary laden
+    // Binary-Symbole werden durch ulp_main.h (generiert von ulp_embed_binary) deklariert
+    // Format: _binary_ulp_<ulp_app_name>_bin_start/end mit ulp_app_name="ulp_main"
+    size_t binary_size = ulp_main_bin_end - ulp_main_bin_start;
+    esp_err_t ret = ulp_lp_core_load_binary(ulp_main_bin_start, binary_size);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "FEHLER: LP-Core Binary konnte nicht geladen werden: %s", esp_err_to_name(ret));
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "LP-Core Binary geladen (%zu Bytes)", binary_size);
+    
+    // LP-Core konfigurieren und starten
+    ulp_lp_core_cfg_t cfg = {
+        .wakeup_source = ULP_LP_CORE_WAKEUP_SOURCE_HP_CPU,  // Wird vom HP-Core geweckt
+    };
+    
+    ret = ulp_lp_core_run(&cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "FEHLER: LP-Core konnte nicht gestartet werden: %s", esp_err_to_name(ret));
+        return false;
+    }
+    
+    // LP-Core starten (Software-Interrupt)
+    ulp_lp_core_sw_intr_trigger();
+    
+    ESP_LOGI(TAG, "LP-Core gestartet");
+    return true;
+}
 
 
 // ============================================
@@ -70,9 +131,29 @@ RTC_DATA_ATTR config_rtc_t config_rtc = {
 RTC_DATA_ATTR int wakeupCount = 0;  // Zählt nur Deep-Sleep-Wake-ups (nicht ESP.restart())
 RTC_DATA_ATTR bool isPowerOn = false;
 RTC_DATA_ATTR uint8_t ntp_sync_marker = 0;  // NTP-Sync-Status: 0=kein Sync, 1=letzter erfolgreich, 2+=fehlgeschlagene Versuche
-RTC_DATA_ATTR uint32_t pulse_counter = 0;  // Puls-Zähler für LP-Core (aus NVS-Ring-Speicher geladen)
 RTC_DATA_ATTR uint32_t ring_idx = RING_BUFFER_SIZE;  // Ring-Buffer-Index (im RTC-RAM, wird bei Power-On/ESP.restart() neu ermittelt)
-RTC_DATA_ATTR uint32_t lp_core_running = 0;  // LP-Core Watchdog-Zähler (wird vom LP-Core regelmäßig erhöht)
+
+// ============================================
+// LP-Core Variablen (pulse_counter, lp_core_running)
+// ============================================
+// EHEMALIGE DEFINITIONEN (entfernt, jetzt im LP-Core Code):
+//   RTC_DATA_ATTR uint32_t pulse_counter = 0;      // Puls-Zähler für LP-Core
+//   RTC_DATA_ATTR uint32_t lp_core_running = 0;     // LP-Core Watchdog-Zähler
+//
+// AKTUELLE IMPLEMENTIERUNG:
+//   - Variablen sind jetzt in ulp/ulp_main.c definiert:
+//       volatile uint32_t pulse_counter = 0;      // volatile wegen gleichzeitigem Zugriff
+//       volatile uint32_t lp_core_running = 0;     // volatile wegen gleichzeitigem Zugriff
+//   - ulp_embed_binary() exportiert sie automatisch mit "ulp_" Präfix über ulp_main.h:
+//       extern uint32_t ulp_pulse_counter;      // WICHTIG: volatile fehlt hier!
+//       extern uint32_t ulp_lp_core_running;    // WICHTIG: volatile fehlt hier!
+//   - Die Deklarationen erfolgen implizit durch #include "ulp_main.h" (siehe Zeile 47)
+//   - WICHTIG: Alle Zugriffe auf diese Variablen müssen mit volatile-Casts erfolgen:
+//       uint32_t val = *(volatile uint32_t *)&ulp_pulse_counter;  // Lesen
+//       *(volatile uint32_t *)&ulp_pulse_counter = new_val;        // Schreiben
+//     Dies zwingt den Compiler, immer vom RAM zu lesen/schreiben und verhindert Race Conditions
+//   - Im Code werden die Variablen mit "ulp_" Präfix verwendet (z.B. ulp_pulse_counter)
+//   - Die Variablen liegen im RTC-RAM und werden zwischen HP-Core und LP-Core geteilt
 
 // ============================================
 // Globale Variablen
@@ -325,26 +406,27 @@ bool init_pulse_nvs_minimal() {
 }
 
 // ============================================
-// RTC pulse_counter: In Ring-Speicher schreiben (bei ESP.restart(), Akku-Low, USB)
+// RTC ulp_pulse_counter: In Ring-Speicher schreiben (bei ESP.restart(), Akku-Low, USB)
 // ============================================
-bool write_pulse_counter_to_ring_buffer() {
+bool write_ulp_pulse_counter_to_ring_buffer() {
     // WICHTIG: Stelle sicher, dass Pulse-NVS initialisiert ist
     if (!init_pulse_nvs_minimal()) {
         ESP_LOGE(TAG, "FEHLER: Pulse-NVS konnte nicht initialisiert werden → kein Schreiben möglich");
         return false;
     }
     
-    // Prüfung: Nur schreiben, wenn pulse_counter > 0
-    if (pulse_counter == 0) {
-        ESP_LOGI(TAG, "pulse_counter ist 0 → Keine Ring-Speicher-Schreibung nötig");
+    // Prüfung: Nur schreiben, wenn ulp_pulse_counter > 0
+    if (*(volatile uint32_t *)&ulp_pulse_counter == 0) {
+        ESP_LOGI(TAG, "ulp_pulse_counter ist 0 → Keine Ring-Speicher-Schreibung nötig");
         return true;  // Kein Fehler, einfach nichts zu speichern
     }
     
-    // Prüfung: Nur schreiben, wenn pulse_counter > max_pulse aus Ring-Speicher
+    // Prüfung: Nur schreiben, wenn ulp_pulse_counter > max_pulse aus Ring-Speicher
     uint32_t max_pulse = find_max_pulse_from_nvs();
-    if (pulse_counter <= max_pulse) {
-        ESP_LOGI(TAG, "pulse_counter nicht gespeichert: RTC=%lu <= Ring-Speicher-Max=%lu", 
-                 pulse_counter, max_pulse);
+    uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
+    if (current_pulse <= max_pulse) {
+        ESP_LOGI(TAG, "ulp_pulse_counter nicht gespeichert: RTC=%lu <= Ring-Speicher-Max=%lu", 
+                 current_pulse, max_pulse);
         return true;  // Kein Fehler, einfach nichts zu speichern
     }
     
@@ -352,7 +434,7 @@ bool write_pulse_counter_to_ring_buffer() {
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open_from_partition(NVS_PARTITION_PULSE, NVS_NAMESPACE_PULSE, NVS_READWRITE, &nvs_handle);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Fehler beim Öffnen von Ring-Speicher für pulse_counter: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Fehler beim Öffnen von Ring-Speicher für ulp_pulse_counter: %s", esp_err_to_name(err));
         return false;
     }
     
@@ -365,12 +447,12 @@ bool write_pulse_counter_to_ring_buffer() {
         return false;
     }
     
-    // pulse_counter an Position ring_idx schreiben
+    // ulp_pulse_counter an Position ring_idx schreiben
     char key[MAX_KEY_LENGTH];
     snprintf(key, sizeof(key), "%s%lu", NVS_KEY_PREFIX, ring_idx);
-    err = nvs_set_u32(nvs_handle, key, pulse_counter);
+    err = nvs_set_u32(nvs_handle, key, *(volatile uint32_t *)&ulp_pulse_counter);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Fehler beim Schreiben von pulse_counter in Ring-Speicher: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Fehler beim Schreiben von ulp_pulse_counter in Ring-Speicher: %s", esp_err_to_name(err));
         nvs_close(nvs_handle);
         return false;
     }
@@ -389,8 +471,8 @@ bool write_pulse_counter_to_ring_buffer() {
     
     nvs_close(nvs_handle);
     
-    ESP_LOGI(TAG, "pulse_counter in Ring-Speicher geschrieben: %lu (Position: %lu, nächster Index: %lu)", 
-             pulse_counter, (ring_idx == 0 ? RING_BUFFER_SIZE - 1 : ring_idx - 1), ring_idx);
+    ESP_LOGI(TAG, "ulp_pulse_counter in Ring-Speicher geschrieben: %lu (Position: %lu, nächster Index: %lu)", 
+             *(volatile uint32_t *)&ulp_pulse_counter, (ring_idx == 0 ? RING_BUFFER_SIZE - 1 : ring_idx - 1), ring_idx);
     return true;
 }
 
@@ -404,20 +486,20 @@ void lp_core_watchdog_task(void *parameter) {
     ESP_LOGI(TAG, "LP-Core Watchdog Task gestartet");
     
     // Initialisiere last_lp_core_value mit aktuellem Wert
-    last_lp_core_value = lp_core_running;
+    last_lp_core_value = *(volatile uint32_t *)&ulp_lp_core_running;
     if (last_lp_core_value > 0) {
         ESP_LOGI(TAG, "LP-Core läuft bereits (Zähler: %lu)", last_lp_core_value);
     }
     
     // Kombinierte Start- und Watchdog-Schleife
-    // Wenn lp_core_running == 0 ODER Counter erhöht sich nicht → versuche LP-Core zu starten
+    // Wenn ulp_lp_core_running == 0 ODER Counter erhöht sich nicht → versuche LP-Core zu starten
     // Wenn nach MAX_RETRIES immer noch nicht erfolgreich → Task beenden
     while (1) {
-        // Prüfe ob LP-Core läuft (lp_core_running == 0 bedeutet: nicht gestartet oder gestoppt)
-    if (lp_core_running == 0) {
+        // Prüfe ob LP-Core läuft (ulp_lp_core_running == 0 bedeutet: nicht gestartet oder gestoppt)
+    if (*(volatile uint32_t *)&ulp_lp_core_running == 0) {
             // LP-Core läuft nicht → versuche zu starten
             retry_count++;
-            ESP_LOGW(TAG, "LP-Core läuft nicht (lp_core_running == 0) → Starte LP-Core... (Versuch %d/%d)", 
+            ESP_LOGW(TAG, "LP-Core läuft nicht (ulp_lp_core_running == 0) → Starte LP-Core... (Versuch %d/%d)", 
                      retry_count, MAX_RETRIES);
             
             if (retry_count >= MAX_RETRIES) {
@@ -429,7 +511,7 @@ void lp_core_watchdog_task(void *parameter) {
             // Versuche LP-Core zu starten
             if (start_lp_core()) {
                 // start_lp_core() gab true zurück - warte auf Watchdog-Timeout und prüfe dann
-        last_lp_core_value = lp_core_running;
+        last_lp_core_value = *(volatile uint32_t *)&ulp_lp_core_running;
                 ESP_LOGI(TAG, "LP-Core Start aufgerufen (Zähler: %lu) - warte auf Watchdog-Timeout für Prüfung...", last_lp_core_value);
             } else {
                 // start_lp_core() gab false zurück
@@ -439,27 +521,27 @@ void lp_core_watchdog_task(void *parameter) {
                 continue;
             }
         } else {
-            // LP-Core sollte laufen (lp_core_running > 0) → Watchdog-Prüfung
+            // LP-Core sollte laufen (ulp_lp_core_running > 0) → Watchdog-Prüfung
             // Warte LP_CORE_WATCHDOG_MS bevor Prüfung (gibt LP-Core Zeit, Counter zu erhöhen)
         vTaskDelay(pdMS_TO_TICKS(LP_CORE_WATCHDOG_MS));
         
-        uint32_t current_lp_core_value = lp_core_running;
+        uint32_t current_lp_core_value = *(volatile uint32_t *)&ulp_lp_core_running;
         
         // Prüfe ob Zähler sich erhöht hat
         if (current_lp_core_value == last_lp_core_value) {
             // Zähler hat sich nicht erhöht → LP-Core läuft nicht mehr!
             ESP_LOGW(TAG, "WARNUNG: LP-Core Watchdog-Timeout! (Zähler: %lu, erwartet: > %lu)", 
                      current_lp_core_value, last_lp_core_value);
-                ESP_LOGI(TAG, "Setze lp_core_running auf 0 und versuche LP-Core neu zu starten...");
+                ESP_LOGI(TAG, "Setze ulp_lp_core_running auf 0 und versuche LP-Core neu zu starten...");
             
-                // Setze lp_core_running auf 0, damit wir in die Start-Schleife kommen
-                lp_core_running = 0;
+                // Setze ulp_lp_core_running auf 0, damit wir in die Start-Schleife kommen
+                *(volatile uint32_t *)&ulp_lp_core_running = 0;
                 retry_count = 0;  // Reset Retry-Counter für Neustart-Versuche
                 continue;  // Gehe zurück in Start-Schleife
             } else {
                 // Zähler hat sich erhöht → LP-Core läuft korrekt
-            ESP_LOGI(TAG, "LP-Core Watchdog OK (Zähler: %lu → %lu)", 
-                     last_lp_core_value, current_lp_core_value);
+            // ESP_LOGI(TAG, "LP-Core Watchdog OK (Zähler: %lu → %lu)", 
+            //         last_lp_core_value, current_lp_core_value);
             last_lp_core_value = current_lp_core_value;
                 retry_count = 0;  // Reset Retry-Counter bei erfolgreichem Betrieb
             }
@@ -635,14 +717,14 @@ void init_nvs_partitions(bool is_power_on) {
 }
 
 // ============================================
-// ring_idx und pulse_counter initialisieren (kombiniert)
+// ring_idx und ulp_pulse_counter initialisieren (kombiniert)
 // ============================================
-// Initialisiert ring_idx und pulse_counter aus RTC-RAM oder NVS-Ring-Speicher
+// Initialisiert ring_idx und ulp_pulse_counter aus RTC-RAM oder NVS-Ring-Speicher
 // ring_idx: Ring-Buffer-Index (im RTC-RAM, wird bei Power-On/ESP.restart() neu ermittelt)
 //           Bei Deep-Sleep-Wake-up sollte ring_idx noch im RTC-RAM vorhanden sein
-// pulse_counter: Puls-Zähler (im RTC-RAM, wird bei Power-On/ESP.restart() aus Ring-Speicher geladen)
+// ulp_pulse_counter: Puls-Zähler (im RTC-RAM, wird bei Power-On/ESP.restart() aus Ring-Speicher geladen)
 //                Bei Deep-Sleep-Wake-up ist RTC-RAM noch vorhanden und muss NICHT geladen werden
-void init_ring_buffer_and_pulse_counter(bool is_power_on) {
+void init_ring_buffer_and_ulp_pulse_counter(bool is_power_on) {
     // ring_idx initialisieren
     // Bei Power-On oder wenn ring_idx ungültig: aus Ring-Speicher ermitteln
     if (is_power_on || ring_idx >= RING_BUFFER_SIZE) {
@@ -661,26 +743,27 @@ void init_ring_buffer_and_pulse_counter(bool is_power_on) {
         ESP_LOGI(TAG, "ring_idx aus RTC-RAM: %lu", ring_idx);
     }
     
-    // pulse_counter initialisieren
-    // Beim ersten Boot (Power-On) oder nach ESP.restart(): pulse_counter aus Ring-Speicher laden
-    // WICHTIG: RTC-RAM ist bei Power-On/ESP.restart() leer (pulse_counter == 0)
+    // ulp_pulse_counter initialisieren
+    // Beim ersten Boot (Power-On) oder nach ESP.restart(): ulp_pulse_counter aus Ring-Speicher laden
+    // WICHTIG: RTC-RAM ist bei Power-On/ESP.restart() leer (ulp_pulse_counter == 0)
     // Bei Deep-Sleep-Wake-up ist RTC-RAM noch vorhanden und muss NICHT geladen werden
-    if (pulse_counter == 0) {
+    uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
+    if (current_pulse == 0) {
         uint32_t max_index = 0;
         uint32_t max_pulse = find_max_pulse_and_index_from_nvs(&max_index);
         if (max_pulse > 0) {
-            pulse_counter = max_pulse;
-            ESP_LOGI(TAG, "pulse_counter aus Ring-Speicher: %lu", pulse_counter);
+            *(volatile uint32_t *)&ulp_pulse_counter = max_pulse;
+            ESP_LOGI(TAG, "ulp_pulse_counter aus Ring-Speicher: %lu", max_pulse);
         } else {
-            pulse_counter = 0;
-            ESP_LOGI(TAG, "pulse_counter auf 0 initialisiert (keine Ring-Speicher-Daten)");
+            *(volatile uint32_t *)&ulp_pulse_counter = 0;
+            ESP_LOGI(TAG, "ulp_pulse_counter auf 0 initialisiert (keine Ring-Speicher-Daten)");
         }
     } else {
         // RTC-RAM noch vorhanden (bei Deep-Sleep-Wake-up)
         if (!is_power_on) {
-            ESP_LOGI(TAG, "pulse_counter aus RTC-RAM: %lu (RTC-RAM behält Daten bei Deep-Sleep-Wake-up)", pulse_counter);
+            ESP_LOGI(TAG, "ulp_pulse_counter aus RTC-RAM: %lu (RTC-RAM behält Daten bei Deep-Sleep-Wake-up)", current_pulse);
         } else {
-            ESP_LOGI(TAG, "pulse_counter aus RTC-RAM: %lu", pulse_counter);
+            ESP_LOGI(TAG, "ulp_pulse_counter aus RTC-RAM: %lu", current_pulse);
         }
     }
 }
@@ -756,10 +839,10 @@ void shutdown_resources() {
 void perform_reboot(const char* reason) {
     ESP_LOGI(TAG, "Reboot wird durchgeführt: %s", reason);
     
-    // WICHTIG: pulse_counter vor esp_restart() in Ring-Speicher speichern
+    // WICHTIG: ulp_pulse_counter vor esp_restart() in Ring-Speicher speichern
     // (RTC-RAM wird bei esp_restart() zurückgesetzt)
-    ESP_LOGI(TAG, "Speichere pulse_counter in Ring-Speicher vor Reboot...");
-    write_pulse_counter_to_ring_buffer();
+    ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher vor Reboot...");
+    write_ulp_pulse_counter_to_ring_buffer();
     
     // Ressourcen sauber beenden
     shutdown_resources();
@@ -1761,19 +1844,22 @@ const char* processor_get_value(const char* var) {
     if (strcmp(var, "project_version") == 0) {
         return PROJECT_VERSION;
     }
-    if (strcmp(var, "pulse_counter") == 0) {
+    if (strcmp(var, "ulp_pulse_counter") == 0) {
         // Formatierung: 7 Stellen mit führenden Nullen (99999.99 = 9999999)
-        snprintf(buffer, sizeof(buffer), "%07lu", pulse_counter);
+        uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
+        snprintf(buffer, sizeof(buffer), "%07lu", current_pulse);
         return buffer;
     }
     if (strcmp(var, "pulse_counter_left") == 0) {
         // Linke 5 Stellen für CSS-Formatierung (Vorkommastellen)
-        snprintf(buffer, sizeof(buffer), "%05lu", pulse_counter / 100);
+        uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
+        snprintf(buffer, sizeof(buffer), "%05lu", current_pulse / 100);
         return buffer;
     }
     if (strcmp(var, "pulse_counter_right") == 0) {
         // Rechte 2 Stellen für CSS-Formatierung (Nachkommastellen)
-        snprintf(buffer, sizeof(buffer), "%02lu", pulse_counter % 100);
+        uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
+        snprintf(buffer, sizeof(buffer), "%02lu", current_pulse % 100);
         return buffer;
     }
     if (strcmp(var, "system_time") == 0) {
@@ -2034,8 +2120,9 @@ static esp_err_t reading_handler(httpd_req_t *req) {
     last_web_activity_us = esp_timer_get_time();
     
     // Format: XXXXX.XX (5 Vorkommastellen + Punkt + 2 Nachkommastellen)
-    uint32_t vorkommastellen = pulse_counter / 100;
-    uint32_t nachkommastellen = pulse_counter % 100;
+    uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
+    uint32_t vorkommastellen = current_pulse / 100;
+    uint32_t nachkommastellen = current_pulse % 100;
     
     char reading[9];
     snprintf(reading, sizeof(reading), "%05lu.%02lu", vorkommastellen, nachkommastellen);
@@ -2567,7 +2654,7 @@ static esp_err_t counter_set_handler(httpd_req_t *req) {
         return ESP_OK;
     }
     
-    uint32_t old_value = pulse_counter;
+    uint32_t old_value = *(volatile uint32_t *)&ulp_pulse_counter;
     ESP_LOGI(TAG, "Zählerstand manuell gesetzt: %lu → %lu", old_value, new_value);
     
     // Alten Wert in Ring-Speicher schreiben (falls > 0 und > max_pulse)
@@ -2578,12 +2665,12 @@ static esp_err_t counter_set_handler(httpd_req_t *req) {
         
         if (old_value > max_pulse) {
             ESP_LOGI(TAG, "Alter Wert (%lu) > max_pulse (%lu) → schreibe in Ring-Speicher", old_value, max_pulse);
-            write_pulse_counter_to_ring_buffer();
+            write_ulp_pulse_counter_to_ring_buffer();
         }
     }
     
     // Neuen Wert in RTC-RAM setzen
-    pulse_counter = new_value;
+    *(volatile uint32_t *)&ulp_pulse_counter = new_value;
     
     // Wenn neuer Wert < alter Wert: Stelle sicher, dass neuer Wert der höchste im Ring-Speicher ist
     if (new_value < old_value) {
@@ -3098,10 +3185,10 @@ extern "C" void app_main(void) {
             ESP_LOGW(TAG, "Spannung: %.2f V (Minimum: %.2f V)", 
                      battery_voltage, BATTERY_VOLTAGE_20);
             
-                // Vor Deep-Sleep: pulse_counter prüfen und ggf. in Ring-Speicher schreiben
+                // Vor Deep-Sleep: ulp_pulse_counter prüfen und ggf. in Ring-Speicher schreiben
             // (bei Akku-Low kann RTC-RAM verloren gehen)
-            ESP_LOGI(TAG, "Speichere pulse_counter in Ring-Speicher vor Deep-Sleep (Akku-Low)...");
-            write_pulse_counter_to_ring_buffer();
+            ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher vor Deep-Sleep (Akku-Low)...");
+            write_ulp_pulse_counter_to_ring_buffer();
             
             // Deep-Sleep mit GPIO-Wake-up (Taster A) - spart Energie und schützt Akku
                 // Timer-Wake-up: Bei USB immer aktiv, sonst nur wenn Spannung > BATTERY_VOLTAGE_PROTECTION
@@ -3124,7 +3211,7 @@ extern "C" void app_main(void) {
         }
             
             // LP-Core Watchdog Task starten (asynchron)
-            // Der Task prüft automatisch lp_core_running und startet LP-Core bei Bedarf
+            // Der Task prüft automatisch ulp_lp_core_running und startet LP-Core bei Bedarf
         // WICHTIG: Task wird sowohl bei Power-On als auch bei Deep-Sleep-Wake-up gestartet
             xTaskCreate(
                 lp_core_watchdog_task,      // Task-Funktion
@@ -3136,17 +3223,17 @@ extern "C" void app_main(void) {
             );
             ESP_LOGI(TAG, "LP-Core Watchdog Task gestartet");
             
-        // ring_idx und pulse_counter initialisieren (kombiniert)
+        // ring_idx und ulp_pulse_counter initialisieren (kombiniert)
         // ring_idx: Ring-Buffer-Index (aus RTC-RAM oder Ring-Speicher)
-        // pulse_counter: Puls-Zähler (aus RTC-RAM oder Ring-Speicher)
-        init_ring_buffer_and_pulse_counter(isPowerOn);
+        // ulp_pulse_counter: Puls-Zähler (aus RTC-RAM oder Ring-Speicher)
+        init_ring_buffer_and_ulp_pulse_counter(isPowerOn);
         
         // 1. Batteriespannung-Test und ggf. in Ring-Speicher schreiben
         // < 30% ODER USB: Schreibe in Ring-Speicher (RTC-RAM könnte verloren gehen)
         // >= 30%: Kein Schreiben (RTC-RAM bleibt erhalten)
         if (battery_voltage < BATTERY_VOLTAGE_30 || battery_voltage < USB_DETECTION_THRESHOLD) {
-            ESP_LOGI(TAG, "Speichere pulse_counter in Ring-Speicher (< 30%% oder USB)...");
-            write_pulse_counter_to_ring_buffer();
+            ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher (< 30%% oder USB)...");
+            write_ulp_pulse_counter_to_ring_buffer();
         }
         
         // 2. Config laden (idempotent: prüft intern, ob bereits geladen)
@@ -3282,10 +3369,10 @@ void web_timeout_task(void *parameter) {
             // < 30% ODER USB: Schreibe in Ring-Speicher (RTC-RAM könnte verloren gehen)
             // >= 30%: Kein Schreiben (RTC-RAM bleibt erhalten)
             if (battery_voltage < BATTERY_VOLTAGE_30 || battery_voltage < USB_DETECTION_THRESHOLD) {
-                ESP_LOGI(TAG, "Speichere pulse_counter in Ring-Speicher vor Deep-Sleep (< 30%% oder USB)...");
-                write_pulse_counter_to_ring_buffer();
+                ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher vor Deep-Sleep (< 30%% oder USB)...");
+                write_ulp_pulse_counter_to_ring_buffer();
             } else {
-                ESP_LOGI(TAG, "Akku-Spannung OK (>= 30%%) → pulse_counter bleibt im RTC-RAM (kein Schreiben nötig)");
+                ESP_LOGI(TAG, "Akku-Spannung OK (>= 30%%) → ulp_pulse_counter bleibt im RTC-RAM (kein Schreiben nötig)");
             }
             
             // Timer-Wake-up: Bei USB-Stromversorgung immer aktivieren

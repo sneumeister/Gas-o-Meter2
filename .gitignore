@@ -10,10 +10,7 @@ data/bootstrap.min.css
 .vscode/launch.json
 .vscode/ipch
 .cursor
-docs/CHAT_HISTORY*
-docs/CONVERSION*
-docs/DETAILED*
-docs/FUNCTION_C*
+docs/*.md
 
 # Sensible Konfiguration
 data/config.json

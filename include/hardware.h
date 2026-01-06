@@ -37,6 +37,9 @@
 #define REED_GPIO          2   // Reed-Kontakt (externer Pull-Up, active-low)
 #define BUTTON_B_GPIO      21  // Taster B (Software Pull-Up, active-low gegen Masse)
 
+// REED-Kontakt Konfiguration
+#define REED_MIN_PULSE_DURATION_US  (3 * 1000000ULL)  // Minimale Puls-Länge: 3 Sekunden (in Mikrosekunden)
+
 // Interne LED (XIAO ESP32C6: GPIO15)
 // HINWEIS: Bei einigen Boards ist die LED active-low (ON = LOW, OFF = HIGH)
 // Falls die LED nicht leuchtet, versuchen Sie LOW statt HIGH
@@ -98,7 +101,7 @@
 // ADC-Korrekturfaktor (Offset-Korrektur)
 // Gemessen: 3.3V Eingang → 3.25V angezeigt → Offset: +0.05V
 //#define ADC_VOLTAGE_OFFSET     0.00f  // Offset-Korrektur in Volt (empirisch bestimmt)
-#define ADC_VOLTAGE_OFFSET     -1.00f  
+#define ADC_VOLTAGE_OFFSET     -0.05f  
 
 // ADC-Konfiguration für ADC_ATTEN_DB_12
 // Gemessen: 3.3V Eingang → 1.65V am ADC → ADC-Wert 1595
@@ -138,7 +141,8 @@
 #define AP_IP_ADDRESS_4       1
 
 // LP-Core Konfiguration
-#define LP_CORE_INTERVAL_US   2500000         // LP-Core Schleifen-Intervall: 2.5s (in Mikrosekunden)
+// LP-Core Intervall = REED_MIN_PULSE_DURATION - 0.5 Sekunden (um sicherzustellen, dass Pulse erkannt werden)
+#define LP_CORE_INTERVAL_US   (REED_MIN_PULSE_DURATION_US - (500 * 1000ULL))  // 0.5 Sekunden = 500ms = 500000µs
 #define LP_CORE_WATCHDOG_MS   ((LP_CORE_INTERVAL_US / 1000) + 500)  // Watchdog-Timeout: LP_CORE_INTERVAL + 500ms
 
 // ============================================
