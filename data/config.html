@@ -39,6 +39,26 @@
         .form-label {
             font-weight: bold;
         }
+        /* Dropdown-Icon für Select-Felder */
+        .select-with-icon {
+            position: relative;
+        }
+        .select-with-icon::after {
+            content: "▼";
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            pointer-events: none;
+            color: #666;
+            font-size: 0.8em;
+        }
+        .select-with-icon select {
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            padding-right: 35px;
+        }
     </style>
 </head>
 <body>
@@ -120,6 +140,18 @@
             <div class="mb-3">
                 <label for="wakeup_minutes" class="form-label">Wake-up Intervall (Minuten)</label>
                 <input type="number" class="form-control" id="wakeup_minutes" name="wakeup_minutes" value="`wakeup_minutes`" min="1" max="60" required>
+            </div>
+            
+            <div class="mb-3">
+                <label for="transfer_mode" class="form-label">Datenübertragung</label>
+                <div class="select-with-icon">
+                    <select class="form-control" id="transfer_mode" name="transfer_mode" required>
+                        <option value="none" `transfer_mode_none`>Keine Übertragung</option>
+                        <option value="zigbee" `transfer_mode_zigbee`>ZigBee</option>
+                        <option value="ble" `transfer_mode_ble`>BLE (geplant)</option>
+                        <option value="mqtt" `transfer_mode_mqtt`>MQTT via WiFi (geplant)</option>
+                    </select>
+                </div>
             </div>
             
             <div class="mb-3">

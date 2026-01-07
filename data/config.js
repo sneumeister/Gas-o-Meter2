@@ -488,6 +488,7 @@ function saveConfig() {
     // Sammle alle Formular-Daten mit Validierung
     const hostname = document.getElementById('hostname').value.trim();
     const wakeupMinutesStr = document.getElementById('wakeup_minutes').value.trim();
+    const transferMode = document.getElementById('transfer_mode').value.trim();
     const transferMinutesStr = document.getElementById('transfer_minutes').value.trim();
     const adcOffsetStr = document.getElementById('adc_voltage_offset').value.trim();
     const ntpServer = document.getElementById('ntp_server').value.trim();
@@ -503,6 +504,14 @@ function saveConfig() {
     if (isNaN(wakeup_minutes) || wakeup_minutes < 1 || wakeup_minutes > 60) {
         alert("Bitte geben Sie ein gültiges Wake-up Intervall zwischen 1 und 60 Minuten an.");
         document.getElementById('wakeup_minutes').focus();
+        return;
+    }
+    
+    // Validierung: Transfer-Mode
+    if (transferMode.length === 0 || 
+        (transferMode !== 'none' && transferMode !== 'zigbee' && transferMode !== 'ble' && transferMode !== 'mqtt')) {
+        alert("Bitte wählen Sie einen gültigen Transfer-Mode aus.");
+        document.getElementById('transfer_mode').focus();
         return;
     }
     
@@ -539,6 +548,7 @@ function saveConfig() {
         hostname: hostname,
         adminpass: adminpass,
         wakeup_minutes: wakeup_minutes,
+        transfer_mode: transferMode,
         transfer_minutes: transfer_minutes,
         adc_voltage_offset: adc_voltage_offset,
         ntp_server: ntpServer,

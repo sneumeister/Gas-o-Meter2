@@ -112,6 +112,7 @@ typedef struct {
     uint8_t wifi_count;  // Anzahl der gespeicherten Credentials (0, 1 oder 2)
     uint8_t wakeup_minutes;
     uint8_t transfer_minutes;
+    char transfer_mode[16];  // "zigbee", "ble", "mqtt", "none" (Default: "none")
     float adc_voltage_offset;  // ADC-Offset-Korrektur in Volt (aus config.json oder hardware.h)
     char ntp_server[64];       // NTP-Server (aus config.json oder hardware.h)
     bool config_loaded;
@@ -124,6 +125,7 @@ RTC_DATA_ATTR config_rtc_t config_rtc = {
     .wifi_count = 0,
     .wakeup_minutes = DEFAULT_WAKEUP_INTERVAL_MIN,
     .transfer_minutes = DEFAULT_TRANSFER_INTERVAL_X * DEFAULT_WAKEUP_INTERVAL_MIN,
+    .transfer_mode = "none",  // Default: keine Übertragung
     .adc_voltage_offset = ADC_VOLTAGE_OFFSET,  // Default aus hardware.h
     .ntp_server = DEFAULT_NTP_SERVER,          // Default aus hardware.h
     .config_loaded = false
@@ -644,8 +646,9 @@ bool check_and_init_pulse_ring_nvs() {
     }
     
     if (stored_version != RING_BUFFER_VERSION) {
-        // Versionsnummer stimmt nicht überein → Initialisierung erforderlich
-        ESP_LOGI(TAG, "Versionsnummer stimmt nicht überein (gespeichert: %lu, erwartet: %lu) → Initialisierung erforderlich",
+        // Versionsnummer stimmt nicht überein → Code wurde neu hochgeladen
+        // Ring-Speicher löschen und auf 0 setzen (neuer Code = neuer Start)
+        ESP_LOGI(TAG, "Versionsnummer stimmt nicht überein (gespeichert: %lu, erwartet: %lu) → Code-Upload erkannt, Ring-Speicher wird gelöscht",
                  stored_version, RING_BUFFER_VERSION);
         return init_pulse_ring_nvs();
     }
@@ -744,27 +747,28 @@ void init_ring_buffer_and_ulp_pulse_counter(bool is_power_on) {
     }
     
     // ulp_pulse_counter initialisieren
-    // Beim ersten Boot (Power-On) oder nach ESP.restart(): ulp_pulse_counter aus Ring-Speicher laden
-    // WICHTIG: RTC-RAM ist bei Power-On/ESP.restart() leer (ulp_pulse_counter == 0)
-    // Bei Deep-Sleep-Wake-up ist RTC-RAM noch vorhanden und muss NICHT geladen werden
+    // WICHTIG: Bei Power-On ist RTC-RAM IMMER leer/uninitialisiert (auch wenn zufällige Werte drin stehen)
+    //          → IMMER aus NVS laden
+    //          Bei Deep-Sleep-Wake-up ist RTC-RAM noch vorhanden → aus RTC-RAM verwenden
     uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
-    if (current_pulse == 0) {
+    
+    if (is_power_on) {
+        // Power-On: RTC-RAM ist leer/uninitialisiert → IMMER aus NVS laden
         uint32_t max_index = 0;
         uint32_t max_pulse = find_max_pulse_and_index_from_nvs(&max_index);
+        
         if (max_pulse > 0) {
+            // Ring-Speicher enthält Daten → verwende diesen Wert
             *(volatile uint32_t *)&ulp_pulse_counter = max_pulse;
-            ESP_LOGI(TAG, "ulp_pulse_counter aus Ring-Speicher: %lu", max_pulse);
+            ESP_LOGI(TAG, "ulp_pulse_counter aus Ring-Speicher: %lu (Power-On, RTC-RAM war: %lu)", max_pulse, current_pulse);
         } else {
+            // Ring-Speicher ist leer (z.B. nach Code-Upload mit Versionsmismatch)
             *(volatile uint32_t *)&ulp_pulse_counter = 0;
-            ESP_LOGI(TAG, "ulp_pulse_counter auf 0 initialisiert (keine Ring-Speicher-Daten)");
+            ESP_LOGI(TAG, "ulp_pulse_counter auf 0 initialisiert (Power-On, keine Ring-Speicher-Daten, RTC-RAM war: %lu)", current_pulse);
         }
     } else {
-        // RTC-RAM noch vorhanden (bei Deep-Sleep-Wake-up)
-        if (!is_power_on) {
-            ESP_LOGI(TAG, "ulp_pulse_counter aus RTC-RAM: %lu (RTC-RAM behält Daten bei Deep-Sleep-Wake-up)", current_pulse);
-        } else {
-            ESP_LOGI(TAG, "ulp_pulse_counter aus RTC-RAM: %lu", current_pulse);
-        }
+        // Deep-Sleep-Wake-up: RTC-RAM ist noch vorhanden → aus RTC-RAM verwenden
+        ESP_LOGI(TAG, "ulp_pulse_counter aus RTC-RAM: %lu (RTC-RAM behält Daten bei Deep-Sleep-Wake-up)", current_pulse);
     }
 }
 
@@ -1173,6 +1177,27 @@ bool load_config() {
         config_rtc.ntp_server[sizeof(config_rtc.ntp_server) - 1] = '\0';
     }
     
+    // Transfer-Mode: aus config.json oder Default "none"
+    if (doc["transfer_mode"].is<const char*>()) {
+        const char* transfer_mode = doc["transfer_mode"].as<const char*>();
+        // Validiere Transfer-Mode (nur gültige Werte erlauben)
+        if (strcmp(transfer_mode, "zigbee") == 0 || 
+            strcmp(transfer_mode, "ble") == 0 || 
+            strcmp(transfer_mode, "mqtt") == 0 || 
+            strcmp(transfer_mode, "none") == 0) {
+            strncpy(config_rtc.transfer_mode, transfer_mode, sizeof(config_rtc.transfer_mode) - 1);
+            config_rtc.transfer_mode[sizeof(config_rtc.transfer_mode) - 1] = '\0';
+        } else {
+            // Ungültiger Wert → Default "none"
+            strncpy(config_rtc.transfer_mode, "none", sizeof(config_rtc.transfer_mode) - 1);
+            config_rtc.transfer_mode[sizeof(config_rtc.transfer_mode) - 1] = '\0';
+        }
+    } else {
+        // Kein Transfer-Mode in JSON → Default "none"
+        strncpy(config_rtc.transfer_mode, "none", sizeof(config_rtc.transfer_mode) - 1);
+        config_rtc.transfer_mode[sizeof(config_rtc.transfer_mode) - 1] = '\0';
+    }
+    
     // WiFi-Credentials laden (max. 2 Paare)
     config_rtc.wifi_count = 0;
     if (doc["wifiCredentials"].is<JsonArray>()) {
@@ -1296,6 +1321,23 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
         }
     }
     
+    if (doc["transfer_mode"].is<const char*>()) {
+        const char* transfer_mode = doc["transfer_mode"].as<const char*>();
+        if (strcmp(transfer_mode, "zigbee") != 0 && 
+            strcmp(transfer_mode, "ble") != 0 && 
+            strcmp(transfer_mode, "mqtt") != 0 && 
+            strcmp(transfer_mode, "none") != 0) {
+            ESP_LOGE(TAG, "FEHLER: Transfer-Mode ungültig (%s, muss zigbee/ble/mqtt/none sein)", transfer_mode);
+            if (errorMessage != nullptr) {
+                strncpy(errorMessage, "Fehler: Transfer-Mode ungültig (muss zigbee/ble/mqtt/none sein)", 255);
+            }
+            return false;
+        }
+        // Transfer-Mode ist gültig → in config_rtc speichern
+        strncpy(config_rtc.transfer_mode, transfer_mode, sizeof(config_rtc.transfer_mode) - 1);
+        config_rtc.transfer_mode[sizeof(config_rtc.transfer_mode) - 1] = '\0';
+    }
+    
     if (doc["adc_voltage_offset"].is<float>()) {
         float adc_voltage_offset = doc["adc_voltage_offset"].as<float>();
         // Keine strenge Begrenzung, aber prüfe auf sinnvolle Werte (z.B. -10V bis +10V)
@@ -1391,6 +1433,7 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
     newDoc["adminpass"] = config_rtc.adminpass;
     newDoc["wakeup_minutes"] = config_rtc.wakeup_minutes;
     newDoc["tarnsfer_minutes"] = config_rtc.transfer_minutes;  // Tippfehler in JSON beibehalten
+    newDoc["transfer_mode"] = config_rtc.transfer_mode;
     newDoc["adc_voltage_offset"] = config_rtc.adc_voltage_offset;
     newDoc["ntp_server"] = config_rtc.ntp_server;
     
@@ -1886,6 +1929,22 @@ const char* processor_get_value(const char* var) {
     if (strcmp(var, "wakeup_minutes") == 0) {
         snprintf(buffer, sizeof(buffer), "%d", config_rtc.wakeup_minutes);
         return buffer;
+    }
+    if (strcmp(var, "transfer_mode") == 0) {
+        snprintf(buffer, sizeof(buffer), "%s", config_rtc.transfer_mode);
+        return buffer;
+    }
+    if (strcmp(var, "transfer_mode_none") == 0) {
+        return (strcmp(config_rtc.transfer_mode, "none") == 0) ? "selected" : "";
+    }
+    if (strcmp(var, "transfer_mode_zigbee") == 0) {
+        return (strcmp(config_rtc.transfer_mode, "zigbee") == 0) ? "selected" : "";
+    }
+    if (strcmp(var, "transfer_mode_ble") == 0) {
+        return (strcmp(config_rtc.transfer_mode, "ble") == 0) ? "selected" : "";
+    }
+    if (strcmp(var, "transfer_mode_mqtt") == 0) {
+        return (strcmp(config_rtc.transfer_mode, "mqtt") == 0) ? "selected" : "";
     }
     if (strcmp(var, "wifiCredentialsData") == 0) {
         // WiFi-Credentials als JSON für JavaScript
@@ -2476,6 +2535,9 @@ static esp_err_t config_save_handler(httpd_req_t *req) {
     }
     if (doc["transfer_minutes"].is<uint8_t>()) {
         ESP_LOGI(TAG, "  transfer_minutes: %d", doc["transfer_minutes"].as<uint8_t>());
+    }
+    if (doc["transfer_mode"].is<const char*>()) {
+        ESP_LOGI(TAG, "  transfer_mode: %s", doc["transfer_mode"].as<const char*>());
     }
     if (doc["adc_voltage_offset"].is<float>()) {
         ESP_LOGI(TAG, "  adc_voltage_offset: %.3f V", doc["adc_voltage_offset"].as<float>());
