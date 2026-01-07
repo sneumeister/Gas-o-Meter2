@@ -644,8 +644,9 @@ bool check_and_init_pulse_ring_nvs() {
     }
     
     if (stored_version != RING_BUFFER_VERSION) {
-        // Versionsnummer stimmt nicht überein → Initialisierung erforderlich
-        ESP_LOGI(TAG, "Versionsnummer stimmt nicht überein (gespeichert: %lu, erwartet: %lu) → Initialisierung erforderlich",
+        // Versionsnummer stimmt nicht überein → Code wurde neu hochgeladen
+        // Ring-Speicher löschen und auf 0 setzen (neuer Code = neuer Start)
+        ESP_LOGI(TAG, "Versionsnummer stimmt nicht überein (gespeichert: %lu, erwartet: %lu) → Code-Upload erkannt, Ring-Speicher wird gelöscht",
                  stored_version, RING_BUFFER_VERSION);
         return init_pulse_ring_nvs();
     }
@@ -744,27 +745,28 @@ void init_ring_buffer_and_ulp_pulse_counter(bool is_power_on) {
     }
     
     // ulp_pulse_counter initialisieren
-    // Beim ersten Boot (Power-On) oder nach ESP.restart(): ulp_pulse_counter aus Ring-Speicher laden
-    // WICHTIG: RTC-RAM ist bei Power-On/ESP.restart() leer (ulp_pulse_counter == 0)
-    // Bei Deep-Sleep-Wake-up ist RTC-RAM noch vorhanden und muss NICHT geladen werden
+    // WICHTIG: Bei Power-On ist RTC-RAM IMMER leer/uninitialisiert (auch wenn zufällige Werte drin stehen)
+    //          → IMMER aus NVS laden
+    //          Bei Deep-Sleep-Wake-up ist RTC-RAM noch vorhanden → aus RTC-RAM verwenden
     uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
-    if (current_pulse == 0) {
+    
+    if (is_power_on) {
+        // Power-On: RTC-RAM ist leer/uninitialisiert → IMMER aus NVS laden
         uint32_t max_index = 0;
         uint32_t max_pulse = find_max_pulse_and_index_from_nvs(&max_index);
+        
         if (max_pulse > 0) {
+            // Ring-Speicher enthält Daten → verwende diesen Wert
             *(volatile uint32_t *)&ulp_pulse_counter = max_pulse;
-            ESP_LOGI(TAG, "ulp_pulse_counter aus Ring-Speicher: %lu", max_pulse);
+            ESP_LOGI(TAG, "ulp_pulse_counter aus Ring-Speicher: %lu (Power-On, RTC-RAM war: %lu)", max_pulse, current_pulse);
         } else {
+            // Ring-Speicher ist leer (z.B. nach Code-Upload mit Versionsmismatch)
             *(volatile uint32_t *)&ulp_pulse_counter = 0;
-            ESP_LOGI(TAG, "ulp_pulse_counter auf 0 initialisiert (keine Ring-Speicher-Daten)");
+            ESP_LOGI(TAG, "ulp_pulse_counter auf 0 initialisiert (Power-On, keine Ring-Speicher-Daten, RTC-RAM war: %lu)", current_pulse);
         }
     } else {
-        // RTC-RAM noch vorhanden (bei Deep-Sleep-Wake-up)
-        if (!is_power_on) {
-            ESP_LOGI(TAG, "ulp_pulse_counter aus RTC-RAM: %lu (RTC-RAM behält Daten bei Deep-Sleep-Wake-up)", current_pulse);
-        } else {
-            ESP_LOGI(TAG, "ulp_pulse_counter aus RTC-RAM: %lu", current_pulse);
-        }
+        // Deep-Sleep-Wake-up: RTC-RAM ist noch vorhanden → aus RTC-RAM verwenden
+        ESP_LOGI(TAG, "ulp_pulse_counter aus RTC-RAM: %lu (RTC-RAM behält Daten bei Deep-Sleep-Wake-up)", current_pulse);
     }
 }
 
