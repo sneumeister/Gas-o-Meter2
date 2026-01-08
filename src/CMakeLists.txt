@@ -13,6 +13,8 @@ get_filename_component(INCLUDE_DIR "${PROJECT_DIR}/include" ABSOLUTE)
 
 idf_component_register(
     SRCS "main_idf.cpp"
+          "transfer.cpp"
+          "transfer_zigbee.cpp"
     INCLUDE_DIRS "${INCLUDE_DIR}"
     REQUIRES 
         mdns                    # Externe Komponente via Component Manager (idf_component.yml)
@@ -27,6 +29,7 @@ idf_component_register(
         driver
         freertos
         ulp                     # ULP-Header für ulp_lp_core.h APIs
+        # esp_zigbee_sdk        # Wird später hinzugefügt (über idf_component.yml)
 )
 
 # LP-Core Binary einbetten

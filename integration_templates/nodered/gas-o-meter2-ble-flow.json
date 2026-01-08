@@ -1,0 +1,149 @@
+[
+    {
+        "id": "gas-o-meter2-ble-flow",
+        "type": "tab",
+        "label": "Gas-O-Meter2 BLE",
+        "disabled": false,
+        "info": "BLE Flow für Gas-O-Meter2 Datenübertragung\n\n**Voraussetzungen:**\n- node-red-contrib-noble-bluetooth\n- BLE-Device-Name: 'Gas-O-Meter2'\n\n**Anpassungen:**\n- BLE-Device-Name in 'BLE Scanner' Node ändern\n- MQTT-Topics anpassen (falls verwendet)\n- Datenbank-Integration konfigurieren (optional)",
+        "env": []
+    },
+    {
+        "id": "ble-scanner",
+        "type": "noble-bluetooth",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "BLE Scanner",
+        "deviceName": "Gas-O-Meter2",
+        "serviceUuid": "",
+        "characteristicUuid": "",
+        "x": 120,
+        "y": 100,
+        "wires": [["data-parser"]]
+    },
+    {
+        "id": "data-parser",
+        "type": "function",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "Parse BLE Data",
+        "func": "// Parse BLE Characteristic Data\n// Format: JSON mit {pulse_counter, battery_percent, firmware_version}\n\nlet data = {};\n\ntry {\n    if (msg.payload) {\n        if (typeof msg.payload === 'string') {\n            data = JSON.parse(msg.payload);\n        } else if (typeof msg.payload === 'object') {\n            data = msg.payload;\n        }\n    }\n    \n    // Struktur für weitere Nodes\n    msg.payload = {\n        gas_counter: data.pulse_counter || 0,\n        battery: data.battery_percent || 0,\n        firmware_version: data.firmware_version || 'unknown',\n        timestamp: new Date().toISOString()\n    };\n    \n    return msg;\n} catch (error) {\n    node.error('Parse Error: ' + error.message, msg);\n    return null;\n}",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 320,
+        "y": 100,
+        "wires": [["mqtt-publisher", "database-writer", "dashboard"]]
+    },
+    {
+        "id": "mqtt-publisher",
+        "type": "mqtt out",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "MQTT Publisher",
+        "topic": "gas-o-meter2/data",
+        "qos": "1",
+        "retain": "true",
+        "broker": "",
+        "x": 540,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "database-writer",
+        "type": "function",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "Database Writer",
+        "func": "// Optional: Datenbank-Integration\n// Beispiel für SQLite oder InfluxDB\n\n// TODO: Implementierung je nach verwendeter Datenbank\n// Siehe node-red-node-sqlite oder node-red-contrib-influxdb\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 540,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "dashboard",
+        "type": "ui_base",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "Dashboard",
+        "theme": {
+            "name": "theme-light",
+            "lightMode": true,
+            "darkMode": false
+        },
+        "x": 540,
+        "y": 140,
+        "wires": [
+            [
+                {
+                    "id": "dashboard-gauge",
+                    "type": "ui_gauge",
+                    "z": "gas-o-meter2-ble-flow",
+                    "name": "Gas Counter",
+                    "group": "dashboard-group",
+                    "order": 1,
+                    "width": 0,
+                    "height": 0,
+                    "gtype": "gage",
+                    "title": "Gas Counter",
+                    "label": "pulses",
+                    "format": "{{value}}",
+                    "min": 0,
+                    "max": 1000000,
+                    "colors": [
+                        "#00b500",
+                        "#e6e600",
+                        "#ca3838"
+                    ],
+                    "seg1": "",
+                    "seg2": "",
+                    "x": 760,
+                    "y": 100,
+                    "wires": []
+                },
+                {
+                    "id": "dashboard-battery",
+                    "type": "ui_gauge",
+                    "z": "gas-o-meter2-ble-flow",
+                    "name": "Battery",
+                    "group": "dashboard-group",
+                    "order": 2,
+                    "width": 0,
+                    "height": 0,
+                    "gtype": "gage",
+                    "title": "Battery",
+                    "label": "%",
+                    "format": "{{value}}%",
+                    "min": 0,
+                    "max": 100,
+                    "colors": [
+                        "#ca3838",
+                        "#e6e600",
+                        "#00b500"
+                    ],
+                    "seg1": "",
+                    "seg2": "",
+                    "x": 760,
+                    "y": 140,
+                    "wires": []
+                }
+            ]
+        ]
+    },
+    {
+        "id": "dashboard-group",
+        "type": "ui_group",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "Gas-O-Meter2",
+        "tab": "dashboard-tab",
+        "order": 1,
+        "disp": true,
+        "width": "6",
+        "collapse": false
+    },
+    {
+        "id": "dashboard-tab",
+        "type": "ui_tab",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "Gas-O-Meter2",
+        "icon": "dashboard",
+        "order": 1,
+        "disabled": false,
+        "hidden": false
+    }
+]

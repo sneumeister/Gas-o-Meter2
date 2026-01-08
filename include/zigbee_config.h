@@ -1,0 +1,129 @@
+#ifndef ZIGBEE_CONFIG_H
+#define ZIGBEE_CONFIG_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+// ============================================
+// ZigBee Device Configuration (Compile-Time)
+// ============================================
+
+// Device-Identifikation (für Zigbee2MQTT Erkennung)
+#define ZIGBEE_MODEL_ID           "Gas-O-Meter2"
+#define ZIGBEE_MANUFACTURER_NAME  "Custom"
+#define ZIGBEE_DEVICE_TYPE        ESP_ZB_DEVICE_TYPE_END_DEVICE  // Wird in ESP-Zigbee-SDK definiert
+
+// Cluster-IDs (Standard ZCL - ZigBee Cluster Library)
+#define ZIGBEE_CLUSTER_BATTERY        0x0001  // Power Configuration Cluster
+#define ZIGBEE_CLUSTER_ANALOG_INPUT   0x0400  // Analog Input Cluster (für Gas-Zähler)
+#define ZIGBEE_CLUSTER_BASIC          0x0000  // Basic Cluster (für Firmware-Version)
+
+// Attribute-IDs
+#define ZIGBEE_ATTR_BATTERY_PERCENT   0x0021  // Battery Percentage Remaining (0-200, 0-100%)
+#define ZIGBEE_ATTR_ANALOG_VALUE      0x0055  // Present Value (Analog Input)
+#define ZIGBEE_ATTR_APP_VERSION       0x0001  // Application Version (Basic Cluster)
+
+// Reporting-Intervalle (in Sekunden)
+#define ZIGBEE_BATTERY_REPORT_MIN     3600    // Minimum: 1 Stunde
+#define ZIGBEE_BATTERY_REPORT_MAX     86400   // Maximum: 24 Stunden
+#define ZIGBEE_BATTERY_REPORT_CHANGE  1       // Report bei 1% Änderung
+#define ZIGBEE_ANALOG_REPORT_MIN      300     // Minimum: 5 Minuten
+#define ZIGBEE_ANALOG_REPORT_MAX      3600    // Maximum: 1 Stunde
+#define ZIGBEE_ANALOG_REPORT_CHANGE   1       // Report bei 1 Pulse Änderung
+
+// Retry & Timeout Konfiguration
+#define ZIGBEE_JOIN_RETRY_COUNT       3       // Anzahl Join-Versuche
+#define ZIGBEE_JOIN_TIMEOUT_MS        30000   // 30 Sekunden pro Join-Versuch
+#define ZIGBEE_DATA_RETRY_COUNT       3       // Anzahl Daten-Übertragungs-Versuche
+#define ZIGBEE_DATA_TIMEOUT_MS        5000    // 5 Sekunden pro Paket
+#define ZIGBEE_NETWORK_DISCOVERY_MS   30000   // 30 Sekunden für Network Discovery
+
+// NVS Konfiguration
+#define ZIGBEE_NVS_NAMESPACE          "zigbee_config"
+#define ZIGBEE_NVS_KEY_NETWORK_ADDR   "network_addr"
+#define ZIGBEE_NVS_KEY_EXTENDED_ADDR  "extended_addr"
+#define ZIGBEE_NVS_KEY_PAN_ID         "pan_id"
+#define ZIGBEE_NVS_KEY_CHANNEL        "channel"
+#define ZIGBEE_NVS_KEY_COORD_ADDR     "coord_addr"
+#define ZIGBEE_NVS_KEY_JOINED         "joined"
+
+// ============================================
+// ZigBee Runtime Configuration (RTC-RAM)
+// ============================================
+// Wird bei Power-On aus NVS geladen, bei Deep-Sleep-Wake-up direkt aus RTC-RAM verwendet
+
+#ifndef ARDUINO
+    // ESP-IDF: RTC_DATA_ATTR wird von esp_attr.h definiert
+    #include "esp_attr.h"
+#else
+    // Arduino: RTC_DATA_ATTR wird von ESP32 Core definiert
+    #include "esp_sleep.h"
+#endif
+
+typedef struct {
+    bool joined;                // Join-Status (true = gepaart, false = nicht gepaart)
+    uint16_t network_addr;     // Network Address (wird beim Join zugewiesen, 0xFFFF = ungültig)
+    uint16_t coord_addr;       // Coordinator Network Address
+    uint16_t pan_id;           // PAN ID (Personal Area Network ID)
+    uint8_t channel;           // ZigBee Channel (11-26)
+    uint64_t extended_addr;    // Extended Address (64-bit MAC-Adresse)
+} zigbee_rtc_t;
+
+// RTC-RAM Variable (behält Daten bei Deep-Sleep, verliert bei Power-On)
+RTC_DATA_ATTR zigbee_rtc_t zigbee_rtc = {
+    .joined = false,
+    .network_addr = 0xFFFF,    // Ungültig (0xFFFF = Broadcast/ungültig)
+    .coord_addr = 0x0000,
+    .pan_id = 0x0000,
+    .channel = 0,
+    .extended_addr = 0x0000000000000000ULL
+};
+
+// ============================================
+// Hilfs-Makros
+// ============================================
+
+// Prüft, ob Network Address gültig ist
+#define ZIGBEE_IS_NETWORK_ADDR_VALID(addr)  ((addr) != 0xFFFF)
+
+// Prüft, ob Device gepaart ist
+#define ZIGBEE_IS_JOINED()  (zigbee_rtc.joined)
+
+// ============================================
+// Funktionsprototypen (implementiert in transfer_zigbee.cpp)
+// ============================================
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * @brief Initialisiert ZigBee-Config (lädt aus NVS bei Power-On)
+ * 
+ * @param is_power_on true bei Power-On (NVS laden), false bei Deep-Sleep-Wake-up (RTC-RAM verwenden)
+ * @return true bei Erfolg, false bei Fehler
+ */
+bool zigbee_config_init(bool is_power_on);
+
+/**
+ * @brief Lädt ZigBee-Config aus NVS in RTC-RAM
+ * 
+ * @param is_power_on true bei Power-On (NVS laden), false bei Deep-Sleep-Wake-up (RTC-RAM verwenden)
+ * @return true bei Erfolg, false bei Fehler
+ */
+bool zigbee_config_load_from_nvs(bool is_power_on);
+
+/**
+ * @brief Speichert ZigBee-Config aus RTC-RAM in NVS
+ * 
+ * Wird nach erfolgreichem Pairing aufgerufen.
+ * 
+ * @return true bei Erfolg, false bei Fehler
+ */
+bool zigbee_config_save_to_nvs(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // ZIGBEE_CONFIG_H

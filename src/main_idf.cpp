@@ -24,6 +24,8 @@
 #include "version.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "transfer.h"
+#include "transfer_zigbee.h"
 
 // ArduinoJson (ESP-IDF-kompatibel)
 #include <ArduinoJson.h>
@@ -776,6 +778,8 @@ void init_ring_buffer_and_ulp_pulse_counter(bool is_power_on) {
 // Ressourcen sauber beenden (Web-Server, WiFi, LittleFS)
 // ============================================
 void shutdown_resources() {
+    // Transfer-Modus deinitialisieren
+    transfer_deinit();
     ESP_LOGI(TAG, "Schließe Ressourcen...");
     
     // 1. mDNS stoppen
@@ -3304,6 +3308,13 @@ extern "C" void app_main(void) {
         // WICHTIG: Muss vor allen Aktionen geladen sein, da beide Stränge (Timer/Power-On/GPIO) Config benötigen
         bool config_available = load_config();
         
+        // 2a. Transfer-Modus initialisieren (einmalig beim Start)
+        if (config_available) {
+            if (!transfer_init(config_rtc.transfer_mode)) {
+                ESP_LOGW(TAG, "Transfer-Initialisierung fehlgeschlagen (Mode: %s)", config_rtc.transfer_mode);
+            }
+        }
+        
         // 3. Abhängig vom Wake-up-Grund: Unterschiedliche Aktionen
         switch (wakeup_reason) {
             case ESP_SLEEP_WAKEUP_TIMER:
@@ -3315,7 +3326,24 @@ extern "C" void app_main(void) {
                 if (localtime_r(&now, &timeinfo) && (timeinfo.tm_min % config_rtc.transfer_minutes == 0) && config_available) {
                     ESP_LOGI(TAG, "=== Timer-Wake-up: Datenübertragung (Minute %d, Intervall: %d Min) ===",
                              timeinfo.tm_min, config_rtc.transfer_minutes);
-                    ESP_LOGI(TAG, "Hier sollten jetzt die Daten übertragen werden....................");
+                    
+                    // Transfer-Daten vorbereiten
+                    transfer_data_t data_to_transfer = {
+                        .pulse_counter = *(volatile uint32_t *)&ulp_pulse_counter,
+                        .battery_percent = (float)battery_percent,  // Bereits als uint8_t vorhanden
+                        .firmware_version = PROJECT_VERSION
+                    };
+                    
+                    // Datenübertragung durchführen
+                    transfer_status_t transfer_status = transfer_data(&data_to_transfer);
+                    
+                    if (transfer_status == TRANSFER_STATUS_OK) {
+                        ESP_LOGI(TAG, "Datenübertragung erfolgreich abgeschlossen");
+                    } else {
+                        ESP_LOGW(TAG, "Datenübertragung fehlgeschlagen: %s (Status: %d)", 
+                                transfer_status_to_string(transfer_status), transfer_status);
+                    }
+                    
                     should_enter_deep_sleep = true;
                     deep_sleep_reason = "Timer-Wake-up: Datenübertragung abgeschlossen";
                 } else {
