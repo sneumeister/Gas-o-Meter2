@@ -70,14 +70,9 @@ typedef struct {
 } zigbee_rtc_t;
 
 // RTC-RAM Variable (behält Daten bei Deep-Sleep, verliert bei Power-On)
-RTC_DATA_ATTR zigbee_rtc_t zigbee_rtc = {
-    .joined = false,
-    .network_addr = 0xFFFF,    // Ungültig (0xFFFF = Broadcast/ungültig)
-    .coord_addr = 0x0000,
-    .pan_id = 0x0000,
-    .channel = 0,
-    .extended_addr = 0x0000000000000000ULL
-};
+// WICHTIG: Definition erfolgt in transfer_zigbee.cpp mit RTC_DATA_ATTR, hier nur extern-Deklaration
+// RTC_DATA_ATTR wird NICHT bei extern-Deklarationen verwendet (nur bei Definitionen)
+extern zigbee_rtc_t zigbee_rtc;
 
 // ============================================
 // Hilfs-Makros

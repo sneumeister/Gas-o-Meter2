@@ -29,7 +29,8 @@ idf_component_register(
         driver
         freertos
         ulp                     # ULP-Header für ulp_lp_core.h APIs
-        # esp_zigbee_sdk        # Wird später hinzugefügt (über idf_component.yml)
+        espressif__esp-zboss-lib    # ESP-Zigbee-SDK: ZBOSS Stack (über idf_component.yml)
+        espressif__esp-zigbee-lib   # ESP-Zigbee-SDK: Espressif APIs (über idf_component.yml)
 )
 
 # LP-Core Binary einbetten

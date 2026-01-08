@@ -21,6 +21,17 @@
 // ============================================
 static bool zigbee_initialized = false;
 
+// RTC-RAM Variable für ZigBee-Config (Definition)
+// WICHTIG: Deklaration ist in zigbee_config.h als extern
+RTC_DATA_ATTR zigbee_rtc_t zigbee_rtc = {
+    .joined = false,
+    .network_addr = 0xFFFF,    // Ungültig (0xFFFF = Broadcast/ungültig)
+    .coord_addr = 0x0000,
+    .pan_id = 0x0000,
+    .channel = 0,
+    .extended_addr = 0x0000000000000000ULL
+};
+
 // ============================================
 // NVS-Funktionen für ZigBee-Config
 // ============================================
@@ -33,37 +44,64 @@ static bool zigbee_initialized = false;
  */
 bool zigbee_config_load_from_nvs(bool is_power_on) {
     if (!is_power_on) {
-        // Deep-Sleep-Wake-up: RTC-RAM ist noch vorhanden → direkt verwenden
-        ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Deep-Sleep-Wake-up → verwende RTC-RAM (joined: %s, network_addr: 0x%04X)",
-                 zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr);
-        return true;
+        // Deep-Sleep-Wake-up: RTC-RAM ist noch vorhanden → prüfe Gültigkeit
+        if (zigbee_rtc.joined || ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
+            // RTC-RAM enthält gültige Daten → verwenden
+            ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Deep-Sleep-Wake-up → verwende RTC-RAM (joined: %s, network_addr: 0x%04X)",
+                     zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr);
+            return true;
+        } else {
+            // RTC-RAM enthält ungültige Daten (z.B. beim ersten Deep-Sleep-Wake-up nach Power-On) → aus NVS laden
+            ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Deep-Sleep-Wake-up, aber RTC-RAM ungültig → lade aus NVS");
+            // Weiter mit NVS-Laden (siehe unten)
+        }
     }
     
-    // Power-On: RTC-RAM ist leer → aus NVS laden
+    // Power-On oder ungültiger RTC-RAM: RTC-RAM könnte zufällige Werte enthalten → explizit initialisieren
+    // Zuerst RTC-RAM auf Default-Werte setzen (sicherstellen, dass keine Zufallswerte verwendet werden)
+    zigbee_rtc_t default_config = {
+        .joined = false,
+        .network_addr = 0xFFFF,    // Ungültig
+        .coord_addr = 0x0000,
+        .pan_id = 0x0000,
+        .channel = 0,
+        .extended_addr = 0x0000000000000000ULL
+    };
+    zigbee_rtc = default_config;
+    
+    // Versuche aus NVS zu laden
     nvs_handle_t nvs_handle;
     esp_err_t err;
     
     err = nvs_open(ZIGBEE_NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "zigbee_config_load_from_nvs: NVS-Namespace '%s' existiert nicht (noch nicht gepaart)", 
+        ESP_LOGI(TAG, "zigbee_config_load_from_nvs: NVS-Namespace '%s' existiert nicht (noch nicht gepaart) → RTC-RAM auf Default-Werte gesetzt", 
                  ZIGBEE_NVS_NAMESPACE);
-        // Nicht gepaart → Default-Werte (bereits in zigbee_rtc initialisiert)
+        // RTC-RAM ist bereits auf Default-Werte gesetzt
         return true;  // Kein Fehler, einfach noch nicht gepaart
     }
     
     // Lade alle Werte aus NVS
     size_t required_size = sizeof(zigbee_rtc_t);
     err = nvs_get_blob(nvs_handle, "config", &zigbee_rtc, &required_size);
+    nvs_close(nvs_handle);
     
     if (err == ESP_OK && required_size == sizeof(zigbee_rtc_t)) {
-        ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Config aus NVS geladen (joined: %s, network_addr: 0x%04X, pan_id: 0x%04X, channel: %d)",
-                 zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id, zigbee_rtc.channel);
-        nvs_close(nvs_handle);
-        return true;
+        // Validiere geladene Daten
+        if (zigbee_rtc.joined && ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
+            ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Config aus NVS geladen (joined: %s, network_addr: 0x%04X, pan_id: 0x%04X, channel: %d)",
+                     zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id, zigbee_rtc.channel);
+            return true;
+        } else {
+            // Geladene Daten sind ungültig → auf Default-Werte zurücksetzen
+            ESP_LOGW(TAG, "zigbee_config_load_from_nvs: Config in NVS gefunden, aber ungültig (joined: %s, network_addr: 0x%04X) → RTC-RAM auf Default-Werte gesetzt",
+                     zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr);
+            zigbee_rtc = default_config;
+            return true;
+        }
     } else {
-        ESP_LOGW(TAG, "zigbee_config_load_from_nvs: Config nicht in NVS gefunden (noch nicht gepaart)");
-        nvs_close(nvs_handle);
-        // Default-Werte (bereits in zigbee_rtc initialisiert)
+        ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Config nicht in NVS gefunden (noch nicht gepaart) → RTC-RAM auf Default-Werte gesetzt");
+        // RTC-RAM ist bereits auf Default-Werte gesetzt
         return true;  // Kein Fehler, einfach noch nicht gepaart
     }
 }

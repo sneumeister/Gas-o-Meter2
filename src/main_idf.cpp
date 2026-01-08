@@ -26,6 +26,7 @@
 #include "freertos/task.h"
 #include "transfer.h"
 #include "transfer_zigbee.h"
+#include "zigbee_config.h"
 
 // ArduinoJson (ESP-IDF-kompatibel)
 #include <ArduinoJson.h>
@@ -3308,7 +3309,14 @@ extern "C" void app_main(void) {
         // WICHTIG: Muss vor allen Aktionen geladen sein, da beide Stränge (Timer/Power-On/GPIO) Config benötigen
         bool config_available = load_config();
         
-        // 2a. Transfer-Modus initialisieren (einmalig beim Start)
+        // 2a. ZigBee-Config initialisieren (lädt aus NVS bei Power-On, verwendet RTC-RAM bei Deep-Sleep-Wake-up)
+        if (config_available && strcmp(config_rtc.transfer_mode, TRANSFER_MODE_ZIGBEE) == 0) {
+            if (!zigbee_config_init(isPowerOn)) {
+                ESP_LOGW(TAG, "ZigBee-Config-Initialisierung fehlgeschlagen");
+            }
+        }
+        
+        // 2b. Transfer-Modus initialisieren (einmalig beim Start)
         if (config_available) {
             if (!transfer_init(config_rtc.transfer_mode)) {
                 ESP_LOGW(TAG, "Transfer-Initialisierung fehlgeschlagen (Mode: %s)", config_rtc.transfer_mode);
