@@ -12,23 +12,26 @@ nvs,      data, nvs,     0x9000,  0x7000,
 # factory beginnt bei 64 KB (0x10000) - Standard-Offset für ESP-IDF
 # ESP-IDF flasht die App automatisch bei 0x10000
 # otadata entfernt, da keine OTA-Updates verwendet werden
-factory,  app,  factory, 0x10000, 0x140000,
+# Vergrößert auf 0x160000 (1.375.744 Bytes) für größere Firmware (inkl. ZigBee-Stack)
+# Aktuelle Firmware: ~1.342.192 Bytes, daher 0x160000 mit Reserve
+factory,  app,  factory, 0x10000, 0x160000,
 #
 # Custom Partitionen
 # NVS Partition für Pulse-Zähler Ringspeicher (256 KB für 12000 Einträge mit Reserve)
-# Offset: 0x10000 + 0x140000 = 0x150000
+# Offset: 0x10000 + 0x160000 = 0x170000
 # Berechnung: 12000 Einträge × ~27 Bytes/Eintrag = ~324 KB, daher 256 KB mit Reserve
-pulse_nv, data, nvs,     0x150000, 0x40000,
+pulse_nv, data, nvs,     0x170000, 0x40000,
 #
-# LittleFS Partition für config.json und andere Dateien (256 KB)
-# Offset: 0x150000 + 0x40000 = 0x190000
-storage,   data, littlefs,  0x190000, 0x40000,
-#
-# ZigBee Partitionen (ESP-Zigbee-SDK)
+# ZigBee Partitionen (ESP-Zigbee-SDK) - müssen VOR LittleFS stehen (LittleFS muss am Ende sein)
+# Offset: 0x170000 + 0x40000 = 0x1B0000
 # zb_storage: 16 KB für ZigBee-Netzwerk-Speicher (erforderlich für ESP-Zigbee-SDK)
-# Offset: 0x190000 + 0x40000 = 0x1D0000
-zb_storage, data, fat,      0x1D0000, 0x4000,
-# zb_fct: 1 KB Factory Configuration Table (erforderlich für ESP-Zigbee-SDK)
-# Offset: 0x1D0000 + 0x4000 = 0x1D4000
+zb_storage, data, fat,      0x1b0000, 0x4000,
+# zb_fct: 4 KB Factory Configuration Table (erforderlich für ESP-Zigbee-SDK)
 # Größe: 0x1000 (4 KB) für Alignment, auch wenn nur 1 KB benötigt
-zb_fct,    data, fat,      0x1D4000, 0x1000,
+zb_fct,    data, fat,      0x1b4000, 0x1000,
+#
+# LittleFS Partition für config.json und andere Dateien (512 KB)
+# Offset: 0x1b4000 + 0x1000 = 0x1b5000
+# Vergrößert auf 512 KB (0x80000) für ~175 KB Dateien + LittleFS-Overhead + Reserve
+# WICHTIG: LittleFS muss am Ende stehen, damit es beim Upload korrekt erkannt wird
+storage,   data, littlefs,  0x1b5000, 0x80000,

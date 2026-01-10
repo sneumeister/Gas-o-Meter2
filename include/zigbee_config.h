@@ -38,8 +38,35 @@
 #define ZIGBEE_DATA_TIMEOUT_MS        5000    // 5 Sekunden pro Paket
 #define ZIGBEE_NETWORK_DISCOVERY_MS   30000   // 30 Sekunden für Network Discovery
 
+// Network Channel Konfiguration
+// Channel Mask: 0x07FFF800 = alle Channels 11-26 (Standard ZigBee 2.4 GHz)
+// Bits: Channel 11 = Bit 11, Channel 12 = Bit 12, ..., Channel 26 = Bit 26
+#define ZIGBEE_PRIMARY_CHANNEL_MASK   0x07FFF800UL  // Alle Channels 11-26
+
+// Endpoint Konfiguration
+#define ZIGBEE_ENDPOINT_ID            1              // ZigBee Endpoint ID
+
+// Default-Werte für zigbee_rtc_t (ungültige/Initial-Werte)
+#define ZIGBEE_INVALID_NETWORK_ADDR   0xFFFF         // Ungültige Network Address (Broadcast)
+#define ZIGBEE_DEFAULT_COORD_ADDR     0x0000         // Default Coordinator Address
+#define ZIGBEE_DEFAULT_PAN_ID         0x0000         // Default PAN ID
+#define ZIGBEE_DEFAULT_CHANNEL        0              // Default Channel (ungültig)
+#define ZIGBEE_DEFAULT_EXTENDED_ADDR  0x0000000000000000ULL  // Default Extended Address
+
+// ZigBee Stack Konfiguration (End Device)
+#define ZIGBEE_ED_TIMEOUT_DEFAULT     0              // Default End Device Timeout
+#define ZIGBEE_KEEP_ALIVE_DEFAULT     0              // Default Keep Alive (ms)
+#define ZIGBEE_INSTALL_CODE_POLICY_DEFAULT  false   // Default Install Code Policy
+
+// FreeRTOS Task Konfiguration
+#define ZIGBEE_MAIN_TASK_STACK_SIZE   4096           // Stack Size für ZigBee Main Loop Task
+#define ZIGBEE_MAIN_TASK_PRIORITY     5              // Task Priority (0-25, höher = wichtiger)
+#define ZIGBEE_MAIN_TASK_DELAY_MS     100            // Delay zwischen Main Loop Iterationen (ms)
+#define ZIGBEE_DEINIT_DELAY_MS        500            // Delay beim Deinitialisieren (ms)
+
 // NVS Konfiguration
 #define ZIGBEE_NVS_NAMESPACE          "zigbee_config"
+#define ZIGBEE_NVS_KEY_CONFIG          "config"      // Key für gesamte Config-Struktur (Blob)
 #define ZIGBEE_NVS_KEY_NETWORK_ADDR   "network_addr"
 #define ZIGBEE_NVS_KEY_EXTENDED_ADDR  "extended_addr"
 #define ZIGBEE_NVS_KEY_PAN_ID         "pan_id"

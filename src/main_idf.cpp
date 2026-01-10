@@ -288,7 +288,7 @@ bool mount_littlefs() {
     
     // LittleFS mit explizitem Partitionsnamen mounten
     esp_vfs_littlefs_conf_t conf = {
-        .base_path = "/spiffs",
+        .base_path = "/littlefs",
         .partition_label = "storage",
         .format_if_mount_failed = true,
         .dont_mount = false,
@@ -308,6 +308,19 @@ bool mount_littlefs() {
     
     littlefs_mounted = true;
     ESP_LOGI(TAG, "LittleFS erfolgreich gemountet");
+    
+    // Partitionsgröße ausgeben
+    size_t total_bytes = 0;
+    size_t used_bytes = 0;
+    ret = esp_littlefs_info("storage", &total_bytes, &used_bytes);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "LittleFS Partition: %zu KB gesamt, %zu KB verwendet (%.1f%%)", 
+                 total_bytes / 1024, used_bytes / 1024, 
+                 (float)used_bytes * 100.0f / (float)total_bytes);
+    } else {
+        ESP_LOGW(TAG, "LittleFS Info konnte nicht abgerufen werden: %s", esp_err_to_name(ret));
+    }
+    
     return true;
 }
 
@@ -1103,7 +1116,7 @@ bool load_config() {
         return false;
     }
     
-    FILE* configFile = fopen("/spiffs/config.json", "r");
+    FILE* configFile = fopen("/littlefs/config.json", "r");
     if (!configFile) {
         ESP_LOGE(TAG, "config.json nicht gefunden");
         return false;
@@ -1423,7 +1436,7 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
     // Config in config.json speichern
     // WICHTIG: Wir müssen ein neues JSON-Dokument erstellen, da das eingehende doc
     // möglicherweise nicht alle Felder enthält (z.B. wenn nur WiFi-Credentials geändert wurden)
-    FILE* configFile = fopen("/spiffs/config.json", "w");
+    FILE* configFile = fopen("/little_fs/config.json", "w");
     if (!configFile) {
         ESP_LOGE(TAG, "Fehler: config.json konnte nicht zum Schreiben geöffnet werden");
         if (errorMessage != nullptr) {
@@ -2213,7 +2226,7 @@ static esp_err_t index_handler(httpd_req_t *req) {
     battery_percent = VOLTAGE_TO_PERCENT(battery_voltage);
     
     // Template-Datei verarbeiten
-    return process_template_file("/spiffs/index.html", req);
+    return process_template_file("/littlefs/index.html", req);
 }
 
 // Handler für /config (GET)
@@ -2230,7 +2243,7 @@ static esp_err_t config_get_handler(httpd_req_t *req) {
     last_web_activity_us = esp_timer_get_time();
     
     // Template-Datei verarbeiten
-    return process_template_file("/spiffs/config.html", req);
+    return process_template_file("/littlefs/config.html", req);
 }
 
 // Hilfsfunktion: POST-Daten lesen
@@ -2907,9 +2920,9 @@ static esp_err_t static_file_handler(httpd_req_t *req) {
     // Dateipfad konstruieren
     char filepath[64];
     if (strcmp(req->uri, "/") == 0) {
-        strcpy(filepath, "/spiffs/index.html");
+        strcpy(filepath, "/littlefs/index.html");
     } else {
-        snprintf(filepath, sizeof(filepath), "/spiffs%s", req->uri);
+        snprintf(filepath, sizeof(filepath), "/littlefs%s", req->uri);
     }
     
     FILE* file = fopen(filepath, "r");
@@ -2964,7 +2977,7 @@ static esp_err_t static_file_handler(httpd_req_t *req) {
 static esp_err_t bootstrap_css_handler(httpd_req_t *req) {
     last_web_activity_us = esp_timer_get_time();
     
-    FILE* file = fopen("/spiffs/bootstrap.min.css.gz", "r");
+    FILE* file = fopen("/littlefs/bootstrap.min.css.gz", "r");
     if (!file) {
         httpd_resp_set_status(req, "404 Not Found");
         httpd_resp_set_type(req, "text/plain");

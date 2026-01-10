@@ -19,6 +19,12 @@ function autoRefresh() {
 window.addEventListener('load', () => {
     // Daten werden vom Server geliefert
     console.log('Seite geladen');
+    
+    // WiFi-Info Style aus data-Attribut setzen
+    const wifiInfoElement = document.getElementById('wifi_info');
+    if (wifiInfoElement && wifiInfoElement.dataset.style) {
+        wifiInfoElement.style.cssText = wifiInfoElement.dataset.style;
+    }
 });
 
 // Reboot-Funktion mit Countdown-Timer
