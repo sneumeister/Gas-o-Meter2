@@ -20,6 +20,7 @@
 #include <time.h>
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "esp_partition.h"
 #include "hardware.h"
 #include "version.h"
 #include "freertos/FreeRTOS.h"
@@ -794,6 +795,11 @@ void init_ring_buffer_and_ulp_pulse_counter(bool is_power_on) {
 void shutdown_resources() {
     // Transfer-Modus deinitialisieren
     transfer_deinit();
+    
+    // LED ausschalten (HP-Core wird beendet)
+    gpio_set_level((gpio_num_t)LED_BUILTIN_GPIO, LED_OFF);
+    ESP_LOGI(TAG, "Interne LED ausgeschaltet");
+    
     ESP_LOGI(TAG, "Schließe Ressourcen...");
     
     // 1. mDNS stoppen
@@ -1070,11 +1076,8 @@ void enter_deep_sleep_with_gpio_and_timer_wakeup(bool enable_timer = true) {
         return;  // Funktion beenden, Ressourcen bleiben aktiv
     }
     
-    // LED ausschalten (HP-Core geht in Deep-Sleep)
-    gpio_set_level((gpio_num_t)LED_BUILTIN_GPIO, LED_OFF);
-    ESP_LOGI(TAG, "Interne LED ausgeschaltet (Deep-Sleep)");
-    
     // Ressourcen sauber beenden (nur wenn Wake-up konfiguriert wurde)
+    // LED wird hier zentral in shutdown_resources() ausgeschaltet
     shutdown_resources();
     
     // Finale Deep-Sleep-Ausgabe (dynamisch basierend auf aktivierten Wake-up-Quellen)
@@ -1170,12 +1173,37 @@ bool load_config() {
         config_rtc.wakeup_minutes = DEFAULT_WAKEUP_INTERVAL_MIN;
     }
     
-    // Transfer Intervall: aus config.json oder Default (DEFAULT_TRANSFER_INTERVAL_X * DEFAULT_WAKEUP_INTERVAL_MIN)
-    if (doc["tarnsfer_minutes"].is<uint8_t>()) {  // Tippfehler in JSON beibehalten
-        config_rtc.transfer_minutes = doc["tarnsfer_minutes"].as<uint8_t>();
+    // Transfer Intervall: aus config.json oder Default
+    // In config.json wird der Multiplikator gespeichert, intern wird es in Minuten umgerechnet
+    if (doc["transfer_interval_x"].is<uint8_t>()) {
+        uint8_t multiplier = doc["transfer_interval_x"].as<uint8_t>();
+        if (multiplier == 0) {
+            config_rtc.transfer_minutes = 255;  // Nie
+        } else {
+            config_rtc.transfer_minutes = multiplier * config_rtc.wakeup_minutes;
+        }
+    } else if (doc["transfer_minutes"].is<uint8_t>()) {  // Rückwärtskompatibilität: alte config.json mit Minuten (als Multiplikator)
+        uint8_t multiplier = doc["transfer_minutes"].as<uint8_t>();
+        if (multiplier == 0) {
+            config_rtc.transfer_minutes = 255;  // Nie
+        } else {
+            config_rtc.transfer_minutes = multiplier * config_rtc.wakeup_minutes;
+        }
+    } else if (doc["tarnsfer_minutes"].is<uint8_t>()) {  // Rückwärtskompatibilität: Tippfehler-Variante
+        uint8_t multiplier = doc["tarnsfer_minutes"].as<uint8_t>();
+        if (multiplier == 0) {
+            config_rtc.transfer_minutes = 255;  // Nie
+        } else {
+            config_rtc.transfer_minutes = multiplier * config_rtc.wakeup_minutes;
+        }
     } else {
-        // Default: DEFAULT_TRANSFER_INTERVAL_X * DEFAULT_WAKEUP_INTERVAL_MIN
-        config_rtc.transfer_minutes = DEFAULT_TRANSFER_INTERVAL_X * DEFAULT_WAKEUP_INTERVAL_MIN;
+        // Default: DEFAULT_TRANSFER_INTERVAL_X * wakeup_minutes (wenn wakeup_minutes aus config.json geladen wurde)
+        // oder DEFAULT_TRANSFER_INTERVAL_X * DEFAULT_WAKEUP_INTERVAL_MIN (wenn wakeup_minutes auch nicht gesetzt)
+        if (config_rtc.wakeup_minutes > 0) {
+            config_rtc.transfer_minutes = DEFAULT_TRANSFER_INTERVAL_X * config_rtc.wakeup_minutes;
+        } else {
+            config_rtc.transfer_minutes = DEFAULT_TRANSFER_INTERVAL_X * DEFAULT_WAKEUP_INTERVAL_MIN;
+        }
     }
     
     // ADC-Offset: aus config.json oder Default aus hardware.h
@@ -1327,13 +1355,30 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
     }
     
     if (doc["transfer_minutes"].is<uint8_t>()) {
-        uint8_t transfer_minutes = doc["transfer_minutes"].as<uint8_t>();
-        if (transfer_minutes >= 1 && transfer_minutes <= 60) {
-            config_rtc.transfer_minutes = transfer_minutes;
+        uint8_t multiplier = doc["transfer_minutes"].as<uint8_t>();
+        // Multiplikator 0 = nie (keine automatische Übertragung)
+        // Multiplikator 1-60: muss sicherstellen, dass multiplier * wakeup_minutes <= 60
+        if (multiplier == 0) {
+            // 0 = nie: transfer_minutes auf einen sehr großen Wert setzen, damit die Bedingung nie erfüllt wird
+            config_rtc.transfer_minutes = 255;  // Maximaler uint8_t Wert, wird nie durch tm_min (0-59) teilbar sein
+        } else if (multiplier >= 1 && multiplier <= 60) {
+            uint16_t calculated_minutes = multiplier * config_rtc.wakeup_minutes;
+            if (calculated_minutes > 60) {
+                ESP_LOGE(TAG, "FEHLER: Transfer Intervall ungültig (%d * %d = %d Min., muss <= 60 sein)", 
+                         multiplier, config_rtc.wakeup_minutes, calculated_minutes);
+                if (errorMessage != nullptr) {
+                    char msg[255];
+                    snprintf(msg, sizeof(msg), "Fehler: Transfer Intervall ungültig (%d * %d = %d Min., muss <= 60 sein)", 
+                             multiplier, config_rtc.wakeup_minutes, calculated_minutes);
+                    strncpy(errorMessage, msg, 255);
+                }
+                return false;
+            }
+            config_rtc.transfer_minutes = (uint8_t)calculated_minutes;
         } else {
-            ESP_LOGE(TAG, "FEHLER: Transfer Intervall ungültig (%d, muss zwischen 1-60 sein)", transfer_minutes);
+            ESP_LOGE(TAG, "FEHLER: Transfer Intervall Multiplikator ungültig (%d, muss zwischen 0-60 sein)", multiplier);
             if (errorMessage != nullptr) {
-                strncpy(errorMessage, "Fehler: Transfer Intervall ungültig (muss zwischen 1-60 sein)", 255);
+                strncpy(errorMessage, "Fehler: Transfer Intervall Multiplikator ungültig (muss zwischen 0-60 sein, 0 = nie)", 255);
             }
             return false;
         }
@@ -1436,7 +1481,7 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
     // Config in config.json speichern
     // WICHTIG: Wir müssen ein neues JSON-Dokument erstellen, da das eingehende doc
     // möglicherweise nicht alle Felder enthält (z.B. wenn nur WiFi-Credentials geändert wurden)
-    FILE* configFile = fopen("/little_fs/config.json", "w");
+    FILE* configFile = fopen("/littlefs/config.json", "w");
     if (!configFile) {
         ESP_LOGE(TAG, "Fehler: config.json konnte nicht zum Schreiben geöffnet werden");
         if (errorMessage != nullptr) {
@@ -1450,7 +1495,17 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
     newDoc["hostname"] = config_rtc.hostname;
     newDoc["adminpass"] = config_rtc.adminpass;
     newDoc["wakeup_minutes"] = config_rtc.wakeup_minutes;
-    newDoc["tarnsfer_minutes"] = config_rtc.transfer_minutes;  // Tippfehler in JSON beibehalten
+    // Multiplikator berechnen und speichern
+    // Wenn transfer_minutes == 255, dann ist Multiplikator = 0 (nie)
+    uint8_t multiplier;
+    if (config_rtc.transfer_minutes == 255) {
+        multiplier = 0;  // Nie
+    } else if (config_rtc.wakeup_minutes > 0) {
+        multiplier = config_rtc.transfer_minutes / config_rtc.wakeup_minutes;
+    } else {
+        multiplier = DEFAULT_TRANSFER_INTERVAL_X;
+    }
+    newDoc["transfer_interval_x"] = multiplier;
     newDoc["transfer_mode"] = config_rtc.transfer_mode;
     newDoc["adc_voltage_offset"] = config_rtc.adc_voltage_offset;
     newDoc["ntp_server"] = config_rtc.ntp_server;
@@ -1963,6 +2018,108 @@ const char* processor_get_value(const char* var) {
     }
     if (strcmp(var, "transfer_mode_mqtt") == 0) {
         return (strcmp(config_rtc.transfer_mode, "mqtt") == 0) ? "selected" : "";
+    }
+    if (strcmp(var, "transfer_interval_x") == 0) {
+        // Wenn transfer_minutes == 255, dann ist Multiplikator = 0 (nie)
+        if (config_rtc.transfer_minutes == 255) {
+            snprintf(buffer, sizeof(buffer), "0");
+        } else if (config_rtc.wakeup_minutes > 0) {
+            uint8_t multiplier = config_rtc.transfer_minutes / config_rtc.wakeup_minutes;
+            snprintf(buffer, sizeof(buffer), "%d", multiplier);
+        } else {
+            // Sollte nicht vorkommen, da Defaults beim Laden gesetzt werden
+            snprintf(buffer, sizeof(buffer), "%d", DEFAULT_TRANSFER_INTERVAL_X);
+        }
+        return buffer;
+    }
+    if (strcmp(var, "transfer_interval_minutes_display") == 0) {
+        // Wenn transfer_minutes == 255, dann ist es "nie"
+        if (config_rtc.transfer_minutes == 255) {
+            snprintf(buffer, sizeof(buffer), "nie");
+        } else {
+            snprintf(buffer, sizeof(buffer), "%d", config_rtc.transfer_minutes);
+        }
+        return buffer;
+    }
+    if (strcmp(var, "transfer_interval_display") == 0) {
+        // Vollständige Anzeige: "nie" oder "2x (20 Min.)"
+        // Defaults werden bereits beim Laden der Config gesetzt, daher hier nur Anzeige
+        if (config_rtc.transfer_minutes == 255) {
+            snprintf(buffer, sizeof(buffer), "nie");
+        } else if (config_rtc.wakeup_minutes > 0) {
+            uint8_t multiplier = config_rtc.transfer_minutes / config_rtc.wakeup_minutes;
+            snprintf(buffer, sizeof(buffer), "%dx (%d Min.)", multiplier, config_rtc.transfer_minutes);
+        } else {
+            // Sollte nicht vorkommen, da Defaults beim Laden gesetzt werden
+            uint8_t default_multiplier = DEFAULT_TRANSFER_INTERVAL_X;
+            uint8_t default_wakeup = DEFAULT_WAKEUP_INTERVAL_MIN;
+            uint8_t default_transfer_minutes = default_multiplier * default_wakeup;
+            snprintf(buffer, sizeof(buffer), "%dx (%d Min.)", default_multiplier, default_transfer_minutes);
+        }
+        return buffer;
+    }
+    // ZigBee-Status-Variablen
+    if (strcmp(var, "zigbee_status") == 0) {
+        // Prüfe, ob ZigBee initialisiert ist und Status ermitteln
+        bool is_factory_new = false;
+        bool is_joined = false;
+        
+        #ifndef ARDUINO
+        // ESP-IDF: Prüfe ZigBee-Status (nur wenn transfer_mode=zigbee)
+        if (strcmp(config_rtc.transfer_mode, "zigbee") == 0) {
+            // Versuche ZigBee-Status zu ermitteln (kann fehlschlagen, wenn Stack nicht initialisiert ist)
+            // Für jetzt: Status aus zigbee_rtc lesen
+            is_joined = zigbee_rtc.joined;
+            // Factory-new kann nicht direkt geprüft werden ohne Stack-Initialisierung
+            // Verwende joined-Status als Indikator
+            if (!is_joined && !ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
+                is_factory_new = true;
+            }
+        }
+        #endif
+        
+        if (strcmp(config_rtc.transfer_mode, "zigbee") != 0) {
+            snprintf(buffer, sizeof(buffer), "Nicht aktiv");
+        } else if (is_factory_new) {
+            snprintf(buffer, sizeof(buffer), "Factory-New (nicht gepaart)");
+        } else if (is_joined) {
+            snprintf(buffer, sizeof(buffer), "Gepaart");
+        } else {
+            snprintf(buffer, sizeof(buffer), "Nicht gepaart");
+        }
+        return buffer;
+    }
+    if (strcmp(var, "zigbee_network_addr") == 0) {
+        if (strcmp(config_rtc.transfer_mode, "zigbee") == 0 && ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
+            snprintf(buffer, sizeof(buffer), "0x%04X", zigbee_rtc.network_addr);
+        } else {
+            snprintf(buffer, sizeof(buffer), "-");
+        }
+        return buffer;
+    }
+    if (strcmp(var, "zigbee_pan_id") == 0) {
+        if (strcmp(config_rtc.transfer_mode, "zigbee") == 0 && zigbee_rtc.pan_id != 0) {
+            snprintf(buffer, sizeof(buffer), "0x%04X", zigbee_rtc.pan_id);
+        } else {
+            snprintf(buffer, sizeof(buffer), "-");
+        }
+        return buffer;
+    }
+    if (strcmp(var, "zigbee_channel") == 0) {
+        if (strcmp(config_rtc.transfer_mode, "zigbee") == 0 && zigbee_rtc.channel != 0) {
+            snprintf(buffer, sizeof(buffer), "%d", zigbee_rtc.channel);
+        } else {
+            snprintf(buffer, sizeof(buffer), "-");
+        }
+        return buffer;
+    }
+    if (strcmp(var, "zigbee_extended_addr") == 0) {
+        if (strcmp(config_rtc.transfer_mode, "zigbee") == 0 && zigbee_rtc.extended_addr != 0) {
+            snprintf(buffer, sizeof(buffer), "0x%016llX", (unsigned long long)zigbee_rtc.extended_addr);
+        } else {
+            snprintf(buffer, sizeof(buffer), "-");
+        }
+        return buffer;
     }
     if (strcmp(var, "wifiCredentialsData") == 0) {
         // WiFi-Credentials als JSON für JavaScript
@@ -2682,6 +2839,15 @@ static esp_err_t reboot_handler(httpd_req_t *req) {
     // Der Timeout-Task läuft asynchron und könnte zwischenzeitlich Deep-Sleep auslösen
     last_web_activity_us = esp_timer_get_time();
     
+    // Prüfe, ob ein Factory-Reset gerade läuft
+    if (transfer_zigbee_is_factory_reset_in_progress()) {
+        ESP_LOGW(TAG, "Reboot-Handler: Reboot abgelehnt - Factory-Reset läuft gerade");
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Reboot nicht möglich: ZigBee Factory-Reset läuft gerade\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_send(req, "Reboot wird durchgeführt...", HTTPD_RESP_USE_STRLEN);
     
@@ -2797,6 +2963,133 @@ static esp_err_t counter_set_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
+}
+
+// Handler für /zigbee/status (GET)
+static esp_err_t zigbee_status_handler(httpd_req_t *req) {
+    last_web_activity_us = esp_timer_get_time();
+    
+    // Prüfe, ob ZigBee aktiv ist
+    if (strcmp(config_rtc.transfer_mode, "zigbee") != 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"ZigBee ist nicht aktiv\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    // ZigBee-Status über Wrapper-Funktion ermitteln
+    char json_response[512];
+    if (!transfer_zigbee_get_status_json(json_response, sizeof(json_response))) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Fehler beim Ermitteln des ZigBee-Status\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json_response, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+// Handler für /zigbee/action (POST)
+static esp_err_t zigbee_action_handler(httpd_req_t *req) {
+    last_web_activity_us = esp_timer_get_time();
+    
+    // Prüfe, ob ZigBee aktiv ist
+    if (strcmp(config_rtc.transfer_mode, "zigbee") != 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: ZigBee ist nicht aktiv", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    // POST-Daten lesen
+    const size_t MAX_POST_SIZE = 512;
+    size_t content_len = req->content_len;
+    
+    if (content_len == 0 || content_len > MAX_POST_SIZE) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: POST-Daten ungültig", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    char post_data[512];
+    int len = read_post_data(req, post_data, sizeof(post_data));
+    if (len < 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: POST-Daten konnten nicht gelesen werden", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    // POST-Parameter prüfen: cmd
+    char cmd[32] = "";
+    if (!get_post_param(post_data, len, "cmd", cmd, sizeof(cmd))) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: Parameter 'cmd' erforderlich", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    ESP_LOGI(TAG, "ZigBee-Action-Handler: cmd='%s'", cmd);
+    
+    if (strcmp(cmd, "factory-reset") == 0) {
+        // Factory-Reset über Wrapper-Funktion
+        bool success = transfer_zigbee_factory_reset(config_rtc.transfer_mode);
+        
+        if (success) {
+            #ifndef ARDUINO
+            if (strcmp(config_rtc.transfer_mode, TRANSFER_MODE_ZIGBEE) == 0) {
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_send(req, "{\"status\":\"success\",\"message\":\"Factory-Reset erfolgreich. ZigBee-Stack wurde neu initialisiert.\"}", HTTPD_RESP_USE_STRLEN);
+            } else {
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_send(req, "{\"status\":\"success\",\"message\":\"Factory-Reset erfolgreich (ZigBee war nicht aktiv).\"}", HTTPD_RESP_USE_STRLEN);
+            }
+            #else
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, "{\"status\":\"success\",\"message\":\"Factory-Reset erfolgreich. Gerät wird neu gestartet.\"}", HTTPD_RESP_USE_STRLEN);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            reboot_requested = true;
+            reboot_reason = "ZigBee Factory-Reset durchgeführt";
+            #endif
+        } else {
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"Factory-Reset durchgeführt, aber Fehler beim Neuinitialisieren des ZigBee-Stacks. Bitte Gerät neu starten.\"}", HTTPD_RESP_USE_STRLEN);
+        }
+        
+        return ESP_OK;
+        
+    } else if (strcmp(cmd, "start-pairing") == 0) {
+        // Start Pairing über Wrapper-Funktion
+        #ifndef ARDUINO
+        esp_err_t comm_err = transfer_zigbee_start_pairing();
+        if (comm_err == ESP_OK) {
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, "{\"status\":\"success\",\"message\":\"Pairing gestartet. Warten auf Coordinator...\"}", HTTPD_RESP_USE_STRLEN);
+        } else {
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_set_type(req, "application/json");
+            char error_json[256];
+            snprintf(error_json, sizeof(error_json), "{\"status\":\"error\",\"message\":\"Fehler beim Starten des Pairings: %s\"}", esp_err_to_name(comm_err));
+            httpd_resp_send(req, error_json, HTTPD_RESP_USE_STRLEN);
+        }
+        #else
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: Nur für ESP-IDF verfügbar", HTTPD_RESP_USE_STRLEN);
+        #endif
+        
+        return ESP_OK;
+        
+    } else {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: Unbekannter Befehl (erwartet: factory-reset oder start-pairing)", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
 }
 
 // Handler für /wifi/scan (GET)
@@ -3130,6 +3423,22 @@ void setupWebServer() {
         .user_ctx  = NULL
     };
     httpd_register_uri_handler(server, &wifi_scan_uri);
+    
+    httpd_uri_t zigbee_status_uri = {
+        .uri       = "/zigbee/status",
+        .method    = HTTP_GET,
+        .handler   = zigbee_status_handler,
+        .user_ctx  = NULL
+    };
+    httpd_register_uri_handler(server, &zigbee_status_uri);
+    
+    httpd_uri_t zigbee_action_uri = {
+        .uri       = "/zigbee/action",
+        .method    = HTTP_POST,
+        .handler   = zigbee_action_handler,
+        .user_ctx  = NULL
+    };
+    httpd_register_uri_handler(server, &zigbee_action_uri);
     
     // Wildcard-Handler für alle statischen Dateien (muss als letzter registriert werden)
     // Spezifische Handler (oben) haben Vorrang vor dem Wildcard-Handler

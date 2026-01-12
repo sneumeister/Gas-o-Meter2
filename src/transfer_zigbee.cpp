@@ -12,10 +12,12 @@
     #include "esp_zigbee_cluster.h"
     #include "esp_zigbee_endpoint.h"
     #include "esp_zigbee_attribute.h"
+    #include "bdb/esp_zigbee_bdb_commissioning.h"  // Für esp_zb_bdb_start_top_level_commissioning, esp_zb_bdb_is_factory_new, esp_zb_bdb_dev_joined
     #include "nwk/esp_zigbee_nwk.h"  // Für ESP_ZB_DEVICE_TYPE_ED
     #include "zcl/esp_zigbee_zcl_common.h"  // Für ESP_ZB_AF_HA_PROFILE_ID, ESP_ZB_HA_CUSTOM_ATTR_DEVICE_ID
     #include "freertos/FreeRTOS.h"
     #include "freertos/task.h"
+    #include "esp_partition.h"  // Für Factory-Reset (Partitionen löschen)
     static const char* TAG = "transfer_zigbee";
 #else
     #include "nvs.h"
@@ -30,6 +32,10 @@
 // ============================================
 static bool zigbee_initialized = false;
 static TaskHandle_t zigbee_main_task_handle = NULL;
+static bool factory_reset_in_progress = false;  // Flag: Factory-Reset läuft gerade
+static volatile bool stack_ready_signal_received = false;  // Flag: SKIP_STARTUP Signal empfangen
+#define ZIGBEE_INIT_TIMEOUT_MS 5000  // 5 Sekunden Timeout für Stack-Initialisierung
+#define ZIGBEE_INIT_POLL_INTERVAL_MS 100  // Poll-Intervall für Stack-Initialisierung
 
 // RTC-RAM Variable für ZigBee-Config (Definition)
 // WICHTIG: Deklaration ist in zigbee_config.h als extern
@@ -193,6 +199,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
     switch (sig_type) {
         case ESP_ZB_ZDO_SIGNAL_SKIP_STARTUP:
             ESP_LOGI(TAG, "ZigBee Signal: SKIP_STARTUP (Stack initialisiert)");
+            stack_ready_signal_received = true;
             break;
             
         case ESP_ZB_BDB_SIGNAL_DEVICE_FIRST_START:
@@ -240,12 +247,41 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
 static void zigbee_main_task(void *pvParameters) {
     ESP_LOGI(TAG, "ZigBee Main Loop Task gestartet");
     
+    // Warte auf Stack-Initialisierung, wenn noch nicht initialisiert
+    if (!zigbee_initialized) {
+        ESP_LOGI(TAG, "        → Warte auf Stack-Initialisierung (SKIP_STARTUP Signal)...");
+        stack_ready_signal_received = false;  // Flag zurücksetzen
+        const uint32_t timeout_ms = ZIGBEE_INIT_TIMEOUT_MS;
+        const uint32_t poll_interval_ms = ZIGBEE_INIT_POLL_INTERVAL_MS;
+        uint32_t elapsed_ms = 0;
+        
+        while (!stack_ready_signal_received && elapsed_ms < timeout_ms) {
+            esp_zb_stack_main_loop_iteration();  // Events verarbeiten (wichtig für Signal-Handler!)
+            vTaskDelay(pdMS_TO_TICKS(poll_interval_ms));
+            elapsed_ms += poll_interval_ms;
+        }
+        
+        if (!stack_ready_signal_received) {
+            ESP_LOGE(TAG, "        → Timeout: Stack-Initialisierung nicht abgeschlossen (nach %d ms)", timeout_ms);
+            ESP_LOGE(TAG, "        → Task wird beendet");
+            zigbee_main_task_handle = NULL;
+            vTaskDelete(NULL);
+            return;
+        }
+        
+        ESP_LOGI(TAG, "        → Stack-Initialisierung abgeschlossen (SKIP_STARTUP Signal erhalten nach %d ms)", elapsed_ms);
+        zigbee_initialized = true;
+        stack_ready_signal_received = false;  // Flag zurücksetzen
+    }
+    
+    // Normaler Main Loop
     while (zigbee_initialized) {
         esp_zb_stack_main_loop_iteration();  // Nicht deprecated, esp_zb_stack_main_loop() ist die infinite loop Version
         vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MAIN_TASK_DELAY_MS));
     }
     
     ESP_LOGI(TAG, "ZigBee Main Loop Task beendet");
+    zigbee_main_task_handle = NULL;
     vTaskDelete(NULL);
 }
 
@@ -405,20 +441,23 @@ bool transfer_zigbee_init(void) {
     }
     ESP_LOGI(TAG, "        → Stack gestartet");
     
-    // ZigBee Main Loop Task starten
+    // ZigBee Main Loop Task starten (wartet selbst auf Stack-Initialisierung)
     ESP_LOGI(TAG, "        → Starte ZigBee Main Loop Task...");
+    stack_ready_signal_received = false;  // Flag zurücksetzen
     xTaskCreate(zigbee_main_task, "zigbee_main", ZIGBEE_MAIN_TASK_STACK_SIZE, NULL, ZIGBEE_MAIN_TASK_PRIORITY, &zigbee_main_task_handle);
     if (zigbee_main_task_handle == NULL) {
         ESP_LOGE(TAG, "        → Fehler beim Erstellen des ZigBee Main Loop Tasks");
         return false;
     }
-    ESP_LOGI(TAG, "        → ZigBee Main Loop Task gestartet");
+    ESP_LOGI(TAG, "        → ZigBee Main Loop Task gestartet (wartet auf SKIP_STARTUP Signal)");
     
     ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "ZigBee-Stack Initialisierung abgeschlossen");
+    ESP_LOGI(TAG, "ZigBee-Stack Initialisierung gestartet (asynchron)");
     ESP_LOGI(TAG, "========================================");
     
-    zigbee_initialized = true;
+    // WICHTIG: zigbee_initialized wird vom Task gesetzt, wenn SKIP_STARTUP Signal kommt
+    // NICHT hier setzen, da Stack noch nicht vollständig initialisiert ist!
+    
     return true;
 }
 
@@ -428,9 +467,24 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
         return TRANSFER_STATUS_UNKNOWN_ERROR;
     }
     
+    // Warte auf Stack-Initialisierung (mit Timeout)
     if (!zigbee_initialized) {
-        ESP_LOGE(TAG, "transfer_zigbee_send_data: ZigBee nicht initialisiert");
-        return TRANSFER_STATUS_INIT_FAILED;
+        ESP_LOGI(TAG, "transfer_zigbee_send_data: Warte auf ZigBee-Stack Initialisierung...");
+        const uint32_t timeout_ms = ZIGBEE_INIT_TIMEOUT_MS;
+        const uint32_t poll_interval_ms = ZIGBEE_INIT_POLL_INTERVAL_MS;
+        uint32_t elapsed_ms = 0;
+        
+        while (!zigbee_initialized && elapsed_ms < timeout_ms) {
+            vTaskDelay(pdMS_TO_TICKS(poll_interval_ms));
+            elapsed_ms += poll_interval_ms;
+        }
+        
+        if (!zigbee_initialized) {
+            ESP_LOGE(TAG, "transfer_zigbee_send_data: Timeout: ZigBee-Stack nicht initialisiert (nach %d ms)", timeout_ms);
+            return TRANSFER_STATUS_INIT_FAILED;
+        }
+        
+        ESP_LOGI(TAG, "transfer_zigbee_send_data: ZigBee-Stack initialisiert (nach %d ms)", elapsed_ms);
     }
     
     ESP_LOGI(TAG, "========================================");
@@ -502,4 +556,175 @@ void transfer_zigbee_deinit(void) {
     ESP_LOGI(TAG, "========================================");
     
     zigbee_initialized = false;
+    stack_ready_signal_received = false;  // Flag zurücksetzen
+}
+
+// ============================================
+// Wrapper-Funktionen für Web-Interface
+// ============================================
+
+bool transfer_zigbee_get_status_json(char* buffer, size_t buffer_size) {
+    if (buffer == NULL || buffer_size < 512) {
+        ESP_LOGE(TAG, "transfer_zigbee_get_status_json: Buffer zu klein oder NULL");
+        return false;
+    }
+    
+    // ZigBee-Status ermitteln
+    bool is_factory_new = false;
+    bool is_joined = false;
+    
+    #ifndef ARDUINO
+    // ESP-IDF: Versuche ZigBee-Status vom Stack zu ermitteln
+    // Wenn Stack nicht initialisiert ist, verwenden wir zigbee_rtc
+    // esp_zb_bdb_dev_joined() und esp_zb_bdb_is_factory_new() können auch aufgerufen werden,
+    // wenn der Stack nicht initialisiert ist (geben dann false zurück)
+    is_joined = esp_zb_bdb_dev_joined();
+    is_factory_new = esp_zb_bdb_is_factory_new();
+    
+    // Fallback: Wenn Stack nicht initialisiert, verwende zigbee_rtc
+    if (!is_joined && !is_factory_new) {
+        // Möglicherweise Stack nicht initialisiert, verwende zigbee_rtc
+        is_joined = zigbee_rtc.joined;
+        if (!is_joined && !ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
+            is_factory_new = true;
+        }
+    }
+    #else
+    // Arduino: Status aus zigbee_rtc lesen
+    is_joined = zigbee_rtc.joined;
+    if (!is_joined && !ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
+        is_factory_new = true;
+    }
+    #endif
+    
+    // JSON-Response erstellen
+    int written = snprintf(buffer, buffer_size,
+        "{"
+        "\"status\":\"%s\","
+        "\"factory_new\":%s,"
+        "\"joined\":%s,"
+        "\"network_addr\":\"0x%04X\","
+        "\"pan_id\":\"0x%04X\","
+        "\"channel\":%d,"
+        "\"extended_addr\":\"0x%016llX\""
+        "}",
+        is_factory_new ? "factory-new" : (is_joined ? "joined" : "not-joined"),
+        is_factory_new ? "true" : "false",
+        is_joined ? "true" : "false",
+        zigbee_rtc.network_addr,
+        zigbee_rtc.pan_id,
+        zigbee_rtc.channel,
+        (unsigned long long)zigbee_rtc.extended_addr
+    );
+    
+    if (written < 0 || (size_t)written >= buffer_size) {
+        ESP_LOGE(TAG, "transfer_zigbee_get_status_json: Fehler beim Erstellen des JSON-Strings");
+        return false;
+    }
+    
+    return true;
+}
+
+bool transfer_zigbee_factory_reset(const char* transfer_mode) {
+    if (transfer_mode == NULL) {
+        ESP_LOGE(TAG, "transfer_zigbee_factory_reset: transfer_mode ist NULL");
+        return false;
+    }
+    
+    // Prüfe, ob bereits ein Factory-Reset läuft
+    if (factory_reset_in_progress) {
+        ESP_LOGW(TAG, "transfer_zigbee_factory_reset: Factory-Reset läuft bereits");
+        return false;
+    }
+    
+    factory_reset_in_progress = true;  // Flag setzen
+    ESP_LOGI(TAG, "ZigBee Factory-Reset wird durchgeführt...");
+    
+    // 1. NVS-Namespace "zigbee_config" löschen
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(ZIGBEE_NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    if (err == ESP_OK) {
+        err = nvs_erase_all(nvs_handle);
+        if (err == ESP_OK) {
+            nvs_commit(nvs_handle);
+            ESP_LOGI(TAG, "  → NVS-Namespace '%s' gelöscht", ZIGBEE_NVS_NAMESPACE);
+        }
+        nvs_close(nvs_handle);
+    }
+    
+    // 2. Partition "zb_storage" löschen
+    const esp_partition_t* zb_storage = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT, "zb_storage");
+    if (zb_storage != NULL) {
+        err = esp_partition_erase_range(zb_storage, 0, zb_storage->size);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "  → Partition 'zb_storage' gelöscht");
+        } else {
+            ESP_LOGW(TAG, "  → Fehler beim Löschen von 'zb_storage': %s", esp_err_to_name(err));
+        }
+    }
+    
+    // 3. Partition "zb_fct" löschen
+    const esp_partition_t* zb_fct = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT, "zb_fct");
+    if (zb_fct != NULL) {
+        err = esp_partition_erase_range(zb_fct, 0, zb_fct->size);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "  → Partition 'zb_fct' gelöscht");
+        } else {
+            ESP_LOGW(TAG, "  → Fehler beim Löschen von 'zb_fct': %s", esp_err_to_name(err));
+        }
+    }
+    
+    // 4. zigbee_rtc auf Default-Werte setzen
+    zigbee_rtc.joined = false;
+    zigbee_rtc.network_addr = ZIGBEE_INVALID_NETWORK_ADDR;
+    zigbee_rtc.coord_addr = ZIGBEE_DEFAULT_COORD_ADDR;
+    zigbee_rtc.pan_id = ZIGBEE_DEFAULT_PAN_ID;
+    zigbee_rtc.channel = ZIGBEE_DEFAULT_CHANNEL;
+    zigbee_rtc.extended_addr = ZIGBEE_DEFAULT_EXTENDED_ADDR;
+    
+    ESP_LOGI(TAG, "  → ZigBee Factory-Reset abgeschlossen");
+    
+    // 5. ZigBee-Stack deinitialisieren (falls initialisiert)
+    #ifndef ARDUINO
+    if (zigbee_initialized) {
+        ESP_LOGI(TAG, "  → ZigBee-Stack wird deinitialisiert...");
+        transfer_zigbee_deinit();
+        ESP_LOGI(TAG, "  → ZigBee-Stack deinitialisiert (keine automatische Neuinitialisierung)");
+    } else {
+        ESP_LOGI(TAG, "  → ZigBee-Stack war nicht initialisiert");
+    }
+    #endif
+    
+    factory_reset_in_progress = false;  // Flag zurücksetzen
+    return true;
+}
+
+esp_err_t transfer_zigbee_start_pairing(void) {
+    #ifndef ARDUINO
+    // Prüfe, ob ZigBee-Stack initialisiert ist
+    if (!zigbee_initialized) {
+        // Stack initialisieren (falls noch nicht geschehen)
+        if (!transfer_zigbee_init()) {
+            ESP_LOGE(TAG, "transfer_zigbee_start_pairing: ZigBee-Initialisierung fehlgeschlagen");
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+    
+    // Versuche Network Steering zu starten
+    esp_err_t comm_err = esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
+    if (comm_err == ESP_OK) {
+        ESP_LOGI(TAG, "transfer_zigbee_start_pairing: Network Steering gestartet");
+    } else {
+        ESP_LOGE(TAG, "transfer_zigbee_start_pairing: Fehler beim Starten von Network Steering: %s", esp_err_to_name(comm_err));
+    }
+    
+    return comm_err;
+    #else
+    ESP_LOGE(TAG, "transfer_zigbee_start_pairing: Nur für ESP-IDF verfügbar");
+    return ESP_ERR_NOT_SUPPORTED;
+    #endif
+}
+
+bool transfer_zigbee_is_factory_reset_in_progress(void) {
+    return factory_reset_in_progress;
 }

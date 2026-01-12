@@ -37,6 +37,8 @@
 #define ZIGBEE_DATA_RETRY_COUNT       3       // Anzahl Daten-Übertragungs-Versuche
 #define ZIGBEE_DATA_TIMEOUT_MS        5000    // 5 Sekunden pro Paket
 #define ZIGBEE_NETWORK_DISCOVERY_MS   30000   // 30 Sekunden für Network Discovery
+#define ZIGBEE_PAIRING_TIMEOUT_MS     300000  // 5 Minuten (300 Sekunden) für Pairing-Timeout (Network Steering kann bis zu 3-5 Minuten dauern)
+#define ZIGBEE_CYCLE_TIMEOUT_MS       420000  // 7 Minuten (420 Sekunden) Gesamt-Timeout für gesamten ZigBee-Zyklus (Pairing + Rejoin + Datenübertragung)
 
 // Network Channel Konfiguration
 // Channel Mask: 0x07FFF800 = alle Channels 11-26 (Standard ZigBee 2.4 GHz)

@@ -1,7 +1,12 @@
+
 #ifndef TRANSFER_ZIGBEE_H
 #define TRANSFER_ZIGBEE_H
 
 #include "transfer.h"
+
+#ifndef ARDUINO
+    #include "esp_err.h"  // Für esp_err_t
+#endif
 
 // ============================================
 // ZigBee-spezifische Funktionen
@@ -33,5 +38,36 @@ bool transfer_zigbee_sync_time(void);
  * @brief Deinitialisiert den ZigBee-Stack
  */
 void transfer_zigbee_deinit(void);
+
+/**
+ * @brief Gibt den aktuellen ZigBee-Status als JSON-String zurück
+ * 
+ * @param buffer Buffer für JSON-String (mindestens 512 Bytes)
+ * @param buffer_size Größe des Buffers
+ * @return true bei Erfolg, false bei Fehler
+ */
+bool transfer_zigbee_get_status_json(char* buffer, size_t buffer_size);
+
+/**
+ * @brief Führt einen Factory-Reset durch (löscht alle ZigBee-Daten)
+ * 
+ * @param transfer_mode Aktueller Transfer-Modus (um zu prüfen, ob ZigBee aktiv ist)
+ * @return true bei Erfolg, false bei Fehler
+ */
+bool transfer_zigbee_factory_reset(const char* transfer_mode);
+
+/**
+ * @brief Startet ZigBee-Pairing (Network Steering)
+ * 
+ * @return esp_err_t ESP_OK bei Erfolg, Fehlercode bei Fehler
+ */
+esp_err_t transfer_zigbee_start_pairing(void);
+
+/**
+ * @brief Prüft, ob ein Factory-Reset gerade läuft
+ * 
+ * @return true wenn Factory-Reset läuft, false sonst
+ */
+bool transfer_zigbee_is_factory_reset_in_progress(void);
 
 #endif // TRANSFER_ZIGBEE_H
