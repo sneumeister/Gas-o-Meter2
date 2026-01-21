@@ -2271,7 +2271,7 @@ CONFIG_ZB_RADIO_NATIVE=y
 #
 # end of Zigbee Example
 
-# CONFIG_ZB_DEBUG_MODE is not set
+CONFIG_ZB_DEBUG_MODE=y
 # end of Zigbee
 
 #

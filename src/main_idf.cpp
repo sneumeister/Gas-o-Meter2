@@ -1600,6 +1600,34 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 static esp_event_handler_instance_t instance_any_id = NULL;
 static esp_event_handler_instance_t instance_got_ip = NULL;
 
+// Statische Variable für mDNS-Initialisierung
+static bool mdns_initialized = false;
+
+// ============================================
+// WiFi TX Power Hilfsfunktion
+// ============================================
+/**
+ * @brief Setzt die WiFi TX Power (Sendeleistung)
+ * 
+ * WICHTIG: Muss nach esp_wifi_start() aufgerufen werden!
+ * 
+ * @param tx_power TX Power in 0.25 dBm Einheiten (8-84, entspricht 2-20 dBm)
+ *                 WICHTIG: Wert wird zur Compile-Zeit in hardware.h definiert (WIFI_TX_POWER_DEFAULT),
+ *                 daher wird keine Laufzeit-Bereichsprüfung durchgeführt
+ * @return true bei Erfolg, false bei Fehler
+ */
+static bool wifi_set_tx_power(int8_t tx_power) {
+    esp_err_t ret = esp_wifi_set_max_tx_power(tx_power);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "WiFi TX Power gesetzt: %d (%.2f dBm)", tx_power, tx_power * 0.25f);
+        return true;
+    } else {
+        ESP_LOGW(TAG, "WiFi TX Power konnte nicht gesetzt werden: %s (Wert: %d)", 
+                 esp_err_to_name(ret), tx_power);
+        return false;
+    }
+}
+
 // ============================================
 // WiFi-Initialisierung (ESP-IDF)
 // ============================================
@@ -1659,6 +1687,10 @@ bool connect_wifi() {
         ESP_LOGE(TAG, "WiFi-Start fehlgeschlagen: %s", esp_err_to_name(ret));
         return false;
     }
+    
+    // WiFi TX Power setzen (nach esp_wifi_start)
+    wifi_set_tx_power(WIFI_TX_POWER_DEFAULT);
+    
     vTaskDelay(pdMS_TO_TICKS(100));  // Kurze Verzögerung für WiFi-Initialisierung
     
     // Hostname setzen (für DHCP-Server)
@@ -1729,6 +1761,12 @@ bool connect_wifi() {
     
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     esp_wifi_start();
+    
+    // WiFi TX Power setzen (nach esp_wifi_start)
+    // HINWEIS: TX Power wurde bereits beim ersten esp_wifi_start() für Scan gesetzt
+    // und bleibt erhalten, daher ist das zweite Setzen optional (aber harmlos)
+    wifi_set_tx_power(WIFI_TX_POWER_DEFAULT);
+    
     esp_wifi_connect();
     
     // Warte auf Verbindung (über Event-Handler)
@@ -1812,6 +1850,9 @@ bool start_access_point() {
         ESP_LOGE(TAG, "AP-Start fehlgeschlagen: %s", esp_err_to_name(ret));
         return false;
     }
+    
+    // WiFi TX Power setzen (nach esp_wifi_start)
+    wifi_set_tx_power(WIFI_TX_POWER_DEFAULT);
     
     ESP_LOGI(TAG, "Access Point gestartet: %s", config_rtc.hostname);
     ESP_LOGI(TAG, "AP IP: %d.%d.%d.%d", AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
@@ -1969,13 +2010,13 @@ const char* processor_get_value(const char* var) {
     if (strcmp(var, "pulse_counter_left") == 0) {
         // Linke 5 Stellen für CSS-Formatierung (Vorkommastellen)
         uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
-        snprintf(buffer, sizeof(buffer), "%05lu", current_pulse / 100);
+        snprintf(buffer, sizeof(buffer), "%05lu", current_pulse / PULSE_COUNTER_DIVISOR);
         return buffer;
     }
     if (strcmp(var, "pulse_counter_right") == 0) {
         // Rechte 2 Stellen für CSS-Formatierung (Nachkommastellen)
         uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
-        snprintf(buffer, sizeof(buffer), "%02lu", current_pulse % 100);
+        snprintf(buffer, sizeof(buffer), "%02lu", current_pulse % PULSE_COUNTER_DIVISOR);
         return buffer;
     }
     if (strcmp(var, "system_time") == 0) {
@@ -2067,14 +2108,10 @@ const char* processor_get_value(const char* var) {
         #ifndef ARDUINO
         // ESP-IDF: Prüfe ZigBee-Status (nur wenn transfer_mode=zigbee)
         if (strcmp(config_rtc.transfer_mode, "zigbee") == 0) {
-            // Versuche ZigBee-Status zu ermitteln (kann fehlschlagen, wenn Stack nicht initialisiert ist)
-            // Für jetzt: Status aus zigbee_rtc lesen
-            is_joined = zigbee_rtc.joined;
-            // Factory-new kann nicht direkt geprüft werden ohne Stack-Initialisierung
-            // Verwende joined-Status als Indikator
-            if (!is_joined && !ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
-                is_factory_new = true;
-            }
+            // Verwende Wrapper-Funktionen, die automatisch den Stack-Status prüfen (wenn initialisiert)
+            // oder auf zigbee_rtc zurückfallen (wenn Stack nicht initialisiert)
+            is_joined = transfer_zigbee_is_joined();
+            is_factory_new = transfer_zigbee_is_factory_new();
         }
         #endif
         
@@ -2355,8 +2392,8 @@ static esp_err_t reading_handler(httpd_req_t *req) {
     
     // Format: XXXXX.XX (5 Vorkommastellen + Punkt + 2 Nachkommastellen)
     uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
-    uint32_t vorkommastellen = current_pulse / 100;
-    uint32_t nachkommastellen = current_pulse % 100;
+    uint32_t vorkommastellen = current_pulse / PULSE_COUNTER_DIVISOR;
+    uint32_t nachkommastellen = current_pulse % PULSE_COUNTER_DIVISOR;
     
     char reading[9];
     snprintf(reading, sizeof(reading), "%05lu.%02lu", vorkommastellen, nachkommastellen);
@@ -2959,7 +2996,7 @@ static esp_err_t counter_set_handler(httpd_req_t *req) {
     
     // Erfolgreiche Antwort
     char response[100];
-    snprintf(response, sizeof(response), "Zählerstand gesetzt und in NVS gespeichert: %05lu.%02lu", new_value / 100, new_value % 100);
+    snprintf(response, sizeof(response), "Zählerstand gesetzt und in NVS gespeichert: %05lu.%02lu", new_value / PULSE_COUNTER_DIVISOR, new_value % PULSE_COUNTER_DIVISOR);
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
@@ -3042,7 +3079,7 @@ static esp_err_t zigbee_action_handler(httpd_req_t *req) {
             #ifndef ARDUINO
             if (strcmp(config_rtc.transfer_mode, TRANSFER_MODE_ZIGBEE) == 0) {
                 httpd_resp_set_type(req, "application/json");
-                httpd_resp_send(req, "{\"status\":\"success\",\"message\":\"Factory-Reset erfolgreich. ZigBee-Stack wurde neu initialisiert.\"}", HTTPD_RESP_USE_STRLEN);
+                httpd_resp_send(req, "{\"status\":\"success\",\"message\":\"Factory-Reset erfolgreich. Bitte Gerät manuell neu starten, damit der ZigBee-Stack sauber initialisiert wird.\"}", HTTPD_RESP_USE_STRLEN);
             } else {
                 httpd_resp_set_type(req, "application/json");
                 httpd_resp_send(req, "{\"status\":\"success\",\"message\":\"Factory-Reset erfolgreich (ZigBee war nicht aktiv).\"}", HTTPD_RESP_USE_STRLEN);
@@ -3123,6 +3160,10 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
         httpd_resp_send(req, "{\"error\":\"WiFi-Start fehlgeschlagen\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_OK;
     }
+    
+    // WiFi TX Power setzen (nach esp_wifi_start)
+    wifi_set_tx_power(WIFI_TX_POWER_DEFAULT);
+    
     vTaskDelay(pdMS_TO_TICKS(100));  // Kurze Verzögerung für WiFi-Initialisierung
     
     wifi_scan_config_t scan_config = {
@@ -3521,6 +3562,28 @@ extern "C" void app_main(void) {
             break;
     }
     
+    // ========================================================================
+    // ========================================================================
+    // ========================================================================
+    // VORÜBERGEHENDE WARTEZEIT FÜR WINDOWS COM-PORT VERFÜGBARKEIT
+    // ========================================================================
+    // PROBLEM: Nach Deep-Sleep-Wake-up benötigt der COM-Port unter Windows
+    //          zu lange, bis er wieder verfügbar ist. Die Hälfte der Logs
+    //          geht verloren, bevor der Serial Monitor verbunden ist.
+    // LÖSUNG: 2 Sekunden Wartezeit nach Wake-up, damit Windows den COM-Port
+    //         wieder erkennt und alle Logs sichtbar sind.
+    // HINWEIS: Diese Wartezeit ist VORÜBERGEHEND und sollte nach Lösung des
+    //          COM-Port-Problems wieder entfernt werden!
+    // ========================================================================
+    // ========================================================================
+    // ========================================================================
+    ESP_LOGI(TAG, "Warte 2 Sekunden für Windows COM-Port-Verfügbarkeit...");
+    vTaskDelay(pdMS_TO_TICKS(2000));  // 2 Sekunden = 2000 ms
+    ESP_LOGI(TAG, "Wartezeit abgeschlossen - Logs sollten jetzt vollständig sichtbar sein");
+    // ========================================================================
+    // ========================================================================
+    // ========================================================================
+    
     // Interne LED initialisieren und sofort einschalten (HP-Core läuft)
     // WICHTIG: LED wird hier eingeschaltet, um zu zeigen, dass HP-Core aktiv ist
     io_conf.pin_bit_mask = (1ULL << LED_BUILTIN_GPIO);
@@ -3661,6 +3724,7 @@ extern "C" void app_main(void) {
                     transfer_data_t data_to_transfer = {
                         .pulse_counter = *(volatile uint32_t *)&ulp_pulse_counter,
                         .battery_percent = (float)battery_percent,  // Bereits als uint8_t vorhanden
+                        .battery_voltage = battery_voltage,  // Akku-Spannung in Volt (z.B. 3.57V) - für Zigbee Battery Voltage Attribut
                         .firmware_version = PROJECT_VERSION
                     };
                     
@@ -3694,15 +3758,36 @@ extern "C" void app_main(void) {
             
             // WiFi verbinden
             if (connect_wifi()) {
-                        // mDNS starten (für .local Domain)
-                        esp_err_t mdns_ret = mdns_init();
-                        if (mdns_ret == ESP_OK) {
-                            mdns_hostname_set(config_rtc.hostname);
-                            mdns_instance_name_set("Gas-O-Meter");
-                            mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
-                            ESP_LOGI(TAG, "mDNS: http://%s.local", config_rtc.hostname);
+                        // mDNS initialisieren (nur einmal, nach erfolgreicher WiFi-Verbindung mit IP)
+                        // ESP-IDF Best Practice: mDNS nach IP-Adresszuweisung initialisieren
+                        if (!mdns_initialized) {
+                            esp_err_t mdns_ret = mdns_init();
+                            if (mdns_ret == ESP_OK) {
+                                // Hostname und Instance Name setzen (vor Service-Add)
+                                mdns_hostname_set(config_rtc.hostname);
+                                mdns_instance_name_set("Gas-O-Meter");
+                                
+                                // HTTP-Service hinzufügen
+                                mdns_ret = mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+                                if (mdns_ret == ESP_OK) {
+                                    mdns_initialized = true;
+                                    ESP_LOGI(TAG, "mDNS initialisiert: http://%s.local", config_rtc.hostname);
+                                } else {
+                                    ESP_LOGE(TAG, "mDNS: Fehler beim Hinzufügen des HTTP-Services: %s", esp_err_to_name(mdns_ret));
+                                }
+                            } else {
+                                // ESP_ERR_INVALID_STATE bedeutet, dass mDNS bereits initialisiert wurde
+                                if (mdns_ret == ESP_ERR_INVALID_STATE) {
+                                    mdns_initialized = true;
+                                    ESP_LOGW(TAG, "mDNS bereits initialisiert");
+                                } else {
+                                    ESP_LOGE(TAG, "mDNS-Initialisierung fehlgeschlagen: %s", esp_err_to_name(mdns_ret));
+                                }
+                            }
                         } else {
-                            ESP_LOGE(TAG, "mDNS-Initialisierung fehlgeschlagen: %s", esp_err_to_name(mdns_ret));
+                            // mDNS bereits initialisiert - nur Hostname aktualisieren (falls geändert)
+                            mdns_hostname_set(config_rtc.hostname);
+                            ESP_LOGI(TAG, "mDNS: http://%s.local (bereits initialisiert)", config_rtc.hostname);
                         }
                         
                 // NTP-Zeitsynchronisation

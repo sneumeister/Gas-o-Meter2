@@ -1170,6 +1170,17 @@ function toggleZigbeeConfigPanel() {
 
 // ZigBee-Status aktualisieren
 function updateZigbeeStatus() {
+    // Prüfe, ob ZigBee aktiv ist
+    const transferMode = document.getElementById('transfer_mode');
+    if (!transferMode || transferMode.value !== 'zigbee') {
+        // ZigBee ist nicht aktiv - keine Status-Abfrage nötig
+        const statusDiv = document.getElementById('zigbeeActionStatus');
+        if (statusDiv) {
+            statusDiv.innerHTML = '<p class="text-muted">ZigBee ist nicht aktiv</p>';
+        }
+        return;
+    }
+    
     const statusDiv = document.getElementById('zigbeeActionStatus');
     if (statusDiv) {
         statusDiv.textContent = 'Lade ZigBee-Status...';
@@ -1181,11 +1192,26 @@ function updateZigbeeStatus() {
     })
     .then(response => {
         if (!response.ok) {
+            // Prüfe, ob es ein 400-Fehler ist (ZigBee nicht aktiv)
+            if (response.status === 400) {
+                return response.json().then(data => {
+                    // ZigBee ist nicht aktiv
+                    if (statusDiv) {
+                        statusDiv.innerHTML = '<p class="text-muted">ZigBee ist nicht aktiv</p>';
+                    }
+                    return null; // Keine weitere Verarbeitung
+                });
+            }
             throw new Error('Fehler beim Laden des Status');
         }
         return response.json();
     })
     .then(data => {
+        // Wenn data null ist (ZigBee nicht aktiv), nichts weiter tun
+        if (!data) {
+            return;
+        }
+        
         // Status in der Tabelle aktualisieren (falls vorhanden)
         if (data.status) {
             // Status wird bereits über Template-Variablen angezeigt, hier nur Logging
@@ -1249,17 +1275,58 @@ function zigbeeFactoryReset() {
         return response.json();
     })
     .then(data => {
-        // Erfolg: Status neben Button anzeigen
+        // Erfolg: Zeige persistentes Alert-Fenster (wie bei Config-Speicherung)
+        // Entferne alte Erfolgs-Alerts (falls vorhanden)
+        const oldAlerts = document.querySelectorAll('.alert-success');
+        oldAlerts.forEach(alert => alert.remove());
+        
+        // Erstelle neues Alert-Fenster
+        const successAlert = document.createElement('div');
+        successAlert.className = 'alert alert-success alert-dismissible fade show';
+        successAlert.setAttribute('role', 'alert');
+        successAlert.style.cssText = 'margin-bottom: 20px;';
+        
+        let alertMessage = `<strong>✓ ${data.message || 'Factory-Reset erfolgreich.'}</strong><br>`;
+        alertMessage += `Alle ZigBee-Netzwerkdaten wurden gelöscht.<br>`;
+        alertMessage += `<strong>Bitte betätigen Sie den "Reboot"-Button, damit der ZigBee-Stack sauber initialisiert wird.</strong><br><br>`;
+        
+        // Zeige empfangene JSON-Daten (für Debugging)
+        alertMessage += `<details style="margin-top: 10px;">`;
+        alertMessage += `<summary style="cursor: pointer; color: #667eea;">📋 Empfangene JSON-Daten anzeigen (Debugging)</summary>`;
+        alertMessage += `<pre style="background: #f8f9fa; padding: 10px; border-radius: 4px; margin-top: 10px; font-size: 0.85em; overflow-x: auto;">`;
+        alertMessage += JSON.stringify(data, null, 2);
+        alertMessage += `</pre>`;
+        alertMessage += `</details>`;
+        
+        alertMessage += `<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>`;
+        
+        successAlert.innerHTML = alertMessage;
+        
+        // Füge Alert am Anfang des Containers ein
+        const container = document.querySelector('.config-container');
+        if (container) {
+            container.insertBefore(successAlert, container.firstChild);
+        } else {
+            // Fallback: Am Anfang des Body einfügen
+            document.body.insertBefore(successAlert, document.body.firstChild);
+        }
+        
+        // Scroll zum Alert
+        successAlert.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        
+        // Status neben Button anzeigen
         if (statusSpan) {
             statusSpan.innerHTML = '<span class="text-success">✓ OK</span>';
         }
         if (statusDiv) {
-            statusDiv.innerHTML = '<p class="text-success">' + (data.message || 'Factory-Reset erfolgreich.') + '</p>';
+            statusDiv.innerHTML = '<p class="text-muted">Status wird aktualisiert...</p>';
         }
+        
         // Status nach 3 Sekunden aktualisieren, um zu sehen, ob ZigBee jetzt "factory-new" ist
         setTimeout(() => {
             updateZigbeeStatus();
         }, 3000);
+        
         // Status-Span nach 5 Sekunden wieder leeren
         setTimeout(() => {
             if (statusSpan) {

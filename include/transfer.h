@@ -32,6 +32,7 @@ typedef enum {
 typedef struct {
     uint32_t pulse_counter;       // Gas-Zählerstand (aus ulp_pulse_counter)
     float battery_percent;         // Akku-Ladezustand in Prozent (0.0 - 100.0)
+    float battery_voltage;         // Akku-Spannung in Volt (z.B. 3.57V) - für Zigbee Battery Voltage Attribut
     const char* firmware_version;  // Firmware-Version (z.B. "0.6")
 } transfer_data_t;
 

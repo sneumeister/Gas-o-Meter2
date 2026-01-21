@@ -70,4 +70,35 @@ esp_err_t transfer_zigbee_start_pairing(void);
  */
 bool transfer_zigbee_is_factory_reset_in_progress(void);
 
+/**
+ * @brief Stellt sicher, dass das Device mit dem ZigBee-Netzwerk verbunden ist
+ * 
+ * Prüft den aktuellen Status (factory-new, joined) und startet bei Bedarf
+ * Pairing oder Rejoin. Wartet auf erfolgreichen Abschluss mit Timeouts.
+ * 
+ * @return transfer_status_t TRANSFER_STATUS_OK wenn verbunden, Fehlercode bei Fehler
+ */
+transfer_status_t transfer_zigbee_ensure_joined(void);
+
+/**
+ * @brief Prüft, ob der ZigBee-Stack initialisiert ist
+ * 
+ * @return true wenn Stack initialisiert ist, false sonst
+ */
+bool transfer_zigbee_is_initialized(void);
+
+/**
+ * @brief Prüft, ob das Device mit dem ZigBee-Netzwerk verbunden ist
+ * 
+ * @return true wenn Device joined ist, false sonst
+ */
+bool transfer_zigbee_is_joined(void);
+
+/**
+ * @brief Prüft, ob das Device factory-new ist (noch nicht gepaart)
+ * 
+ * @return true wenn Device factory-new ist, false sonst
+ */
+bool transfer_zigbee_is_factory_new(void);
+
 #endif // TRANSFER_ZIGBEE_H
