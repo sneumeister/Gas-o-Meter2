@@ -686,34 +686,41 @@ bool init_nvs_partition(const char* partition_name, bool is_power_on, bool is_st
     esp_err_t err;
     
     // Initialisierung versuchen (Standard-NVS oder Pulse-NVS)
+    ESP_LOGI(TAG, "init_nvs_partition: Initialisiere %s (is_power_on=%s, is_standard_nvs=%s)...", 
+             partition_name, is_power_on ? "true" : "false", is_standard_nvs ? "true" : "false");
     if (is_standard_nvs) {
         err = nvs_flash_init();
     } else {
         err = nvs_flash_init_partition(partition_name);
     }
+    ESP_LOGI(TAG, "init_nvs_partition: %s Initialisierung: %s", partition_name, esp_err_to_name(err));
     
     // Prüfen, ob Neuinitialisierung erforderlich ist
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "init_nvs_partition: %s benötigt Neuinitialisierung (err=%s)", partition_name, esp_err_to_name(err));
         if (is_power_on) {
             // Bei Power-On: Partition löschen und neu initialisieren
-            ESP_LOGI(TAG, "%s muss neu initialisiert werden...", partition_name);
+            ESP_LOGI(TAG, "init_nvs_partition: %s muss neu initialisiert werden (Power-On → Partition wird gelöscht)...", partition_name);
             esp_err_t erase_err = is_standard_nvs ? 
                 nvs_flash_erase() : 
                 nvs_flash_erase_partition(partition_name);
             if (erase_err == ESP_OK) {
+                ESP_LOGI(TAG, "init_nvs_partition: %s erfolgreich gelöscht", partition_name);
                 err = is_standard_nvs ? 
                     nvs_flash_init() : 
                     nvs_flash_init_partition(partition_name);
+                ESP_LOGI(TAG, "init_nvs_partition: %s nach Löschung neu initialisiert: %s", partition_name, esp_err_to_name(err));
             } else {
-                ESP_LOGE(TAG, "%s-Löschung fehlgeschlagen: %s", partition_name, esp_err_to_name(erase_err));
+                ESP_LOGE(TAG, "init_nvs_partition: %s-Löschung fehlgeschlagen: %s", partition_name, esp_err_to_name(erase_err));
             }
         } else {
             // Bei Deep-Sleep-Wake-up: Versuche erneut ohne Löschung (NVS sollte noch vorhanden sein)
-            ESP_LOGW(TAG, "WARNUNG: %s benötigt Neuinitialisierung!", partition_name);
-            ESP_LOGI(TAG, "Versuche erneut zu initialisieren (ohne Löschung)...");
+            ESP_LOGW(TAG, "init_nvs_partition: WARNUNG: %s benötigt Neuinitialisierung bei Deep-Sleep-Wake-up!", partition_name);
+            ESP_LOGI(TAG, "init_nvs_partition: Versuche erneut zu initialisieren (ohne Löschung - Daten sollten erhalten bleiben)...");
             err = is_standard_nvs ? 
                 nvs_flash_init() : 
                 nvs_flash_init_partition(partition_name);
+            ESP_LOGI(TAG, "init_nvs_partition: %s erneute Initialisierung (ohne Löschung): %s", partition_name, esp_err_to_name(err));
         }
     }
     
@@ -2895,6 +2902,80 @@ static esp_err_t reboot_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// Handler für /deepsleep (POST)
+// WICHTIG: Nur POST-Body wird akzeptiert, KEINE Query-Parameter (Sicherheitsmaßnahme gegen versehentliches Deep-Sleep)
+static esp_err_t deepsleep_handler(httpd_req_t *req) {
+    // POST-Daten lesen (wie Arduino's hasParam("cmd", true))
+    const size_t MAX_POST_SIZE = 512;  // Erhöht für multipart/form-data
+    size_t content_len = req->content_len;
+    
+    // DEBUG: Zeige Content-Length
+    ESP_LOGD(TAG, "DeepSleep-Handler: Content-Length=%zu", content_len);
+    
+    if (content_len == 0 || content_len > MAX_POST_SIZE) {
+        ESP_LOGE(TAG, "DeepSleep-Handler: POST-Daten ungültig (Content-Length=%zu, Max=%zu)", content_len, MAX_POST_SIZE);
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: POST-Daten ungültig", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    char post_data[512];
+    int len = read_post_data(req, post_data, sizeof(post_data));
+    if (len < 0) {
+        ESP_LOGE(TAG, "DeepSleep-Handler: POST-Daten konnten nicht gelesen werden");
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: POST-Daten konnten nicht gelesen werden", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    // DEBUG: Zeige empfangene POST-Daten
+    ESP_LOGD(TAG, "DeepSleep-Handler: POST-Daten empfangen (%d Bytes): %.200s", len, post_data);
+    
+    // POST-Parameter prüfen: cmd=deepsleep
+    char cmd[32] = "";
+    if (!get_post_param(post_data, len, "cmd", cmd, sizeof(cmd))) {
+        ESP_LOGE(TAG, "DeepSleep-Handler: Parameter 'cmd' nicht gefunden in POST-Daten");
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: Parameter 'cmd=deepsleep' erforderlich", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    ESP_LOGD(TAG, "DeepSleep-Handler: cmd='%s'", cmd);
+    
+    if (strcmp(cmd, "deepsleep") != 0) {
+        ESP_LOGE(TAG, "DeepSleep-Handler: cmd='%s' != 'deepsleep'", cmd);
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: Parameter 'cmd=deepsleep' erforderlich", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    // WICHTIG: Aktivität NACH Validierung aktualisieren, um Race-Condition mit Web-Timeout-Task zu vermeiden
+    // Der Timeout-Task läuft asynchron und könnte zwischenzeitlich Deep-Sleep auslösen
+    last_web_activity_us = esp_timer_get_time();
+    
+    // Prüfe, ob ein Factory-Reset gerade läuft
+    if (transfer_zigbee_is_factory_reset_in_progress()) {
+        ESP_LOGW(TAG, "DeepSleep-Handler: Deep-Sleep abgelehnt - Factory-Reset läuft gerade");
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"error\":\"Deep-Sleep nicht möglich: ZigBee Factory-Reset läuft gerade\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_send(req, "Deep-Sleep wird durchgeführt...", HTTPD_RESP_USE_STRLEN);
+    
+    // Deep-Sleep-Variable setzen (ähnlich wie reboot_requested)
+    should_enter_deep_sleep = true;
+    deep_sleep_reason = "Deep-Sleep durch Web-Interface ausgelöst";
+    
+    return ESP_OK;
+}
+
 // Handler für /counter/set (POST)
 static esp_err_t counter_set_handler(httpd_req_t *req) {
     last_web_activity_us = esp_timer_get_time();
@@ -3448,6 +3529,14 @@ void setupWebServer() {
         .user_ctx  = NULL
     };
     httpd_register_uri_handler(server, &reboot_uri);
+    
+    httpd_uri_t deepsleep_uri = {
+        .uri       = "/deepsleep",
+        .method    = HTTP_POST,
+        .handler   = deepsleep_handler,
+        .user_ctx  = NULL
+    };
+    httpd_register_uri_handler(server, &deepsleep_uri);
     
     httpd_uri_t counter_set_uri = {
         .uri       = "/counter/set",

@@ -82,7 +82,7 @@
 // Bekanntes Problem (SDK Issue #335/TZ-842): Coordinator sendet manchmal keine Association Response
 // wenn die Request zu früh nach Network Discovery kommt
 // Empfohlene Werte: 500-2000 ms (abhängig von Netzwerk-Latenz)
-#define ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS  1000  // Verzögerung nach erfolgreichem Network Steering vor Association Request (ms)
+#define ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS  1500  // Verzögerung nach erfolgreichem Network Steering vor Association Request (ms)
 
 // TX Power Konfiguration (Sendeleistung)
 // ESP32-C6 Maximum: +10 dBm, Minimum: SDK-abhängig (typisch -30 dBm)

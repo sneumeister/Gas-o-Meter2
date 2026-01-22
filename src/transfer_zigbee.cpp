@@ -132,24 +132,30 @@ bool zigbee_config_load_from_nvs(bool is_power_on) {
     nvs_handle_t nvs_handle;
     esp_err_t err;
     
+    ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Versuche NVS-Namespace '%s' zu öffnen...", ZIGBEE_NVS_NAMESPACE);
     err = nvs_open(ZIGBEE_NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
-        ESP_LOGI(TAG, "zigbee_config_load_from_nvs: NVS-Namespace '%s' existiert nicht (noch nicht gepaart) → RTC-RAM auf Default-Werte gesetzt", 
-                 ZIGBEE_NVS_NAMESPACE);
+        ESP_LOGI(TAG, "zigbee_config_load_from_nvs: NVS-Namespace '%s' existiert nicht (noch nicht gepaart, err=%s) → RTC-RAM auf Default-Werte gesetzt", 
+                 ZIGBEE_NVS_NAMESPACE, esp_err_to_name(err));
         // RTC-RAM ist bereits auf Default-Werte gesetzt
         return true;  // Kein Fehler, einfach noch nicht gepaart
     }
+    ESP_LOGI(TAG, "zigbee_config_load_from_nvs: NVS-Namespace '%s' erfolgreich geöffnet", ZIGBEE_NVS_NAMESPACE);
     
     // Lade alle Werte aus NVS
     size_t required_size = sizeof(zigbee_rtc_t);
+    ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Versuche Config-Blob zu laden (Key: '%s', erwartete Size: %zu Bytes)...", 
+             ZIGBEE_NVS_KEY_CONFIG, sizeof(zigbee_rtc_t));
     err = nvs_get_blob(nvs_handle, ZIGBEE_NVS_KEY_CONFIG, &zigbee_rtc, &required_size);
     nvs_close(nvs_handle);
     
     if (err == ESP_OK && required_size == sizeof(zigbee_rtc_t)) {
+        ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Config-Blob erfolgreich geladen (Size: %zu Bytes)", required_size);
         // Validiere geladene Daten
         if (zigbee_rtc.joined && ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
-            ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Config aus NVS geladen (joined: %s, network_addr: 0x%04X, pan_id: 0x%04X, channel: %d)",
-                     zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id, zigbee_rtc.channel);
+            ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Config aus NVS geladen (joined: %s, network_addr: 0x%04X, pan_id: 0x%04X, channel: %d, extended_addr=0x%016llX)",
+                     zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id, zigbee_rtc.channel,
+                     (unsigned long long)zigbee_rtc.extended_addr);
             return true;
         } else {
             // Geladene Daten sind ungültig → auf Default-Werte zurücksetzen
@@ -159,7 +165,13 @@ bool zigbee_config_load_from_nvs(bool is_power_on) {
             return true;
         }
     } else {
-        ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Config nicht in NVS gefunden (noch nicht gepaart) → RTC-RAM auf Default-Werte gesetzt");
+        if (err != ESP_OK) {
+            ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Config nicht in NVS gefunden (nvs_get_blob fehlgeschlagen: %s, Size: %zu, erwartet: %zu) → RTC-RAM auf Default-Werte gesetzt",
+                     esp_err_to_name(err), required_size, sizeof(zigbee_rtc_t));
+        } else {
+            ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Config nicht in NVS gefunden (Size-Mismatch: %zu != %zu) → RTC-RAM auf Default-Werte gesetzt",
+                     required_size, sizeof(zigbee_rtc_t));
+        }
         // RTC-RAM ist bereits auf Default-Werte gesetzt
         return true;  // Kein Fehler, einfach noch nicht gepaart
     }
@@ -176,34 +188,86 @@ bool zigbee_config_save_to_nvs(void) {
     nvs_handle_t nvs_handle;
     esp_err_t err;
     
+    // HINZUFÜGEN: Prüfe, was gespeichert wird
+    ESP_LOGI(TAG, "zigbee_config_save_to_nvs: Speichere Config: joined=%s, network_addr=0x%04X, pan_id=0x%04X, channel=%d, extended_addr=0x%016llX",
+             zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id, zigbee_rtc.channel,
+             (unsigned long long)zigbee_rtc.extended_addr);
+    
     err = nvs_open(ZIGBEE_NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
     if (err != ESP_OK) {
         // Namespace existiert nicht → erstellen
+        ESP_LOGW(TAG, "zigbee_config_save_to_nvs: NVS-Namespace '%s' existiert nicht, versuche zu erstellen...", ZIGBEE_NVS_NAMESPACE);
         err = nvs_open(ZIGBEE_NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "zigbee_config_save_to_nvs: NVS-Namespace '%s' konnte nicht geöffnet werden: %s",
                      ZIGBEE_NVS_NAMESPACE, esp_err_to_name(err));
             return false;
         }
+        ESP_LOGI(TAG, "zigbee_config_save_to_nvs: NVS-Namespace '%s' erfolgreich erstellt", ZIGBEE_NVS_NAMESPACE);
     }
     
     // Speichere gesamte Config-Struktur als Blob
     err = nvs_set_blob(nvs_handle, ZIGBEE_NVS_KEY_CONFIG, &zigbee_rtc, sizeof(zigbee_rtc_t));
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "zigbee_config_save_to_nvs: Fehler beim Speichern: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "zigbee_config_save_to_nvs: Fehler beim Speichern (nvs_set_blob): %s (Size: %zu Bytes)", 
+                 esp_err_to_name(err), sizeof(zigbee_rtc_t));
         nvs_close(nvs_handle);
         return false;
     }
+    ESP_LOGI(TAG, "zigbee_config_save_to_nvs: nvs_set_blob erfolgreich (Size: %zu Bytes)", sizeof(zigbee_rtc_t));
     
     // Commit
     err = nvs_commit(nvs_handle);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "zigbee_config_save_to_nvs: Fehler beim Committen: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "zigbee_config_save_to_nvs: Fehler beim Committen (nvs_commit): %s", esp_err_to_name(err));
         nvs_close(nvs_handle);
         return false;
     }
+    ESP_LOGI(TAG, "zigbee_config_save_to_nvs: nvs_commit erfolgreich");
+    
+    // WICHTIG: Flash braucht Zeit zum Schreiben - Delay NACH nvs_commit, VOR nvs_close
+    // Dies stellt sicher, dass die Daten wirklich auf den Flash geschrieben werden, bevor der Handle geschlossen wird
+    vTaskDelay(pdMS_TO_TICKS(100));  // 100ms Delay für Flash-Schreibvorgang nach nvs_commit
     
     nvs_close(nvs_handle);
+    
+    // WICHTIG: Verifiziere nach zusätzlichem Delay, ob Daten wirklich geschrieben wurden
+    // Zusätzliches Delay gibt Flash mehr Zeit zum Abschließen der Schreibvorgänge
+    vTaskDelay(pdMS_TO_TICKS(50));  // 50ms zusätzliches Delay vor Verifikation (Gesamt: 150ms nach nvs_commit)
+    
+    nvs_handle_t verify_handle;
+    err = nvs_open(ZIGBEE_NVS_NAMESPACE, NVS_READONLY, &verify_handle);
+    if (err == ESP_OK) {
+        zigbee_rtc_t verify_data;
+        size_t verify_size = sizeof(zigbee_rtc_t);
+        err = nvs_get_blob(verify_handle, ZIGBEE_NVS_KEY_CONFIG, &verify_data, &verify_size);
+        if (err == ESP_OK && verify_size == sizeof(zigbee_rtc_t)) {
+            // Verifikation: Prüfe alle wichtigen Felder inkl. extended_addr
+            if (verify_data.joined == zigbee_rtc.joined && 
+                verify_data.network_addr == zigbee_rtc.network_addr &&
+                verify_data.pan_id == zigbee_rtc.pan_id &&
+                verify_data.channel == zigbee_rtc.channel &&
+                verify_data.extended_addr == zigbee_rtc.extended_addr) {
+                ESP_LOGI(TAG, "zigbee_config_save_to_nvs: Verifikation erfolgreich ✓ (joined=%s, addr=0x%04X, pan_id=0x%04X, channel=%d, extended_addr=0x%016llX)",
+                         verify_data.joined ? "true" : "false", verify_data.network_addr, verify_data.pan_id, verify_data.channel,
+                         (unsigned long long)verify_data.extended_addr);
+            } else {
+                ESP_LOGW(TAG, "zigbee_config_save_to_nvs: Verifikation: Daten stimmen nicht überein!");
+                ESP_LOGW(TAG, "  → Gespeichert: joined=%s, addr=0x%04X, pan_id=0x%04X, channel=%d, extended_addr=0x%016llX",
+                         zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id, zigbee_rtc.channel,
+                         (unsigned long long)zigbee_rtc.extended_addr);
+                ESP_LOGW(TAG, "  → Gelesen: joined=%s, addr=0x%04X, pan_id=0x%04X, channel=%d, extended_addr=0x%016llX",
+                         verify_data.joined ? "true" : "false", verify_data.network_addr, verify_data.pan_id, verify_data.channel,
+                         (unsigned long long)verify_data.extended_addr);
+            }
+        } else {
+            ESP_LOGE(TAG, "zigbee_config_save_to_nvs: Verifikation fehlgeschlagen: %s (Size: %zu, erwartet: %zu)", 
+                     esp_err_to_name(err), verify_size, sizeof(zigbee_rtc_t));
+        }
+        nvs_close(verify_handle);
+    } else {
+        ESP_LOGW(TAG, "zigbee_config_save_to_nvs: Verifikation: NVS-Namespace konnte nicht geöffnet werden: %s", esp_err_to_name(err));
+    }
     
     ESP_LOGI(TAG, "zigbee_config_save_to_nvs: Config in NVS gespeichert (joined: %s, network_addr: 0x%04X, pan_id: 0x%04X, channel: %d)",
              zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id, zigbee_rtc.channel);
@@ -432,6 +496,9 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                     // In NVS speichern (WICHTIG: Muss vor Deep-Sleep erfolgen!)
                     if (zigbee_config_save_to_nvs()) {
                         ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert");
+                        // WICHTIG: Zusätzliches Delay nach zigbee_config_save_to_nvs() (bereits 100ms in Funktion)
+                        // Gesamt: 100ms (in zigbee_config_save_to_nvs) + 500ms (hier) = 600ms für Flash-Schreibvorgang
+                        vTaskDelay(pdMS_TO_TICKS(500));  // 500ms zusätzliches Delay für Flash-Schreibvorgang
                     } else {
                         ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config konnte nicht in NVS gespeichert werden!");
                     }
@@ -446,6 +513,9 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                     // In NVS speichern (auch bei Rejoin, falls sich Netzwerk-Parameter geändert haben)
                     if (zigbee_config_save_to_nvs()) {
                         ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (Rejoin)");
+                        // WICHTIG: Zusätzliches Delay nach zigbee_config_save_to_nvs() (bereits 100ms in Funktion)
+                        // Gesamt: 100ms (in zigbee_config_save_to_nvs) + 500ms (hier) = 600ms für Flash-Schreibvorgang
+                        vTaskDelay(pdMS_TO_TICKS(500));  // 500ms zusätzliches Delay für Flash-Schreibvorgang
                     } else {
                         ESP_LOGW(TAG, "        → Warnung: ZigBee-Config konnte nicht in NVS gespeichert werden (Rejoin)");
                     }
@@ -1203,6 +1273,9 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             // In NVS speichern
             if (zigbee_config_save_to_nvs()) {
                 ESP_LOGI(TAG, "        → zigbee_rtc erfolgreich synchronisiert und in NVS gespeichert");
+                // WICHTIG: Flash braucht Zeit zum Schreiben - Delay vor Deep-Sleep
+                // Gesamt: 100ms (in zigbee_config_save_to_nvs) + 500ms (hier) = 600ms für Flash-Schreibvorgang
+                vTaskDelay(pdMS_TO_TICKS(500));  // 500ms zusätzliches Delay für Flash-Schreibvorgang
             } else {
                 ESP_LOGE(TAG, "        → FEHLER: zigbee_rtc synchronisiert, aber konnte nicht in NVS gespeichert werden!");
             }
@@ -1360,6 +1433,9 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                         // In NVS speichern
                         if (zigbee_config_save_to_nvs()) {
                             ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (manuell nach direkter Prüfung)");
+                            // WICHTIG: Flash braucht Zeit zum Schreiben - Delay vor Deep-Sleep
+                            // Gesamt: 100ms (in zigbee_config_save_to_nvs) + 500ms (hier) = 600ms für Flash-Schreibvorgang
+                            vTaskDelay(pdMS_TO_TICKS(500));  // 500ms zusätzliches Delay für Flash-Schreibvorgang
                         } else {
                             ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config konnte nicht in NVS gespeichert werden!");
                         }
@@ -1517,6 +1593,9 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                         // In NVS speichern (auch bei Rejoin, falls sich Netzwerk-Parameter geändert haben)
                         if (zigbee_config_save_to_nvs()) {
                             ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (manuell nach direkter Prüfung, Rejoin)");
+                            // WICHTIG: Flash braucht Zeit zum Schreiben - Delay vor Deep-Sleep
+                            // Gesamt: 100ms (in zigbee_config_save_to_nvs) + 500ms (hier) = 600ms für Flash-Schreibvorgang
+                            vTaskDelay(pdMS_TO_TICKS(500));  // 500ms zusätzliches Delay für Flash-Schreibvorgang
                         } else {
                             ESP_LOGW(TAG, "        → Warnung: ZigBee-Config konnte nicht in NVS gespeichert werden (Rejoin)");
                         }
@@ -1638,6 +1717,33 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
         ESP_LOGI(TAG, "  [1/4] ZigBee-Stack bereits initialisiert");
     }
     
+    // WICHTIG: CurrentSummationDelivered VOR Rejoin initialisieren!
+    // Dies stellt sicher, dass automatische Attribute Reports nach Rejoin bereits den korrekten Wert haben
+    // Reihenfolge: 1) currentSummationDelivered setzen (aus data->pulse_counter, der bereits aus RTC/Ringbuffer geladen wurde)
+    //              2) Rejoin → 3) Automatischer Report mit korrektem Wert (nicht 0!)
+    ESP_LOGI(TAG, "  [1.5/4] Initialisiere CurrentSummationDelivered VOR Rejoin...");
+    current_summation_delivered.low = data->pulse_counter;  // uint32_t: untere 32 Bit (Wert bereits aus RTC-RAM oder Ringbuffer)
+    current_summation_delivered.high = 0;                    // uint16_t: obere 16 Bit (0, da pulse_counter < 2^32)
+    ESP_LOGI(TAG, "        → CurrentSummationDelivered vor Rejoin initialisiert: %lu (low: %lu, high: %u)", 
+             data->pulse_counter, current_summation_delivered.low, current_summation_delivered.high);
+    
+    // Optional: Versuche auch esp_zb_zcl_set_attribute_val() VOR Rejoin (falls Stack bereits initialisiert)
+    if (zigbee_initialized) {
+        esp_zb_zcl_status_t attr_status = esp_zb_zcl_set_attribute_val(
+            ZIGBEE_ENDPOINT_ID,
+            ZIGBEE_CLUSTER_METERING,
+            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+            ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED,  // 0x0000: CurrentSummationDelivered
+            &current_summation_delivered,
+            false  // check = false (keine Validierung)
+        );
+        if (attr_status == ESP_ZB_ZCL_STATUS_SUCCESS) {
+            ESP_LOGI(TAG, "        → CurrentSummationDelivered auch via esp_zb_zcl_set_attribute_val() gesetzt (vor Rejoin)");
+        } else {
+            ESP_LOGD(TAG, "        → Hinweis: esp_zb_zcl_set_attribute_val() vor Rejoin fehlgeschlagen (Status: %d), aber Variable wurde direkt aktualisiert", attr_status);
+        }
+    }
+    
     // [2/4] Stelle sicher, dass Device mit Netzwerk verbunden ist (Pairing/Rejoin)
     ESP_LOGI(TAG, "  [2/4] Stelle sicher, dass Device mit ZigBee-Netzwerk verbunden ist...");
     transfer_status_t join_status = transfer_zigbee_ensure_joined();
@@ -1654,17 +1760,13 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     ESP_LOGI(TAG, "        → battery_voltage: %.2fV", data->battery_voltage);
     ESP_LOGI(TAG, "        → firmware_version: %s", data->firmware_version ? data->firmware_version : "N/A");
     
-    // CurrentSummationDelivered aktualisieren (uint48: low=32bit, high=16bit)
-    // WICHTIG: pulse_counter ist uint32_t, passt in low (32 Bit), high bleibt 0
-    // LÖSUNG: Direkt die persistente Variable aktualisieren, die beim Cluster-Erstellen übergeben wurde
-    // Dies funktioniert, da der Cluster einen Pointer auf diese Variable speichert
-    current_summation_delivered.low = data->pulse_counter;  // uint32_t: untere 32 Bit
-    current_summation_delivered.high = 0;                    // uint16_t: obere 16 Bit (0, da pulse_counter < 2^32)
-    ESP_LOGI(TAG, "        → CurrentSummationDelivered aktualisiert: %lu (low: %lu, high: %u)", 
+    // CurrentSummationDelivered wurde bereits VOR Rejoin initialisiert (siehe oben)
+    // Hier nur nochmal bestätigen, dass der Wert korrekt ist und ggf. via esp_zb_zcl_set_attribute_val() setzen
+    ESP_LOGI(TAG, "        → CurrentSummationDelivered (bereits vor Rejoin initialisiert): %lu (low: %lu, high: %u)", 
              data->pulse_counter, current_summation_delivered.low, current_summation_delivered.high);
     
-    // Optional: Versuche auch esp_zb_zcl_set_attribute_val() (kann fehlschlagen, wenn Attribut read-only ist)
-    // Aber die direkte Variable-Aktualisierung sollte ausreichen
+    // Optional: Versuche auch esp_zb_zcl_set_attribute_val() NACH Rejoin (falls vorher fehlgeschlagen)
+    // Dies stellt sicher, dass der Wert auch im Stack gesetzt ist
     esp_zb_zcl_status_t attr_status = esp_zb_zcl_set_attribute_val(
         ZIGBEE_ENDPOINT_ID,
         ZIGBEE_CLUSTER_METERING,
@@ -1676,9 +1778,9 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     
     if (attr_status != ESP_ZB_ZCL_STATUS_SUCCESS) {
         // Warnung nur loggen, aber nicht als Fehler behandeln, da direkte Variable-Aktualisierung funktioniert
-        ESP_LOGD(TAG, "        → Hinweis: esp_zb_zcl_set_attribute_val() fehlgeschlagen (Status: %d), aber Variable wurde direkt aktualisiert", attr_status);
+        ESP_LOGD(TAG, "        → Hinweis: esp_zb_zcl_set_attribute_val() nach Rejoin fehlgeschlagen (Status: %d), aber Variable wurde bereits vor Rejoin aktualisiert", attr_status);
     } else {
-        ESP_LOGD(TAG, "        → CurrentSummationDelivered auch via esp_zb_zcl_set_attribute_val() gesetzt");
+        ESP_LOGD(TAG, "        → CurrentSummationDelivered auch via esp_zb_zcl_set_attribute_val() gesetzt (nach Rejoin)");
     }
     
     // [3.1/4] Sende Attribute Report für CurrentSummationDelivered an Coordinator

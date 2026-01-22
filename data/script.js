@@ -1,20 +1,3 @@
-let autoRefreshInterval = null;
-let autoRefreshEnabled = false;
-
-function autoRefresh() {
-    if (autoRefreshEnabled) {
-        clearInterval(autoRefreshInterval);
-        autoRefreshEnabled = false;
-        document.getElementById('autoRefreshStatus').textContent = 'Aus';
-    } else {
-        autoRefreshInterval = setInterval(() => {
-            location.reload();
-        }, 5000); // Alle 5 Sekunden
-        autoRefreshEnabled = true;
-        document.getElementById('autoRefreshStatus').textContent = 'An (5s)';
-    }
-}
-
 // Daten beim Laden aktualisieren
 window.addEventListener('load', () => {
     // Daten werden vom Server geliefert
@@ -26,6 +9,48 @@ window.addEventListener('load', () => {
         wifiInfoElement.style.cssText = wifiInfoElement.dataset.style;
     }
 });
+
+// Deep-Sleep-Funktion
+function deepSleepDevice() {
+    // Sicherheitsfrage
+    if (!confirm("Möchten Sie das Gerät wirklich in Deep-Sleep versetzen?")) {
+        return;  // Abbrechen, wenn Benutzer "Abbrechen" wählt
+    }
+    
+    // Deep-Sleep-Button finden und deaktivieren
+    const deepSleepButtonElement = document.querySelector('button[onclick="deepSleepDevice()"]');
+    if (!deepSleepButtonElement) {
+        console.error("Deep-Sleep-Button nicht gefunden!");
+        return;
+    }
+    
+    // Button sofort deaktivieren
+    deepSleepButtonElement.disabled = true;
+    deepSleepButtonElement.textContent = 'Deep-Sleep wird durchgeführt...';
+    
+    // POST-Request an /deepsleep senden
+    const formData = new FormData();
+    formData.append('cmd', 'deepsleep');
+    
+    fetch('/deepsleep', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => {
+        // Request erfolgreich gesendet (ESP geht jetzt in Deep-Sleep)
+        console.log("Deep-Sleep-Request erfolgreich gesendet");
+        if (deepSleepButtonElement) {
+            deepSleepButtonElement.textContent = 'Deep-Sleep aktiviert';
+        }
+    })
+    .catch(error => {
+        // Fehler ist erwartet, da Server nach Deep-Sleep offline geht
+        console.log("Request-Fehler (erwartet nach Deep-Sleep):", error);
+        if (deepSleepButtonElement) {
+            deepSleepButtonElement.textContent = 'Deep-Sleep aktiviert';
+        }
+    });
+}
 
 // Reboot-Funktion mit Countdown-Timer
 let rebootCountdown = null;
