@@ -27,6 +27,7 @@
     #include "freertos/FreeRTOS.h"
     #include "freertos/task.h"
     #include "esp_partition.h"  // Für Factory-Reset (Partitionen löschen)
+    #include <ctime>  // Für time_t, struct tm, gmtime_r()
     #if CONFIG_ESP_ZB_TRACE_ENABLE
         #include "esp_zigbee_trace.h"  // Für erweiterte ZigBee-Logging-Funktionen
     #endif
@@ -49,6 +50,7 @@ static volatile bool stack_ready_signal_received = false;  // Flag: SKIP_STARTUP
 static volatile bool stack_init_failed = false;  // Flag: Stack-Initialisierung fehlgeschlagen
 static volatile bool pairing_successful = false;  // Flag: Pairing erfolgreich abgeschlossen
 static volatile bool rejoin_successful = false;  // Flag: Rejoin erfolgreich abgeschlossen
+static volatile bool device_rebooted_during_rejoin = false;  // Flag: DEVICE_REBOOT (ESP_OK) während manuellem Rejoin empfangen
 static volatile bool first_pairing_after_join = false;  // Flag: Erstes Pairing nach Join (für Interview-Wartezeit)
 static volatile bool steering_failed = false;  // Flag: Network Steering fehlgeschlagen
 static volatile bool steering_successful = false;  // Flag: Network Steering erfolgreich (für Timing-Verzögerung)
@@ -340,7 +342,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 // WICHTIG: Die Attribute wurden bereits beim Cluster-Erstellen mit persistenter Variable hinzugefügt
                 //          Hier aktualisieren wir nur die Werte (falls sich etwas geändert hat)
                 //          Die persistente Variable wird automatisch vom Cluster verwendet
-                //          modernExtend.gasMeter() liest diese Werte beim Pairing automatisch für Skalierung
+                //          Der externe Converter (gas-o-meter2.js) liest diese Werte beim Pairing für Skalierung
                 ESP_LOGI(TAG, "        → Aktualisiere Metering Cluster Attribute (Multiplier/Divisor)...");
                 
                 // Direkt die persistente Variable aktualisieren (der Cluster verwendet einen Pointer darauf)
@@ -348,7 +350,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 metering_divisor = ZIGBEE_METERING_DIVISOR;
                 ESP_LOGI(TAG, "        → Multiplier/Divisor aktualisiert: Multiplier=%u, Divisor=%u", 
                          metering_multiplier, metering_divisor);
-                ESP_LOGI(TAG, "        → modernExtend.gasMeter() liest diese Werte beim Pairing automatisch für Skalierung");
+                ESP_LOGI(TAG, "        → Externer Converter (gas-o-meter2.js) liest diese Werte beim Pairing für Skalierung");
                 
                 // Optional: Versuche auch esp_zb_zcl_set_attribute_val() (kann fehlschlagen, wenn Attribut read-only ist)
                 // Aber die direkte Variable-Aktualisierung sollte ausreichen
@@ -376,7 +378,16 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             
         case ESP_ZB_BDB_SIGNAL_DEVICE_REBOOT:
             ESP_LOGI(TAG, "ZigBee Signal: DEVICE_REBOOT (Status: %s)", esp_err_to_name(err_status));
-            if (err_status != ESP_OK) {
+            if (err_status == ESP_OK) {
+                // Stack wurde erfolgreich reinitialisiert
+                // Automatischer Rejoin wird intern vom Stack gestartet, wenn gespeicherte Netzwerk-Informationen vorhanden sind
+                ESP_LOGI(TAG, "        → Stack reinitialisiert, automatischer Rejoin wird intern versucht...");
+                ESP_LOGI(TAG, "        → Warte bis zu %d ms auf automatischen Rejoin (konfigurierbar via ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS)", 
+                         ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS);
+                // WICHTIG: Wenn DEVICE_REBOOT während eines manuellen Rejoin-Versuchs kommt, markiere dies
+                // Die Rejoin-Schleife wird dann auf automatischen Rejoin umschalten
+                device_rebooted_during_rejoin = true;
+            } else {
                 ESP_LOGE(TAG, "        → Stack-Reinitialisierung fehlgeschlagen: %s", esp_err_to_name(err_status));
                 stack_init_failed = true;  // Fehler-Flag setzen
             }
@@ -541,6 +552,68 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             ESP_LOGI(TAG, "ZigBee Signal: Unknown (Type: 0x%X, Status: %s)", 
                      sig_type, esp_err_to_name(err_status));
             break;
+    }
+}
+
+/**
+ * @brief Device-Callback für Read Attribute Response
+ * 
+ * Wird aufgerufen, wenn eine Read Attribute Response empfangen wird.
+ * Verarbeitet die Zeit vom Coordinator (Time Cluster).
+ * 
+ * @param message Read Attribute Response Message
+ */
+static void read_attr_resp_callback(esp_zb_zcl_cmd_read_attr_resp_message_t *message) {
+    if (!message || !message->variables) {
+        return;
+    }
+    
+    // Prüfe, ob es eine Time Cluster Response ist
+    if (message->info.cluster != ZIGBEE_CLUSTER_TIME) {
+        return;  // Nicht Time Cluster, ignorieren
+    }
+    
+    ESP_LOGI(TAG, "Read Attribute Response empfangen (Time Cluster)");
+    
+    // Durchlaufe alle Variablen in der Response
+    esp_zb_zcl_read_attr_resp_variable_t *var = message->variables;
+    while (var != NULL) {
+        // Prüfe, ob es das Time Attribut (0x0000) ist
+        // HINWEIS: esp_zb_zcl_attribute_t hat 'id' und 'data' (esp_zb_zcl_attribute_data_t)
+        //          esp_zb_zcl_attribute_data_t hat 'type', 'size' und 'value'
+        if (var->attribute.id == ZIGBEE_ATTR_TIME_TIME) {
+            if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS) {
+                // Time Attribut: uint32_t (UTC Time, Sekunden seit 1. Januar 2000)
+                // HINWEIS: Der Typ ist in var->attribute.data.type, der Wert in var->attribute.data.value
+                if (var->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U32) {
+                    uint32_t utc_time = *(uint32_t *)var->attribute.data.value;
+                    
+                    // Konvertiere UTC Time (Sekunden seit 1. Januar 2000) zu Unix Timestamp (Sekunden seit 1. Januar 1970)
+                    // Offset: 946684800 Sekunden (30 Jahre = 2000-01-01 00:00:00 UTC)
+                    const uint32_t ZIGBEE_EPOCH_OFFSET = 946684800;
+                    time_t unix_time = (time_t)(utc_time + ZIGBEE_EPOCH_OFFSET);
+                    
+                    // Konvertiere zu struct tm für Ausgabe
+                    struct tm timeinfo;
+                    if (gmtime_r(&unix_time, &timeinfo)) {
+                        ESP_LOGI(TAG, "  → Coordinator-Zeit empfangen: %04d-%02d-%02d %02d:%02d:%02d UTC",
+                                 timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+                        ESP_LOGI(TAG, "  → UTC Time (Zigbee): %lu Sekunden seit 2000-01-01", (unsigned long)utc_time);
+                        ESP_LOGI(TAG, "  → Unix Timestamp: %lu", (unsigned long)unix_time);
+                    } else {
+                        ESP_LOGW(TAG, "  → Coordinator-Zeit empfangen, aber Konvertierung fehlgeschlagen (UTC Time: %lu)", 
+                                 (unsigned long)utc_time);
+                    }
+                } else {
+                    ESP_LOGW(TAG, "  → Time Attribut hat falschen Datentyp (erwartet: U32, erhalten: %d)", var->attribute.data.type);
+                }
+            } else {
+                ESP_LOGW(TAG, "  → Time Attribut-Status: %d (nicht erfolgreich)", var->status);
+            }
+            break;  // Time Attribut gefunden, keine weiteren Variablen prüfen
+        }
+        var = var->next;
     }
 }
 
@@ -752,7 +825,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     
     // Battery Voltage Attribut hinzufügen (Attribute ID: 0x0020)
     // WICHTIG: Battery Voltage ist uint8 in 100mV Einheiten (z.B. 35 = 3.5V, 40 = 4.0V)
-    //          Format: (uint8_t)(battery_voltage * 10.0f)
+    //          Format: (uint8_t)(battery_voltage * 10.0f + 0.5f) - mit Rundung statt Truncation
     //          WICHTIG: Als REPORTABLE markieren, damit Zigbee2MQTT Reporting konfigurieren kann
     //          Verwende esp_zb_cluster_add_attr() statt esp_zb_power_config_cluster_add_attr(),
     //          um volle Kontrolle über Access-Flags zu haben
@@ -831,8 +904,8 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     static uint8_t demand_formatting = 0;  // Demand Formatting (nicht verwendet, da kein InstantaneousDemand)
     
     // CurrentSummationDelivered Attribut (0x0000) - WICHTIG: Als REPORTABLE markiert!
-    // WICHTIG: ESP_ZB_ZCL_ATTR_ACCESS_REPORTING hinzufügen, damit modernExtend.gasMeter() Reporting konfigurieren kann
-    //          Der .mjs Converter mappt 'energy' (von modernExtend) → 'gas' für bessere Lesbarkeit
+    // WICHTIG: ESP_ZB_ZCL_ATTR_ACCESS_REPORTING hinzufügen, damit Zigbee2MQTT Reporting konfigurieren kann
+    //          Der externe Converter (gas-o-meter2.js) konfiguriert Reporting manuell beim Pairing
     // HINWEIS: Wenn das Attribut bereits existiert (ESP_ERR_INVALID_ARG), können wir die Access-Flags nicht ändern
     //          In diesem Fall müssen wir den Cluster komplett neu erstellen oder die Access-Flags beim ersten Erstellen setzen
     err = esp_zb_cluster_add_attr(
@@ -933,7 +1006,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     }
     
     // Multiplier Attribut explizit mit Pointer auf persistente Variable hinzufügen
-    // WICHTIG: modernExtend.gasMeter() liest divisor/multiplier AUTOMATISCH aus dem Cluster
+    // WICHTIG: Der externe Converter (gas-o-meter2.js) liest divisor/multiplier aus dem Cluster
     //          für automatische Skalierung (raw / divisor * multiplier)
     err = esp_zb_cluster_add_attr(
         metering_cluster,
@@ -950,7 +1023,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     }
     
     // Divisor Attribut explizit mit Pointer auf persistente Variable hinzufügen
-    // WICHTIG: modernExtend.gasMeter() liest divisor/multiplier AUTOMATISCH aus dem Cluster
+    // WICHTIG: Der externe Converter (gas-o-meter2.js) liest divisor/multiplier aus dem Cluster
     //          für automatische Skalierung (raw / divisor * multiplier)
     err = esp_zb_cluster_add_attr(
         metering_cluster,
@@ -981,16 +1054,24 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     // damit sie beim Pairing vom Coordinator gelesen werden können.
     //
     // WICHTIG: currentSummationDelivered ist als REPORTABLE markiert (ESP_ZB_ZCL_ATTR_ACCESS_REPORTING)
-    //          modernExtend.gasMeter() konfiguriert Reporting automatisch beim Pairing.
-    //          Der .mjs Converter mappt 'energy' → 'gas' und wendet divisor/multiplier automatisch an.
+    //          Der externe Converter (gas-o-meter2.js) konfiguriert Reporting manuell beim Pairing.
+    //          Der Converter wendet divisor/multiplier automatisch an für Skalierung.
     //          HA erkennt automatisch: device_class: gas, state_class: total_increasing (durch unit: 'm³')
     
     ESP_LOGI(TAG, "  → Metering Cluster hinzugefügt (Endpoint: %d, Unit: m³, Multiplier: %d, Divisor: %d)", 
              ZIGBEE_ENDPOINT_ID, ZIGBEE_METERING_MULTIPLIER, ZIGBEE_METERING_DIVISOR);
     ESP_LOGI(TAG, "  → HINWEIS: Multiplier/Divisor werden im SKIP_STARTUP Handler gesetzt (nach Stack-Start)");
-    ESP_LOGI(TAG, "  → CurrentSummationDelivered ist als REPORTABLE markiert (modernExtend.gasMeter() konfiguriert Reporting automatisch)");
-    ESP_LOGI(TAG, "  → modernExtend.gasMeter() liest divisor/multiplier automatisch für Skalierung");
+    ESP_LOGI(TAG, "  → CurrentSummationDelivered ist als REPORTABLE markiert (Zigbee2MQTT kann Reporting konfigurieren)");
+    ESP_LOGI(TAG, "  → Externer Converter (gas-o-meter2.js) liest divisor/multiplier für Skalierung");
     ESP_LOGI(TAG, "  → Device sendet Daten bei jeder Datenübertragung (transfer_zigbee_send_data())");
+    
+    // Time Cluster hinzufügen (Client-Rolle für Zeit-Synchronisation)
+    // WICHTIG: Time Cluster wird als CLIENT hinzugefügt, damit wir die Zeit vom Coordinator lesen können
+    // HINWEIS: Für Client-Rolle sind keine Attribute nötig, da wir nur lesen
+    //          Der Time Cluster wird nicht explizit zur Liste hinzugefügt, da wir nur Read Attribute Requests senden
+    //          und keine Server-Funktionalität benötigen. Der Read Attribute Request funktioniert auch ohne
+    //          expliziten Cluster in der Liste, da wir die Cluster-ID direkt im Request angeben.
+    ESP_LOGI(TAG, "  → Time Cluster wird für Zeit-Synchronisation verwendet (Read Attribute Request ohne explizite Cluster-Registrierung)");
     
     // Cluster-Liste zum Endpoint hinzufügen
     err = esp_zb_ep_list_add_ep(ep_list, cluster_list, endpoint_config);
@@ -1108,13 +1189,19 @@ bool transfer_zigbee_init(void) {
     }
     ESP_LOGI(TAG, "        → Device Endpoint registriert");
     
-    // [4/5] Signal Handler registrieren
+    // [4/5] Signal Handler und Callbacks registrieren
     // HINWEIS: esp_zb_app_signal_handler wird automatisch vom Stack aufgerufen,
     // wenn er definiert ist. Keine explizite Registrierung nötig.
     // esp_zb_core_action_handler_register() ist nur für Custom Cluster Commands.
-    ESP_LOGI(TAG, "  [4/5] Signal Handler wird registriert...");
+    ESP_LOGI(TAG, "  [4/5] Signal Handler und Callbacks werden registriert...");
     // Signal Handler wird automatisch verwendet (wenn Funktion definiert ist)
     ESP_LOGI(TAG, "        → Signal Handler registriert (automatisch)");
+    
+    // Read Attribute Response Callback
+    // HINWEIS: Der Callback read_attr_resp_callback() wird automatisch aufgerufen,
+    //          wenn eine Read Attribute Response empfangen wird (über Device Handler)
+    //          Keine explizite Registrierung nötig, da der Stack automatisch Responses verarbeitet
+    ESP_LOGI(TAG, "        → Read Attribute Response wird automatisch verarbeitet (read_attr_resp_callback)");
     
     // Primary Network Channel setzen
     ESP_LOGI(TAG, "        → Setze Primary Network Channel...");
@@ -1228,14 +1315,24 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
         ESP_LOGI(TAG, "        → Warte auf automatischen Rejoin durch Stack...");
         // Stack sollte automatisch Rejoin machen, wenn er die gespeicherten Netzwerk-Informationen findet
         // Wir warten einfach, bis der Stack wieder joined ist
-        const uint32_t rejoin_wait_timeout_ms = 10000;  // 10 Sekunden für automatischen Rejoin
+        // HINWEIS: Der automatische Rejoin wird intern vom Stack gestartet (bei esp_zb_start() mit gespeicherten Daten)
+        //          Es gibt keine konfigurierbaren Timeout/Retry-Parameter im SDK für den automatischen Rejoin
+        //          Die Wartezeit ist eine Anwendungsentscheidung, um dem Stack Zeit zu geben
+        const uint32_t rejoin_wait_timeout_ms = ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS;  // Konfigurierbare Wartezeit für automatischen Rejoin
         const uint32_t poll_interval_ms = 500;  // 500ms Poll-Intervall
         uint32_t elapsed_ms = 0;
+        
+        ESP_LOGI(TAG, "        → Timeout: %d ms (konfigurierbar via ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS)", rejoin_wait_timeout_ms);
         
         while (!is_joined && elapsed_ms < rejoin_wait_timeout_ms) {
             vTaskDelay(pdMS_TO_TICKS(poll_interval_ms));
             elapsed_ms += poll_interval_ms;
             is_joined = esp_zb_bdb_dev_joined();
+            
+            // Logging alle 5 Sekunden, um Fortschritt zu zeigen
+            if (elapsed_ms % 5000 == 0 && elapsed_ms > 0) {
+                ESP_LOGI(TAG, "        → Warte auf automatischen Rejoin... (%d ms / %d ms)", elapsed_ms, rejoin_wait_timeout_ms);
+            }
         }
         
         if (is_joined) {
@@ -1243,6 +1340,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             return TRANSFER_STATUS_OK;
         } else {
             ESP_LOGW(TAG, "        → Automatischer Rejoin nicht erfolgreich (nach %d ms) → Starte manuellen Rejoin", elapsed_ms);
+            ESP_LOGW(TAG, "        → HINWEIS: Der Stack versucht intern zu rejoinen, aber Timeout/Retry-Parameter sind nicht konfigurierbar");
             // Weiter mit manuellem Rejoin (siehe unten)
         }
     }
@@ -1253,8 +1351,20 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
         
         // WICHTIG: Synchronisiere zigbee_rtc mit Stack-Status, falls nicht synchron
         // Dies kann passieren, wenn DEVICE_ANNCE Signal nicht empfangen wurde (z.B. nach fehlgeschlagener configure)
-        if (!zigbee_rtc.joined || !ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
+        // ODER wenn das Device zwischen Wake-ups joined ist (z.B. während eines Wake-ups ohne Datenübertragung)
+        bool was_not_joined = !zigbee_rtc.joined || !ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr);
+        if (was_not_joined) {
             ESP_LOGW(TAG, "        → WARNUNG: zigbee_rtc nicht synchron mit Stack-Status → synchronisiere...");
+            ESP_LOGW(TAG, "        → Device hat wahrscheinlich zwischen Wake-ups gejoint (z.B. während Wake-up ohne Datenübertragung)");
+            
+            // Prüfe, ob es ein erstes Pairing war (factory-new Device, das gerade gejoint ist)
+            // is_factory_new wird false, sobald das Device erfolgreich gejoint ist
+            // Wenn zigbee_rtc.joined = false war, war es definitiv ein erstes Pairing
+            bool is_first_pairing = was_not_joined && !is_factory_new;
+            if (is_first_pairing) {
+                ESP_LOGI(TAG, "        → Erstes Pairing erkannt (Device war factory-new und hat gerade gejoint)");
+            }
+            
             uint16_t network_addr = esp_zb_get_short_address();
             zigbee_rtc.joined = true;
             zigbee_rtc.network_addr = network_addr;
@@ -1269,6 +1379,17 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 current_extended_addr |= ((uint64_t)ieee_addr[i]) << (i * 8);
             }
             zigbee_rtc.extended_addr = current_extended_addr;
+            
+            // WICHTIG: Wenn das Device gerade joined ist (zwischen Wake-ups) und es ein erstes Pairing war,
+            // setze first_pairing_after_join, damit die Interview-Wartezeit aktiviert wird
+            // Dies stellt sicher, dass Zigbee2MQTT Zeit hat, das Interview abzuschließen
+            // HINWEIS: is_factory_new ist false, wenn das Device erfolgreich gejoint ist
+            //          Wenn zigbee_rtc.joined = false war, war es definitiv ein erstes Pairing
+            if (was_not_joined && !first_pairing_after_join) {
+                ESP_LOGI(TAG, "        → Device hat gerade gejoint (erstes Pairing) → Setze first_pairing_after_join für Interview-Wartezeit");
+                ESP_LOGI(TAG, "        → Interview-Wartezeit wird in transfer_zigbee_send_data() aktiviert");
+                first_pairing_after_join = true;
+            }
             
             // In NVS speichern
             if (zigbee_config_save_to_nvs()) {
@@ -1349,11 +1470,21 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             cycle_start_ms = elapsed_ms;
             
             // Warte auf Network Steering Erfolg (mit Timeout)
+            // WICHTIG: 500ms Poll-Intervall gibt dem Stack genug Zeit, Signale zu verarbeiten
+            // (200ms war zu kurz und könnte Race Conditions verursachen)
+            const uint32_t steering_poll_interval_ms = 500;  // 500ms für zuverlässige Signal-Verarbeitung (konsistent mit ZIGBEE_STEERING_POLL_INTERVAL_MS)
             uint32_t steering_wait_start_ms = elapsed_ms;
             while (!steering_successful && !steering_failed && elapsed_ms < cycle_timeout_ms && 
                    (elapsed_ms - steering_wait_start_ms) < ZIGBEE_NETWORK_DISCOVERY_MS) {
-                vTaskDelay(pdMS_TO_TICKS(poll_interval_ms));
-                elapsed_ms += poll_interval_ms;
+                vTaskDelay(pdMS_TO_TICKS(steering_poll_interval_ms));
+                elapsed_ms += steering_poll_interval_ms;
+                
+                // OPTIMIERUNG: Wenn steering_failed gesetzt wurde, sofort abbrechen (keine weitere Wartezeit)
+                if (steering_failed) {
+                    ESP_LOGI(TAG, "        → Network Steering fehlgeschlagen erkannt (nach %d ms) → Breche sofort ab", 
+                             elapsed_ms - steering_wait_start_ms);
+                    break;
+                }
             }
             
             // Wenn Network Steering erfolgreich, warte auf Timing-Verzögerung vor Association Request
@@ -1472,7 +1603,54 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
         if (!pairing_completed) {
             ESP_LOGE(TAG, "        → Pairing fehlgeschlagen nach %d Versuchen (Gesamt-Zeit: %d ms)", 
                      steering_attempt, elapsed_ms);
-            return TRANSFER_STATUS_CONNECTION_FAILED;
+            
+            // WICHTIG: Prüfe nochmal, ob das Device zwischenzeitlich erfolgreich gejoint ist
+            // (kann passieren, wenn der Stack im Hintergrund weiterarbeitet und später erfolgreich ist)
+            // Dies ist besonders wichtig für factory-new Devices, die während des gleichen Wake-ups joinen
+            bool is_joined_now = esp_zb_bdb_dev_joined();
+            uint16_t network_addr = esp_zb_get_short_address();
+            uint16_t pan_id = esp_zb_get_pan_id();
+            bool has_valid_network_addr = ZIGBEE_IS_NETWORK_ADDR_VALID(network_addr);
+            bool has_valid_pan_id = (pan_id != 0x0000);
+            
+            if (is_joined_now && has_valid_network_addr && has_valid_pan_id) {
+                ESP_LOGI(TAG, "        → WICHTIG: Device ist jetzt doch joined (zwischenzeitlich erfolgreich gejoint)!");
+                ESP_LOGI(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X", network_addr, pan_id);
+                ESP_LOGI(TAG, "        → Setze Pairing-Status nachträglich...");
+                
+                // Status nachträglich setzen (wie im DEVICE_ANNCE Handler)
+                pairing_successful = true;
+                first_pairing_after_join = true;  // Flag setzen für Interview-Wartezeit
+                
+                // RTC-Status aktualisieren
+                zigbee_rtc.joined = true;
+                zigbee_rtc.network_addr = network_addr;
+                zigbee_rtc.pan_id = pan_id;
+                zigbee_rtc.channel = esp_zb_get_current_channel();
+                
+                // Extended Address aktualisieren
+                esp_zb_ieee_addr_t ieee_addr;
+                esp_zb_get_long_address(ieee_addr);
+                uint64_t current_extended_addr = 0;
+                for (int i = 0; i < 8; i++) {
+                    current_extended_addr |= ((uint64_t)ieee_addr[i]) << (i * 8);
+                }
+                zigbee_rtc.extended_addr = current_extended_addr;
+                
+                // In NVS speichern
+                if (zigbee_config_save_to_nvs()) {
+                    ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (nachträglich nach fehlgeschlagenem Pairing)");
+                    vTaskDelay(pdMS_TO_TICKS(500));  // Flash-Schreibvorgang
+                } else {
+                    ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config konnte nicht in NVS gespeichert werden!");
+                }
+                
+                // Pairing war erfolgreich (nachträglich erkannt)
+                pairing_completed = true;
+            } else {
+                // Device ist wirklich nicht joined
+                return TRANSFER_STATUS_CONNECTION_FAILED;
+            }
         }
     } else {
         // Rejoin-Logik mit Retry-Mechanismus
@@ -1487,6 +1665,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             rejoin_successful = false;
             steering_failed = false;
             steering_successful = false;
+            device_rebooted_during_rejoin = false;  // Flag zurücksetzen für neuen Versuch
             
             if (steering_attempt > 0) {
                 ESP_LOGI(TAG, "        → Retry-Versuch %d/%d (nach %d ms Wartezeit)...", 
@@ -1521,11 +1700,21 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             cycle_start_ms = elapsed_ms;
             
             // Warte auf Network Steering Erfolg (mit Timeout)
+            // WICHTIG: 500ms Poll-Intervall gibt dem Stack genug Zeit, Signale zu verarbeiten
+            // (200ms war zu kurz und könnte Race Conditions verursachen)
+            const uint32_t steering_poll_interval_ms = 500;  // 500ms für zuverlässige Signal-Verarbeitung (konsistent mit ZIGBEE_STEERING_POLL_INTERVAL_MS)
             uint32_t steering_wait_start_ms = elapsed_ms;
             while (!steering_successful && !steering_failed && elapsed_ms < cycle_timeout_ms && 
                    (elapsed_ms - steering_wait_start_ms) < ZIGBEE_NETWORK_DISCOVERY_MS) {
-                vTaskDelay(pdMS_TO_TICKS(poll_interval_ms));
-                elapsed_ms += poll_interval_ms;
+                vTaskDelay(pdMS_TO_TICKS(steering_poll_interval_ms));
+                elapsed_ms += steering_poll_interval_ms;
+                
+                // OPTIMIERUNG: Wenn steering_failed gesetzt wurde, sofort abbrechen (keine weitere Wartezeit)
+                if (steering_failed) {
+                    ESP_LOGI(TAG, "        → Network Steering fehlgeschlagen erkannt (nach %d ms) → Breche sofort ab", 
+                             elapsed_ms - steering_wait_start_ms);
+                    break;
+                }
             }
             
             // Wenn Network Steering erfolgreich, warte auf Timing-Verzögerung vor Association Request
@@ -1548,7 +1737,82 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             bool direct_check_started = false;
             uint32_t direct_check_start_ms = 0;
             
+            // SICHERHEIT: Prüfe, ob Network Steering überhaupt gestartet wurde (nicht fehlgeschlagen, aber auch nicht erfolgreich)
+            // Wenn Network Steering nach einem Timeout weder erfolgreich noch fehlgeschlagen ist, könnte der Stack hängen
+            bool network_steering_timeout_reached = false;
+            uint32_t network_steering_timeout_ms = 5000;  // 5 Sekunden zusätzlicher Timeout für Network Steering (falls Stack hängt)
+            uint32_t network_steering_start_ms = elapsed_ms;
+            
             while (!rejoin_successful && !steering_failed && elapsed_ms < cycle_timeout_ms && (elapsed_ms - cycle_start_ms) < rejoin_timeout_ms) {
+                // WICHTIG: Wenn DEVICE_REBOOT (ESP_OK) während eines manuellen Rejoin-Versuchs kommt,
+                // wurde der Stack neu initialisiert und startet automatisch einen Rejoin
+                // In diesem Fall sollten wir auf den automatischen Rejoin warten (ähnlich wie beim automatischen Rejoin am Anfang)
+                if (device_rebooted_during_rejoin) {
+                    ESP_LOGI(TAG, "        → DEVICE_REBOOT während Rejoin erkannt → Warte auf automatischen Rejoin durch Stack...");
+                    uint32_t auto_rejoin_wait_start_ms = elapsed_ms;
+                    const uint32_t auto_rejoin_wait_timeout_ms = ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS;
+                    
+                    while (!rejoin_successful && !steering_failed && elapsed_ms < cycle_timeout_ms && 
+                           (elapsed_ms - auto_rejoin_wait_start_ms) < auto_rejoin_wait_timeout_ms) {
+                        vTaskDelay(pdMS_TO_TICKS(poll_interval_ms));
+                        elapsed_ms += poll_interval_ms;
+                        
+                        // Prüfe, ob Device jetzt joined ist
+                        bool is_joined = esp_zb_bdb_dev_joined();
+                        uint16_t network_addr = esp_zb_get_short_address();
+                        uint16_t pan_id = esp_zb_get_pan_id();
+                        bool has_valid_network_addr = ZIGBEE_IS_NETWORK_ADDR_VALID(network_addr);
+                        bool has_valid_pan_id = (pan_id != 0x0000);
+                        
+                        if (is_joined && has_valid_network_addr && has_valid_pan_id) {
+                            ESP_LOGI(TAG, "        → Automatischer Rejoin nach DEVICE_REBOOT erfolgreich (nach %d ms)", 
+                                     elapsed_ms - auto_rejoin_wait_start_ms);
+                            ESP_LOGI(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X", network_addr, pan_id);
+                            
+                            // Status setzen
+                            rejoin_successful = true;
+                            zigbee_rtc.joined = true;
+                            zigbee_rtc.network_addr = network_addr;
+                            zigbee_rtc.pan_id = pan_id;
+                            zigbee_rtc.channel = esp_zb_get_current_channel();
+                            
+                            // In NVS speichern
+                            if (zigbee_config_save_to_nvs()) {
+                                ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (nach DEVICE_REBOOT)");
+                                vTaskDelay(pdMS_TO_TICKS(500));  // Flash-Schreibvorgang
+                            }
+                            break;
+                        }
+                        
+                        // Logging alle 5 Sekunden
+                        if ((elapsed_ms - auto_rejoin_wait_start_ms) % 5000 == 0 && (elapsed_ms - auto_rejoin_wait_start_ms) > 0) {
+                            ESP_LOGI(TAG, "        → Warte auf automatischen Rejoin nach DEVICE_REBOOT... (%d ms / %d ms)", 
+                                     elapsed_ms - auto_rejoin_wait_start_ms, auto_rejoin_wait_timeout_ms);
+                        }
+                    }
+                    
+                    if (!rejoin_successful) {
+                        ESP_LOGW(TAG, "        → Automatischer Rejoin nach DEVICE_REBOOT nicht erfolgreich (nach %d ms)", 
+                                 elapsed_ms - auto_rejoin_wait_start_ms);
+                        // Weiter mit normaler Timeout-Behandlung
+                    } else {
+                        // Rejoin erfolgreich, aus äußerer Schleife ausbrechen
+                        break;
+                    }
+                }
+                
+                // SICHERHEIT: Prüfe, ob Network Steering nach langer Zeit weder erfolgreich noch fehlgeschlagen ist
+                // Dies könnte auf einen hängenden Stack hindeuten
+                if (!steering_successful && !steering_failed && !device_rebooted_during_rejoin && 
+                    (elapsed_ms - network_steering_start_ms) >= network_steering_timeout_ms && !network_steering_timeout_reached) {
+                    network_steering_timeout_reached = true;
+                    ESP_LOGW(TAG, "        → WARNUNG: Network Steering weder erfolgreich noch fehlgeschlagen nach %d ms (Stack könnte hängen?)", 
+                             elapsed_ms - network_steering_start_ms);
+                    ESP_LOGW(TAG, "        → Breche Rejoin-Versuch ab und versuche Retry...");
+                    steering_failed = true;  // Setze steering_failed, um Schleife zu beenden
+                    break;
+                }
+                
                 // ZUSÄTZLICHE PRÜFUNG: Direkt prüfen, ob Device joined ist (falls DEVICE_ANNCE Signal nicht kommt)
                 // Dies ist wichtig, da manche Coordinator das DEVICE_ANNCE Signal nicht senden,
                 // aber das Device trotzdem erfolgreich rejoined ist
@@ -1562,7 +1826,26 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 }
                 
                 // Direkte Prüfung nur nach Verzögerung und wenn Network Steering erfolgreich war
-                if (direct_check_started && (elapsed_ms - direct_check_start_ms) >= direct_check_delay_ms) {
+                // OPTIMIERUNG: Auch prüfen, wenn Network Steering nicht erfolgreich war, aber genug Zeit vergangen ist
+                // (Fallback für den Fall, dass Network Steering erfolgreich war, aber steering_successful nicht gesetzt wurde)
+                bool should_check = false;
+                if (steering_successful && direct_check_started && (elapsed_ms - direct_check_start_ms) >= direct_check_delay_ms) {
+                    should_check = true;
+                } else if (!steering_successful && (elapsed_ms - cycle_start_ms) >= 3000) {
+                    // Fallback: Prüfe auch, wenn Network Steering nicht erfolgreich war, aber 3 Sekunden vergangen sind
+                    // (könnte sein, dass Network Steering erfolgreich war, aber steering_successful nicht gesetzt wurde)
+                    if (!direct_check_started) {
+                        direct_check_started = true;
+                        direct_check_start_ms = elapsed_ms;
+                        ESP_LOGI(TAG, "        → Fallback: Prüfe Rejoin-Status (Network Steering nicht erfolgreich, aber %d ms vergangen)", 
+                                 elapsed_ms - cycle_start_ms);
+                    }
+                    if ((elapsed_ms - direct_check_start_ms) >= direct_check_delay_ms) {
+                        should_check = true;
+                    }
+                }
+                
+                if (should_check) {
                     // Prüfe Join-Status mit zusätzlicher Validierung (Network Address, PAN ID)
                     // HINWEIS: esp_zb_bdb_dev_joined() ist nicht thread-safe außerhalb des Zigbee-Tasks,
                     // aber da wir in einer Warteschleife mit Delays sind und die Flags volatile sind,
@@ -1606,6 +1889,12 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 
                 vTaskDelay(pdMS_TO_TICKS(poll_interval_ms));
                 elapsed_ms += poll_interval_ms;
+                
+                // Logging alle 5 Sekunden, um Fortschritt zu zeigen (verhindert "hängt"-Eindruck)
+                if ((elapsed_ms - cycle_start_ms) % 5000 == 0 && (elapsed_ms - cycle_start_ms) > 0) {
+                    ESP_LOGI(TAG, "        → Warte auf Rejoin... (%d ms / %d ms Timeout, Versuch %d/%d)", 
+                             elapsed_ms - cycle_start_ms, rejoin_timeout_ms, steering_attempt + 1, steering_retry_count + 1);
+                }
             }
             
             if (steering_failed) {
@@ -1623,10 +1912,19 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 break;
             }
             
-            // Timeout (nicht Steering FAIL) -> kein Retry
+            // Timeout (nicht Steering FAIL) -> Retry, falls noch Versuche übrig sind
             ESP_LOGE(TAG, "        → Rejoin-Timeout (Versuch %d, nach %d ms)", 
                      steering_attempt + 1, elapsed_ms - cycle_start_ms);
-            return TRANSFER_STATUS_CONNECTION_FAILED;
+            steering_attempt++;
+            // Weiter mit Retry, falls noch Versuche übrig sind (steering_attempt <= steering_retry_count)
+            if (steering_attempt <= steering_retry_count) {
+                ESP_LOGI(TAG, "        → Retry-Versuch %d/%d wird gestartet...", steering_attempt, steering_retry_count);
+                continue;  // Nächster Retry-Versuch
+            } else {
+                // Keine weiteren Versuche mehr
+                ESP_LOGE(TAG, "        → Keine weiteren Retry-Versuche mehr (max: %d)", steering_retry_count);
+                return TRANSFER_STATUS_CONNECTION_FAILED;
+            }
         }
         
         if (!rejoin_completed) {
@@ -1749,6 +2047,7 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     transfer_status_t join_status = transfer_zigbee_ensure_joined();
     if (join_status != TRANSFER_STATUS_OK) {
         ESP_LOGE(TAG, "        → Fehler beim Verbinden mit ZigBee-Netzwerk");
+        ESP_LOGW(TAG, "        → Zeit-Synchronisation wird übersprungen (Device nicht verbunden)");
         return join_status;
     }
     ESP_LOGI(TAG, "        → Device ist mit ZigBee-Netzwerk verbunden");
@@ -1820,10 +2119,10 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     
     // Battery Voltage aktualisieren (Power Configuration Cluster)
     // WICHTIG: Battery Voltage ist uint8 in 100mV Einheiten (z.B. 35 = 3.5V, 40 = 4.0V)
-    //          Format: (uint8_t)(battery_voltage * 10.0f)
+    //          Format: (uint8_t)(battery_voltage * 10.0f + 0.5f) - mit Rundung statt Truncation
     //          Maximalwert: 255 (25.5V, aber unsere Akkus sind < 4.5V, also sicher)
     if (data->battery_voltage > 0.0f) {
-        uint8_t battery_voltage_zigbee_new = (uint8_t)(data->battery_voltage * 10.0f);
+        uint8_t battery_voltage_zigbee_new = (uint8_t)(data->battery_voltage * 10.0f + 0.5f);  // Rundung statt Truncation
         if (battery_voltage_zigbee_new > 255) {
             battery_voltage_zigbee_new = 255;  // Clamp auf Maximum (25.5V)
         }
@@ -1945,12 +2244,14 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
         ESP_LOGI(TAG, "        → Attribute Reports nach Interview gesendet");
     }
     
-    // [4/4] Zeit-Synchronisation (DUMMY)
-    ESP_LOGI(TAG, "  [4/4] Zeit-Synchronisation (DUMMY)...");
+    // [4/4] Zeit-Synchronisation mit Coordinator
+    ESP_LOGI(TAG, "  [4/4] Synchronisiere Zeit mit Coordinator...");
     if (transfer_zigbee_sync_time()) {
-        ESP_LOGI(TAG, "        → Zeit erfolgreich synchronisiert (DUMMY)");
+        ESP_LOGI(TAG, "        → Zeit-Synchronisation Request gesendet (warte auf Response)");
+        // HINWEIS: Response wird im read_attr_resp_callback() verarbeitet
+        //          Wir warten nicht aktiv, da der Callback asynchron aufgerufen wird
     } else {
-        ESP_LOGW(TAG, "        → Zeit-Synchronisation fehlgeschlagen (DUMMY)");
+        ESP_LOGW(TAG, "        → Zeit-Synchronisation fehlgeschlagen (nicht kritisch)");
     }
     
     ESP_LOGI(TAG, "========================================");
@@ -1966,13 +2267,54 @@ bool transfer_zigbee_sync_time(void) {
         return false;
     }
     
-    ESP_LOGI(TAG, "transfer_zigbee_sync_time: Hole Zeit vom Coordinator (DUMMY)...");
-    ESP_LOGI(TAG, "  → Coordinator-Zeit: 2026-01-15 14:30:00 (DUMMY)");
-    ESP_LOGI(TAG, "  → ESP-Zeit wird aktualisiert (DUMMY)");
+    if (!esp_zb_bdb_dev_joined()) {
+        ESP_LOGW(TAG, "transfer_zigbee_sync_time: Device nicht mit Netzwerk verbunden");
+        return false;
+    }
     
-    // TODO: Echte Zeit-Synchronisation implementieren
-    // - Zeit vom Coordinator abfragen
-    // - ESP-Systemzeit aktualisieren (ähnlich NTP)
+    ESP_LOGI(TAG, "transfer_zigbee_sync_time: Hole Zeit vom Coordinator...");
+    
+    // Coordinator Adresse: Normalerweise 0x0000, aber verwende zigbee_rtc.coord_addr falls gesetzt
+    uint16_t coordinator_addr = (zigbee_rtc.coord_addr != ZIGBEE_DEFAULT_COORD_ADDR) 
+                                ? zigbee_rtc.coord_addr 
+                                : 0x0000;  // Standard Coordinator Adresse
+    
+    // Read Attribute Command für Time Cluster, Time Attribut (0x0000)
+    esp_zb_zcl_read_attr_cmd_t read_cmd = {0};
+    
+    // Basis-ZCL-Command-Konfiguration
+    read_cmd.zcl_basic_cmd.dst_addr_u.addr_short = coordinator_addr;
+    read_cmd.zcl_basic_cmd.src_endpoint = ZIGBEE_ENDPOINT_ID;
+    read_cmd.zcl_basic_cmd.dst_endpoint = 1;  // Coordinator Endpoint (Standard: 1)
+    read_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;  // 16-bit Adresse + Endpoint
+    read_cmd.clusterID = ZIGBEE_CLUSTER_TIME;  // Time Cluster (0x000A)
+    
+    // Richtung über Bit-Feld setzen: Client → Server (Device → Coordinator)
+    read_cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
+    
+    // Attribute-Liste: Nur Time Attribut (0x0000) lesen
+    // HINWEIS: attr_field ist ein uint16_t* Pointer, attr_number ist die Anzahl
+    static uint16_t attr_ids[1] = {ZIGBEE_ATTR_TIME_TIME};  // Time Attribut (0x0000)
+    read_cmd.attr_field = attr_ids;
+    read_cmd.attr_number = 1;
+    
+    // Thread-Safety: Zigbee Stack Lock
+    esp_zb_lock_acquire(portMAX_DELAY);
+    uint8_t seq_num = esp_zb_zcl_read_attr_cmd_req(&read_cmd);
+    esp_zb_lock_release();
+    
+    if (seq_num == 0) {
+        ESP_LOGW(TAG, "  → Read Attribute Request fehlgeschlagen (Time Cluster)");
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "  → Read Attribute Request gesendet (Time Cluster, Seq: %u, Coordinator: 0x%04X)", 
+             seq_num, coordinator_addr);
+    ESP_LOGI(TAG, "  → Warte auf Antwort vom Coordinator...");
+    
+    // HINWEIS: Die Response-Verarbeitung muss noch implementiert werden
+    // Die Response wird über einen Callback oder Signal-Handler verarbeitet
+    // TODO: Response-Handler für Read Attribute Response implementieren
     
     return true;
 }

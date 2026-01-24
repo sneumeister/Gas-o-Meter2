@@ -83,7 +83,7 @@ const definition = {
     vendor: 'Custom',
     
     // Beschreibung des Geräts
-    description: 'Custom Gas Meter with Battery status (ESP32C6)',
+    description: 'Custom Gas Meter with Battery (P32C6)',
     
     // fromZigbee: Konverter für eingehende Daten vom Gerät
     fromZigbee: [

@@ -2017,12 +2017,15 @@ const char* processor_get_value(const char* var) {
     if (strcmp(var, "pulse_counter_left") == 0) {
         // Linke 5 Stellen für CSS-Formatierung (Vorkommastellen)
         uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
+        uint32_t lp_core_running = *(volatile uint32_t *)&ulp_lp_core_running;
+        ESP_LOGI(TAG, "Template: pulse_counter_left - current_pulse=%lu, lp_core_running=%lu", current_pulse, lp_core_running);
         snprintf(buffer, sizeof(buffer), "%05lu", current_pulse / PULSE_COUNTER_DIVISOR);
         return buffer;
     }
     if (strcmp(var, "pulse_counter_right") == 0) {
         // Rechte 2 Stellen für CSS-Formatierung (Nachkommastellen)
         uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
+        ESP_LOGI(TAG, "Template: pulse_counter_right - current_pulse=%lu", current_pulse);
         snprintf(buffer, sizeof(buffer), "%02lu", current_pulse % PULSE_COUNTER_DIVISOR);
         return buffer;
     }
@@ -3083,6 +3086,33 @@ static esp_err_t counter_set_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// Handler für /api/pulse_counter (GET) - JSON API für Gas-Counter mit Debug-Info
+static esp_err_t pulse_counter_api_handler(httpd_req_t *req) {
+    last_web_activity_us = esp_timer_get_time();
+    
+    // Aktuellen Pulse-Counter-Wert aus RTC-RAM lesen
+    uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
+    uint32_t lp_core_running = *(volatile uint32_t *)&ulp_lp_core_running;
+    
+    // JSON-Response erstellen (mit Debug-Informationen)
+    char json_response[256];
+    snprintf(json_response, sizeof(json_response),
+             "{\"pulse_counter\":%lu,\"left\":\"%05lu\",\"right\":\"%02lu\",\"lp_core_running\":%lu,\"divisor\":%d}",
+             current_pulse,
+             current_pulse / PULSE_COUNTER_DIVISOR,
+             current_pulse % PULSE_COUNTER_DIVISOR,
+             lp_core_running,
+             PULSE_COUNTER_DIVISOR);
+    
+    // Debug-Log
+    ESP_LOGI(TAG, "API: pulse_counter=%lu, left=%05lu, right=%02lu, lp_core_running=%lu",
+             current_pulse, current_pulse / PULSE_COUNTER_DIVISOR, current_pulse % PULSE_COUNTER_DIVISOR, lp_core_running);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json_response, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
 // Handler für /zigbee/status (GET)
 static esp_err_t zigbee_status_handler(httpd_req_t *req) {
     last_web_activity_us = esp_timer_get_time();
@@ -3554,6 +3584,14 @@ void setupWebServer() {
     };
     httpd_register_uri_handler(server, &wifi_scan_uri);
     
+    httpd_uri_t pulse_counter_api_uri = {
+        .uri       = "/api/pulse_counter",
+        .method    = HTTP_GET,
+        .handler   = pulse_counter_api_handler,
+        .user_ctx  = NULL
+    };
+    httpd_register_uri_handler(server, &pulse_counter_api_uri);
+    
     httpd_uri_t zigbee_status_uri = {
         .uri       = "/zigbee/status",
         .method    = HTTP_GET,
@@ -3626,6 +3664,50 @@ extern "C" void app_main(void) {
     ESP_LOGI(TAG, "\n=== Gas-O-Meter ===");
     ESP_LOGI(TAG, "Wake-up Count: %d", wakeupCount);
     
+    // WICHTIG: ADC-Messung bei JEDEM Wake-up durchführen (Power-On oder Timer/GPIO-Wake-up)
+    // Diese Messung ist die Basis für alle weiteren Entscheidungen (Akku-Schutz, Übertragung, etc.)
+    ESP_LOGI(TAG, "Führe ADC-Messung durch (bei jedem Wake-up)...");
+    esp_err_t adc_ret = init_adc();
+    if (adc_ret != ESP_OK) {
+        ESP_LOGE(TAG, "ADC Fehler: %s", esp_err_to_name(adc_ret));
+        // Bei ADC-Fehler: Versuche trotzdem fortzufahren (kritisch, aber nicht fatal)
+        battery_voltage = 0.0f;
+        battery_percent = 0;
+    } else {
+        // Akku-Messung durchführen
+        // HINWEIS: config_rtc.adc_voltage_offset ist IMMER gesetzt (entweder durch Initialisierung mit ADC_VOLTAGE_OFFSET
+        //          oder durch load_config() aus config.json). Daher können wir es direkt verwenden.
+        battery_adc_mv = read_adc_median_mv();
+        battery_voltage = (float)battery_adc_mv / 1000.0f * VOLTAGE_DIVIDER_RATIO + config_rtc.adc_voltage_offset;
+        battery_percent = VOLTAGE_TO_PERCENT(battery_voltage);
+        
+        ESP_LOGI(TAG, "ADC-Messung: %d mV → Spannung: %.2f V, Prozent: %d%%", 
+                 battery_adc_mv, battery_voltage, battery_percent);
+        
+        // Akku-Schutz-Prüfung: Bei zu niedriger Spannung sofort Deep-Sleep (ohne Übertragung)
+        // WICHTIG: Diese Prüfung erfolgt BEVOR Config geladen wird, um Akku zu schützen!
+        bool is_usb_power = (battery_voltage < USB_DETECTION_THRESHOLD);
+        
+        if (!is_usb_power && battery_voltage < BATTERY_VOLTAGE_20) {
+            // Akku-Betrieb und Spannung < 20%: Sofort Deep-Sleep zum Akku-Schutz
+            ESP_LOGW(TAG, "Akku zu niedrig - Sofort Deep-Sleep zum Akku-Schutz (ohne Übertragung)");
+            ESP_LOGW(TAG, "Spannung: %.2f V (Minimum: %.2f V)", battery_voltage, BATTERY_VOLTAGE_20);
+            
+            // Vor Deep-Sleep: ulp_pulse_counter in Ring-Speicher schreiben (bei Akku-Low kann RTC-RAM verloren gehen)
+            // WICHTIG: NVS muss vorher initialisiert werden!
+            init_nvs_partitions(isPowerOn);
+            init_ring_buffer_and_ulp_pulse_counter(isPowerOn);
+            ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher vor Deep-Sleep (Akku-Low)...");
+            write_ulp_pulse_counter_to_ring_buffer();
+            
+            // Deep-Sleep mit GPIO-Wake-up (Taster A) - Timer deaktiviert bei kritischer Spannung
+            bool enable_timer = (battery_voltage > BATTERY_VOLTAGE_PROTECTION);
+            enter_deep_sleep_with_gpio_and_timer_wakeup(enable_timer);
+            // Ab hier wird Code nicht mehr ausgeführt (Deep-Sleep)
+            return;
+        }
+    }
+    
     switch (wakeup_reason) {
         case ESP_SLEEP_WAKEUP_UNDEFINED:
             ESP_LOGI(TAG, "=== EVENT: Power-On ===");
@@ -3684,64 +3766,31 @@ extern "C" void app_main(void) {
     gpio_set_level((gpio_num_t)LED_BUILTIN_GPIO, LED_ON);  // LED EIN (HP-Core aktiv)
     ESP_LOGI(TAG, "LED initialisiert (GPIO%d)", LED_BUILTIN_GPIO);
     
-    // ADC initialisieren (ESP-IDF)
-    // WICHTIG: Spannungsprüfung VOR NVS-Initialisierung, um Akku zu schützen!
-    esp_err_t adc_ret = init_adc();
-    if (adc_ret != ESP_OK) {
-        ESP_LOGE(TAG, "ADC Fehler: %s", esp_err_to_name(adc_ret));
+    // Stromversorgungs-Prüfung (basierend auf bereits durchgeführter ADC-Messung)
+    // WICHTIG: Bei USB-Stromversorgung kann Timer aktiv bleiben (keine Akku-Probleme)
+    bool is_usb_power = (battery_voltage < USB_DETECTION_THRESHOLD);
+    bool enable_timer_wakeup = true;  // Standard: Timer aktiviert
+    
+    if (is_usb_power) {
+        // USB-Stromversorgung: Timer kann aktiv bleiben (keine Akku-Probleme)
+        ESP_LOGI(TAG, "USB-Stromversorgung erkannt - Betrieb fortgesetzt");
+        ESP_LOGI(TAG, "Spannung: %.2f V (USB-Schwelle: %.2f V)", 
+                 battery_voltage, USB_DETECTION_THRESHOLD);
+        // enable_timer_wakeup bleibt true
     } else {
-        // Akku-Messung
-        battery_adc_mv = read_adc_median_mv();
-        battery_voltage = (float)battery_adc_mv / 1000.0f * VOLTAGE_DIVIDER_RATIO + config_rtc.adc_voltage_offset;
-        battery_percent = VOLTAGE_TO_PERCENT(battery_voltage);
-        
-        ESP_LOGI(TAG, "ADC: %d mV, Spannung: %.2f V, Prozent: %d%%", 
-                 battery_adc_mv, battery_voltage, battery_percent);
-        
-        // Stromversorgungs-Prüfung ZUERST (vor Akku-Schutz)
-        // WICHTIG: Bei USB-Stromversorgung kann Timer aktiv bleiben (keine Akku-Probleme)
-        bool is_usb_power = (battery_voltage < USB_DETECTION_THRESHOLD);
-        bool enable_timer_wakeup = true;  // Standard: Timer aktiviert
-        
-        if (is_usb_power) {
-            // USB-Stromversorgung: Timer kann aktiv bleiben (keine Akku-Probleme)
-            ESP_LOGI(TAG, "USB-Stromversorgung erkannt - Betrieb fortgesetzt");
-            ESP_LOGI(TAG, "Spannung: %.2f V (USB-Schwelle: %.2f V)", 
-                     battery_voltage, USB_DETECTION_THRESHOLD);
-            // enable_timer_wakeup bleibt true
-        } else {
-            // Akku-Betrieb: Timer-Wake-up deaktivieren bei kritischer Spannung
-            // WICHTIG: Bei Spannung <= BATTERY_VOLTAGE_PROTECTION macht automatisches Wake-up nur mehr Schaden
-            // Nur noch manueller Wake-up über Taster möglich
-            if (battery_voltage <= BATTERY_VOLTAGE_PROTECTION) {
-                enable_timer_wakeup = false;
-                ESP_LOGW(TAG, "Akku-Spannung kritisch (<= BATTERY_VOLTAGE_PROTECTION)");
-                ESP_LOGW(TAG, "Timer-Wake-up wird DEAKTIVIERT - nur manueller Wake-up über Taster A möglich");
-                ESP_LOGW(TAG, "Spannung: %.2f V (Schutz-Schwelle: %.2f V)", 
-                         battery_voltage, BATTERY_VOLTAGE_PROTECTION);
-            }
-            
-            // Akku-Schutz: Deep-Sleep bei zu niedriger Spannung
-            if (battery_voltage < BATTERY_VOLTAGE_20) {
-            // Spannung >= 2V aber < BATTERY_VOLTAGE_20: Akku zu niedrig → Deep-Sleep zum Schutz
-            ESP_LOGW(TAG, "Akku zu niedrig - Deep-Sleep zum Akku-Schutz");
-            ESP_LOGW(TAG, "Spannung: %.2f V (Minimum: %.2f V)", 
-                     battery_voltage, BATTERY_VOLTAGE_20);
-            
-                // Vor Deep-Sleep: ulp_pulse_counter prüfen und ggf. in Ring-Speicher schreiben
-            // (bei Akku-Low kann RTC-RAM verloren gehen)
-            ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher vor Deep-Sleep (Akku-Low)...");
-            write_ulp_pulse_counter_to_ring_buffer();
-            
-            // Deep-Sleep mit GPIO-Wake-up (Taster A) - spart Energie und schützt Akku
-                // Timer-Wake-up: Bei USB immer aktiv, sonst nur wenn Spannung > BATTERY_VOLTAGE_PROTECTION
-                enter_deep_sleep_with_gpio_and_timer_wakeup(enable_timer_wakeup);
-            // Ab hier wird Code nicht mehr ausgeführt (Deep-Sleep)
-                return;
-            }
+        // Akku-Betrieb: Timer-Wake-up deaktivieren bei kritischer Spannung
+        // WICHTIG: Bei Spannung <= BATTERY_VOLTAGE_PROTECTION macht automatisches Wake-up nur mehr Schaden
+        // Nur noch manueller Wake-up über Taster möglich
+        if (battery_voltage <= BATTERY_VOLTAGE_PROTECTION) {
+            enable_timer_wakeup = false;
+            ESP_LOGW(TAG, "Akku-Spannung kritisch (<= BATTERY_VOLTAGE_PROTECTION)");
+            ESP_LOGW(TAG, "Timer-Wake-up wird DEAKTIVIERT - nur manueller Wake-up über Taster A möglich");
+            ESP_LOGW(TAG, "Spannung: %.2f V (Schutz-Schwelle: %.2f V)", 
+                     battery_voltage, BATTERY_VOLTAGE_PROTECTION);
         }
-        
-        // NVS initialisieren (bei Power-On und Deep-Sleep-Wake-up)
+    }
+    
+    // NVS initialisieren (bei Power-On und Deep-Sleep-Wake-up)
         // WICHTIG: nvs_flash_init() ist idempotent - wenn bereits initialisiert, passiert nichts (keine Wear!)
         init_nvs_partitions(isPowerOn);
             
@@ -3809,11 +3858,13 @@ extern "C" void app_main(void) {
                     ESP_LOGI(TAG, "=== Timer-Wake-up: Datenübertragung (Minute %d, Intervall: %d Min) ===",
                              timeinfo.tm_min, config_rtc.transfer_minutes);
                     
-                    // Transfer-Daten vorbereiten
+                    // Transfer-Daten vorbereiten (ADC-Messung wurde bereits beim Wake-up durchgeführt)
+                    // HINWEIS: battery_voltage und battery_percent wurden bereits beim Wake-up gemessen
+                    //          und sind daher aktuell - keine erneute Messung nötig!
                     transfer_data_t data_to_transfer = {
                         .pulse_counter = *(volatile uint32_t *)&ulp_pulse_counter,
-                        .battery_percent = (float)battery_percent,  // Bereits als uint8_t vorhanden
-                        .battery_voltage = battery_voltage,  // Akku-Spannung in Volt (z.B. 3.57V) - für Zigbee Battery Voltage Attribut
+                        .battery_percent = (float)battery_percent,  // Bereits beim Wake-up gemessen
+                        .battery_voltage = battery_voltage,  // Bereits beim Wake-up gemessen
                         .firmware_version = PROJECT_VERSION
                     };
                     
@@ -3905,7 +3956,6 @@ extern "C" void app_main(void) {
         }
                 break;
     }
-    }  // Ende des else-Blocks (ADC erfolgreich)
     
     // Web-Timeout Task starten (ersetzt Arduino loop())
     // Funktionsdeklaration: void web_timeout_task(void *parameter);
@@ -3982,7 +4032,6 @@ void web_timeout_task(void *parameter) {
             should_enter_deep_sleep = false;
             ESP_LOGW(TAG, "Deep-Sleep konnte nicht gestartet werden - System bleibt aktiv");
         }
-        
         vTaskDelay(check_interval);
     }
 }

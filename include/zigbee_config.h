@@ -25,6 +25,7 @@
 #define ZIGBEE_CLUSTER_BATTERY        0x0001  // Power Configuration Cluster
 #define ZIGBEE_CLUSTER_METERING       0x0702  // Simple Metering Cluster (für Gas-Zähler)
 #define ZIGBEE_CLUSTER_BASIC          0x0000  // Basic Cluster (für Firmware-Version)
+#define ZIGBEE_CLUSTER_TIME           0x000A  // Time Cluster (für Zeit-Synchronisation)
 
 // Attribute-IDs
 #define ZIGBEE_ATTR_BATTERY_PERCENT   0x0021  // Battery Percentage Remaining (0-200, 0-100%)
@@ -32,6 +33,7 @@
 #define ZIGBEE_ATTR_BATTERY_ALARM_STATE 0x003E  // Battery Alarm State (map32 Bitmap, Bit 0 = Low Voltage Alarm)
 #define ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED  0x0000  // CurrentSummationDelivered (Metering Cluster)
 #define ZIGBEE_ATTR_APP_VERSION       0x0001  // Application Version (Basic Cluster)
+#define ZIGBEE_ATTR_TIME_TIME         0x0000  // Time (UTC Time, uint32_t, Sekunden seit 1. Januar 2000)
 
 // Metering Cluster Konfiguration
 // Unit of Measure: m³ (m3, m3/h binary value)
@@ -73,6 +75,7 @@
 #define ZIGBEE_STEERING_RETRY_COUNT   3       // Anzahl Retry-Versuche bei Network Steering FAIL
 #define ZIGBEE_STEERING_RETRY_TIMER_MS 3000   // Wartezeit zwischen Retry-Versuchen (3 Sekunden = gibt Coordinator Zeit, Permit Join zu aktivieren)
 #define ZIGBEE_INTERVIEW_WAIT_MS      90000   // 90 Sekunden Wartezeit nach erstem Pairing für Interview (Zigbee2MQTT benötigt Zeit für Active Endpoints, Simple Descriptor, etc.)
+#define ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS  30000  // 30 Sekunden Wartezeit für automatischen Rejoin durch Stack (nach esp_zb_start() mit gespeicherten Netzwerk-Informationen)
 
 // Timing-Konfiguration für Association Request nach Network Steering
 // WICHTIG: Nach erfolgreichem Network Steering benötigt der Stack Zeit, um:
