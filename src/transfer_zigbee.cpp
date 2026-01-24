@@ -808,18 +808,38 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
         return NULL;
     }
     
-    // Battery Percentage Attribut explizit hinzufügen mit Pointer auf persistente Variable
-    // WICHTIG: Pointer auf persistente Variable übergeben, die später aktualisiert werden kann
-    err = esp_zb_power_config_cluster_add_attr(
+    // Battery Percentage Attribut hinzufügen (Attribute ID: 0x0021)
+    // WICHTIG: Battery Percentage ist uint8 (0-200 für 0-100%)
+    //          WICHTIG: Als REPORTABLE markieren, damit der Stack automatisch Reports nach Rejoin sendet
+    //          Verwende esp_zb_cluster_add_attr() statt esp_zb_power_config_cluster_add_attr(),
+    //          um volle Kontrolle über Access-Flags zu haben
+    err = esp_zb_cluster_add_attr(
         power_config_cluster,
+        ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
         ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID,
+        ESP_ZB_ZCL_ATTR_TYPE_U8,  // uint8
+        ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,  // Read-only + Reportable
         &battery_percentage_remaining
     );
     if (err != ESP_OK && err != ESP_ERR_INVALID_ARG) {
-        // ESP_ERR_INVALID_ARG bedeutet, dass Attribut bereits vorhanden ist (OK)
         ESP_LOGW(TAG, "  → Warnung: Battery Percentage Attribut konnte nicht hinzugefügt werden: %s", esp_err_to_name(err));
+        // Fallback: Versuche es mit esp_zb_power_config_cluster_add_attr() (ohne REPORTABLE-Flag)
+        err = esp_zb_power_config_cluster_add_attr(
+            power_config_cluster,
+            ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID,
+            &battery_percentage_remaining
+        );
+        if (err == ESP_OK) {
+            ESP_LOGW(TAG, "  → Battery Percentage mit esp_zb_power_config_cluster_add_attr() hinzugefügt, aber OHNE REPORTABLE-Flag!");
+            ESP_LOGW(TAG, "  → Reporting wird möglicherweise nicht funktionieren!");
+        }
+    } else if (err == ESP_ERR_INVALID_ARG) {
+        // Attribut existiert bereits - kann nicht mit REPORTABLE-Flag neu hinzugefügt werden
+        ESP_LOGW(TAG, "  → WARNUNG: Battery Percentage Attribut existiert bereits (ESP_ERR_INVALID_ARG)");
+        ESP_LOGW(TAG, "  → Access-Flags können nicht nachträglich geändert werden - Attribut ist NICHT als REPORTABLE markiert");
+        ESP_LOGW(TAG, "  → Reporting wird nicht funktionieren! LÖSUNG: Cluster muss ohne automatische Attribut-Erstellung erstellt werden");
     } else {
-        ESP_LOGI(TAG, "  → Battery Percentage Attribut hinzugefügt (Initial: %u = %.1f%%)", 
+        ESP_LOGI(TAG, "  → Battery Percentage Attribut hinzugefügt (REPORTABLE, Initial: %u = %.1f%%)", 
                  battery_percentage_remaining, battery_percentage_remaining / 2.0f);
     }
     
@@ -863,15 +883,36 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     // WICHTIG: Battery Alarm State ist map32 (32-bit Bitmap)
     //          Bit 0 = Low Voltage Alarm (wenn battery_voltage < BATTERY_VOLTAGE_30 = 3.57V)
     //          Wir setzen Bit 0, wenn battery_voltage < 3.57V (Schwelle für Ring-Speicher-Schreibung)
-    err = esp_zb_power_config_cluster_add_attr(
+    //          WICHTIG: Als REPORTABLE markieren, damit der Stack automatisch Reports nach Rejoin sendet
+    //          Verwende esp_zb_cluster_add_attr() statt esp_zb_power_config_cluster_add_attr(),
+    //          um volle Kontrolle über Access-Flags zu haben
+    err = esp_zb_cluster_add_attr(
         power_config_cluster,
+        ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG,
         ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_STATE_ID,
+        ESP_ZB_ZCL_ATTR_TYPE_U32,  // uint32 (32-bit Bitmap)
+        ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,  // Read-only + Reportable
         &battery_alarm_state
     );
     if (err != ESP_OK && err != ESP_ERR_INVALID_ARG) {
         ESP_LOGW(TAG, "  → Warnung: Battery Alarm State Attribut konnte nicht hinzugefügt werden: %s", esp_err_to_name(err));
+        // Fallback: Versuche es mit esp_zb_power_config_cluster_add_attr() (ohne REPORTABLE-Flag)
+        err = esp_zb_power_config_cluster_add_attr(
+            power_config_cluster,
+            ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_STATE_ID,
+            &battery_alarm_state
+        );
+        if (err == ESP_OK) {
+            ESP_LOGW(TAG, "  → Battery Alarm State mit esp_zb_power_config_cluster_add_attr() hinzugefügt, aber OHNE REPORTABLE-Flag!");
+            ESP_LOGW(TAG, "  → Reporting wird möglicherweise nicht funktionieren!");
+        }
+    } else if (err == ESP_ERR_INVALID_ARG) {
+        // Attribut existiert bereits - kann nicht mit REPORTABLE-Flag neu hinzugefügt werden
+        ESP_LOGW(TAG, "  → WARNUNG: Battery Alarm State Attribut existiert bereits (ESP_ERR_INVALID_ARG)");
+        ESP_LOGW(TAG, "  → Access-Flags können nicht nachträglich geändert werden - Attribut ist NICHT als REPORTABLE markiert");
+        ESP_LOGW(TAG, "  → Reporting wird nicht funktionieren! LÖSUNG: Cluster muss ohne automatische Attribut-Erstellung erstellt werden");
     } else {
-        ESP_LOGI(TAG, "  → Battery Alarm State Attribut hinzugefügt (Initial: 0x%08lX, Bit 0 = Low Voltage Alarm)", 
+        ESP_LOGI(TAG, "  → Battery Alarm State Attribut hinzugefügt (REPORTABLE, Initial: 0x%08lX, Bit 0 = Low Voltage Alarm)", 
                  (unsigned long)battery_alarm_state);
     }
     
@@ -2044,6 +2085,13 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     
     // [2/4] Stelle sicher, dass Device mit Netzwerk verbunden ist (Pairing/Rejoin)
     ESP_LOGI(TAG, "  [2/4] Stelle sicher, dass Device mit ZigBee-Netzwerk verbunden ist...");
+    
+    // WICHTIG: Prüfe, ob Device bereits joined war (vor ensure_joined)
+    // Wenn ja UND Device war vorher NICHT joined (Stack-seitig), war es ein Rejoin
+    // Der Stack sendet automatisch Reports für REPORTABLE-Attribute nach Rejoin
+    bool was_already_joined_in_rtc = zigbee_rtc.joined && ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr);
+    bool was_joined_in_stack_before = esp_zb_bdb_dev_joined();  // Prüfe Stack-Status VOR ensure_joined
+    
     transfer_status_t join_status = transfer_zigbee_ensure_joined();
     if (join_status != TRANSFER_STATUS_OK) {
         ESP_LOGE(TAG, "        → Fehler beim Verbinden mit ZigBee-Netzwerk");
@@ -2051,6 +2099,19 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
         return join_status;
     }
     ESP_LOGI(TAG, "        → Device ist mit ZigBee-Netzwerk verbunden");
+    
+    // Prüfe, ob gerade ein Rejoin stattgefunden hat
+    // Rejoin: was_already_joined_in_rtc=true (Config vorhanden) UND was_joined_in_stack_before=false (Stack war nicht joined)
+    // Der Stack sendet automatisch Reports für REPORTABLE-Attribute nach Rejoin
+    // AUSNAHME: Beim ersten Pairing (first_pairing_after_join) senden wir trotzdem manuelle Reports (für Interview)
+    bool rejoin_just_happened = was_already_joined_in_rtc && !was_joined_in_stack_before && esp_zb_bdb_dev_joined() && !first_pairing_after_join;
+    if (rejoin_just_happened) {
+        ESP_LOGI(TAG, "        → Rejoin erkannt → Stack sendet automatisch Attribute Reports (keine manuellen Reports nötig)");
+    } else if (was_already_joined_in_rtc && was_joined_in_stack_before) {
+        ESP_LOGI(TAG, "        → Device war bereits verbunden (kein Rejoin) → Sende manuelle Reports");
+    } else if (first_pairing_after_join) {
+        ESP_LOGI(TAG, "        → Erstes Pairing erkannt → Sende manuelle Reports (für Interview)");
+    }
     
     // [3/4] Datenübertragung: Setze Metering Cluster Attribute
     ESP_LOGI(TAG, "  [3/4] Sende Daten:");
@@ -2083,8 +2144,14 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     }
     
     // [3.1/4] Sende Attribute Report für CurrentSummationDelivered an Coordinator
-    ESP_LOGI(TAG, "  [3.1/4] Sende Attribute Report (CurrentSummationDelivered)...");
-    send_attribute_report(ZIGBEE_CLUSTER_METERING, ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED);
+    // WICHTIG: Nach Rejoin sendet der Stack automatisch Reports für REPORTABLE-Attribute
+    // Daher senden wir manuelle Reports nur, wenn KEIN Rejoin stattgefunden hat
+    if (!rejoin_just_happened) {
+        ESP_LOGI(TAG, "  [3.1/4] Sende Attribute Report (CurrentSummationDelivered)...");
+        send_attribute_report(ZIGBEE_CLUSTER_METERING, ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED);
+    } else {
+        ESP_LOGI(TAG, "  [3.1/4] Überspringe manuellen Report (Stack sendet automatisch nach Rejoin)");
+    }
     
     // Battery Percentage aktualisieren (Power Configuration Cluster)
     // WICHTIG: Battery Percentage ist 0-200 (0-100%), data->battery_percent ist float 0.0-100.0
@@ -2189,19 +2256,25 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     }
     
     // [3.2/4] Sende Attribute Report für Battery Percentage an Coordinator
-    ESP_LOGI(TAG, "  [3.2/4] Sende Attribute Report (Battery Percentage)...");
-    send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_PERCENT);
-    
-    // [3.3/4] Sende Attribute Report für Battery Voltage an Coordinator
-    if (data->battery_voltage > 0.0f) {
-        ESP_LOGI(TAG, "  [3.3/4] Sende Attribute Report (Battery Voltage)...");
-        send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_VOLTAGE);
-    }
-    
-    // [3.4/4] Sende Attribute Report für Battery Alarm State an Coordinator
-    if (data->battery_voltage > 0.0f) {
-        ESP_LOGI(TAG, "  [3.4/4] Sende Attribute Report (Battery Alarm State)...");
-        send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_ALARM_STATE);
+    // WICHTIG: Nach Rejoin sendet der Stack automatisch Reports für REPORTABLE-Attribute
+    // Daher senden wir manuelle Reports nur, wenn KEIN Rejoin stattgefunden hat
+    if (!rejoin_just_happened) {
+        ESP_LOGI(TAG, "  [3.2/4] Sende Attribute Report (Battery Percentage)...");
+        send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_PERCENT);
+        
+        // [3.3/4] Sende Attribute Report für Battery Voltage an Coordinator
+        if (data->battery_voltage > 0.0f) {
+            ESP_LOGI(TAG, "  [3.3/4] Sende Attribute Report (Battery Voltage)...");
+            send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_VOLTAGE);
+        }
+        
+        // [3.4/4] Sende Attribute Report für Battery Alarm State an Coordinator
+        if (data->battery_voltage > 0.0f) {
+            ESP_LOGI(TAG, "  [3.4/4] Sende Attribute Report (Battery Alarm State)...");
+            send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_ALARM_STATE);
+        }
+    } else {
+        ESP_LOGI(TAG, "  [3.2-3.4/4] Überspringe manuelle Battery Reports (Stack sendet automatisch nach Rejoin)");
     }
     
     ESP_LOGI(TAG, "        → Daten erfolgreich gesendet");
