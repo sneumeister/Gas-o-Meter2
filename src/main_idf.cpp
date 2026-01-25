@@ -2017,15 +2017,12 @@ const char* processor_get_value(const char* var) {
     if (strcmp(var, "pulse_counter_left") == 0) {
         // Linke 5 Stellen für CSS-Formatierung (Vorkommastellen)
         uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
-        uint32_t lp_core_running = *(volatile uint32_t *)&ulp_lp_core_running;
-        ESP_LOGI(TAG, "Template: pulse_counter_left - current_pulse=%lu, lp_core_running=%lu", current_pulse, lp_core_running);
         snprintf(buffer, sizeof(buffer), "%05lu", current_pulse / PULSE_COUNTER_DIVISOR);
         return buffer;
     }
     if (strcmp(var, "pulse_counter_right") == 0) {
         // Rechte 2 Stellen für CSS-Formatierung (Nachkommastellen)
         uint32_t current_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
-        ESP_LOGI(TAG, "Template: pulse_counter_right - current_pulse=%lu", current_pulse);
         snprintf(buffer, sizeof(buffer), "%02lu", current_pulse % PULSE_COUNTER_DIVISOR);
         return buffer;
     }
@@ -3733,28 +3730,6 @@ extern "C" void app_main(void) {
             break;
     }
     
-    // ========================================================================
-    // ========================================================================
-    // ========================================================================
-    // VORÜBERGEHENDE WARTEZEIT FÜR WINDOWS COM-PORT VERFÜGBARKEIT
-    // ========================================================================
-    // PROBLEM: Nach Deep-Sleep-Wake-up benötigt der COM-Port unter Windows
-    //          zu lange, bis er wieder verfügbar ist. Die Hälfte der Logs
-    //          geht verloren, bevor der Serial Monitor verbunden ist.
-    // LÖSUNG: 2 Sekunden Wartezeit nach Wake-up, damit Windows den COM-Port
-    //         wieder erkennt und alle Logs sichtbar sind.
-    // HINWEIS: Diese Wartezeit ist VORÜBERGEHEND und sollte nach Lösung des
-    //          COM-Port-Problems wieder entfernt werden!
-    // ========================================================================
-    // ========================================================================
-    // ========================================================================
-    ESP_LOGI(TAG, "Warte 2 Sekunden für Windows COM-Port-Verfügbarkeit...");
-    vTaskDelay(pdMS_TO_TICKS(2000));  // 2 Sekunden = 2000 ms
-    ESP_LOGI(TAG, "Wartezeit abgeschlossen - Logs sollten jetzt vollständig sichtbar sein");
-    // ========================================================================
-    // ========================================================================
-    // ========================================================================
-    
     // Interne LED initialisieren und sofort einschalten (HP-Core läuft)
     // WICHTIG: LED wird hier eingeschaltet, um zu zeigen, dass HP-Core aktiv ist
     io_conf.pin_bit_mask = (1ULL << LED_BUILTIN_GPIO);
@@ -3831,6 +3806,16 @@ extern "C" void app_main(void) {
         // 2. Config laden (idempotent: prüft intern, ob bereits geladen)
         // WICHTIG: Muss vor allen Aktionen geladen sein, da beide Stränge (Timer/Power-On/GPIO) Config benötigen
         bool config_available = load_config();
+        
+        // 2.1 Battery-Spannung neu berechnen (mit korrektem adc_voltage_offset aus Config)
+        // WICHTIG: Bei Power-On wurde battery_voltage VOR load_config() mit dem DEFAULT-Offset berechnet.
+        //          Jetzt ist der korrekte Offset aus config.json geladen → Neuberechnung nötig!
+        //          Bei Deep-Sleep-Wake-Up ist der RTC-Wert bereits korrekt, aber Neuberechnung schadet nicht.
+        if (config_available && battery_adc_mv > 0) {
+            battery_voltage = (float)battery_adc_mv / 1000.0f * VOLTAGE_DIVIDER_RATIO + config_rtc.adc_voltage_offset;
+            battery_percent = VOLTAGE_TO_PERCENT(battery_voltage);
+            ESP_LOGD(TAG, "Battery-Spannung neu berechnet (mit Config-Offset): %.2f V, %d%%", battery_voltage, battery_percent);
+        }
         
         // 2a. ZigBee-Config initialisieren (lädt aus NVS bei Power-On, verwendet RTC-RAM bei Deep-Sleep-Wake-up)
         if (config_available && strcmp(config_rtc.transfer_mode, TRANSFER_MODE_ZIGBEE) == 0) {

@@ -83,7 +83,12 @@ const definition = {
     vendor: 'Custom',
     
     // Beschreibung des Geräts
-    description: 'Custom Gas Meter with Battery (P32C6)',
+    description: 'Custom Gas Meter with Battery (ESP32C6)',
+    
+    // WICHTIG: Power Source muss explizit definiert werden für das Battery-Icon!
+    // Ohne diese Property zeigt Z2M ein "?" statt des Battery-Icons
+    // Siehe: https://github.com/Koenkk/zigbee-herdsman-converters/issues/8098
+    powerSource: 'Battery',
     
     // fromZigbee: Konverter für eingehende Daten vom Gerät
     fromZigbee: [
@@ -125,11 +130,14 @@ const definition = {
         // --- Gas Metering Reporting konfigurieren ---
         // Konfiguriert nur currentSummDelivered (0x0000), nicht instantaneousDemand
         // um UNSUPPORTED_ATTRIBUTE Fehler zu vermeiden
+        // WICHTIG: minimumReportInterval=0 bedeutet: kein Minimum (Device sendet manuell mit
+        //          esp_zb_zcl_report_attr_cmd_req(), das ignoriert diese Config sowieso)
+        // maximumReportInterval dient als Fallback für automatisches Reporting
         try {
             await endpoint.configureReporting('seMetering', [{
                 attribute: 'currentSummDelivered',
-                minimumReportInterval: 1,       // Min. 1 Sekunde zwischen Reports
-                maximumReportInterval: 65000,   // Max. ~18 Stunden ohne Report
+                minimumReportInterval: 0,       // Kein Minimum (Device sendet manuell, ignoriert Config)
+                maximumReportInterval: 65000,   // Max. ~18 Stunden ohne Report (Fallback)
                 reportableChange: 1,            // Melden bei Änderung von 1 raw unit (0.01 m³)
             }]);
         } catch (error) {
@@ -137,16 +145,38 @@ const definition = {
         }
         
         // --- Battery Reporting konfigurieren ---
-        // Verwendet Standard-Reporting-Helper für häufige Attribute
+        // Explizite Konfiguration für alle Battery-Attribute (inkl. batteryAlarmState für battery_low)
+        // WICHTIG: Device sendet manuell mit esp_zb_zcl_report_attr_cmd_req() (ignoriert diese Config)
+        //          Diese Config dient als Fallback, falls manuelles Senden fehlschlägt
+        // Kürzere Intervalle als Standard (1h statt 6h max), da battery_low kritisch ist
         try {
-            await reporting.batteryPercentageRemaining(endpoint);  // Standard: 1h-6h, Change: 1%
-            await reporting.batteryVoltage(endpoint);              // Standard: 1h-6h, Change: 100mV
+            await endpoint.configureReporting('genPowerCfg', [
+                {
+                    attribute: 'batteryPercentageRemaining',
+                    minimumReportInterval: 0,       // Kein Minimum (Device sendet manuell)
+                    maximumReportInterval: 3600,    // Max. 1 Stunde ohne Report (Fallback)
+                    reportableChange: 2,            // Melden bei 1% Änderung (ZCL: 0-200 = 0-100%)
+                },
+                {
+                    attribute: 'batteryVoltage',
+                    minimumReportInterval: 0,       // Kein Minimum (Device sendet manuell)
+                    maximumReportInterval: 3600,    // Max. 1 Stunde ohne Report (Fallback)
+                    reportableChange: 1,            // Melden bei 100mV Änderung (ZCL: uint8 in 100mV)
+                },
+                {
+                    attribute: 'batteryAlarmState',
+                    minimumReportInterval: 0,       // Kein Minimum (Device sendet manuell)
+                    maximumReportInterval: 3600,    // Max. 1 Stunde ohne Report (Fallback, kritisch!)
+                    reportableChange: 1,            // Melden bei JEDER Änderung (Bit 0 = Low Voltage Alarm)
+                },
+            ]);
         } catch (error) {
-            // Fehler werden ignoriert
+            // Fehler werden ignoriert - manche Geräte unterstützen nicht alle Attribute
         }
     },
     
     meta: {
+        battery: {type: 'battery'},  // Sagt Z2M: "Dieses Device ist batteriebetrieben" → zeigt Batterie-Icon statt "?"
         configureKey: 1,  // Stellt sicher, dass die Konfiguration bei jedem Join/Reboot versucht wird
     },
 };

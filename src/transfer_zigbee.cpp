@@ -82,6 +82,12 @@ static uint8_t battery_voltage_zigbee = 40;  // 4.0V in Zigbee-Format (100mV Ein
 // Initialwert: 0 (kein Alarm)
 static uint32_t battery_alarm_state = 0;  // Bitmap: Bit 0 = Low Voltage Alarm
 
+// Persistente Variable für Power Source (wird vom Basic Cluster verwendet)
+// WICHTIG: Diese Variable muss persistent sein, da der Cluster einen Pointer darauf speichert
+// 0x03 = ESP_ZB_ZCL_BASIC_POWER_SOURCE_BATTERY (batteriebetrieben)
+// Zigbee2MQTT zeigt basierend auf diesem Wert das Batterie-Icon statt "?" an
+static uint8_t basic_power_source = ESP_ZB_ZCL_BASIC_POWER_SOURCE_BATTERY;  // 0x03 = Battery Powered
+
 // Persistente Variable für CurrentSummationDelivered (wird vom Metering Cluster verwendet)
 // WICHTIG: Diese Variable muss persistent sein, da der Cluster einen Pointer darauf speichert
 // Initialwert: 0 (wird bei jeder Datenübertragung aktualisiert)
@@ -784,13 +790,13 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     
     // Power Source (Leistung) hinzufügen (Attribute ID: 0x0007)
     // WICHTIG: powerSource ist ein enum (esp_zb_zcl_basic_power_source_e)
-    // Zigbee2MQTT zeigt dies als "Leistung" im Geräte-Screen an
+    // Zigbee2MQTT zeigt basierend auf diesem Wert das Batterie-Icon an (statt "?")
     // 0x03 = ESP_ZB_ZCL_BASIC_POWER_SOURCE_BATTERY (batteriebetrieben)
-    uint8_t power_source = ESP_ZB_ZCL_BASIC_POWER_SOURCE_BATTERY;  // 0x03 = Battery Powered
+    // WICHTIG: Verwende persistente Variable (basic_power_source), da Cluster einen Pointer speichert!
     esp_zb_basic_cluster_add_attr(basic_cluster, 
                                    ESP_ZB_ZCL_ATTR_BASIC_POWER_SOURCE_ID, 
-                                   &power_source);
-    ESP_LOGI(TAG, "  → Power Source hinzugefügt: Battery Powered (0x%02X)", power_source);
+                                   &basic_power_source);  // Pointer auf persistente Variable
+    ESP_LOGI(TAG, "  → Power Source hinzugefügt: Battery Powered (0x%02X)", basic_power_source);
     
     esp_err_t err = esp_zb_cluster_list_add_basic_cluster(cluster_list, basic_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
     if (err != ESP_OK) {
@@ -1591,6 +1597,10 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                         zigbee_rtc.joined = true;
                         zigbee_rtc.network_addr = network_addr;
                         zigbee_rtc.pan_id = pan_id;
+                        
+                        // WICHTIG: device_announce senden, damit Zigbee2MQTT das Interview starten kann!
+                        esp_zb_zdo_device_announcement_req();
+                        ESP_LOGI(TAG, "        → DEVICE_ANNCE gesendet → Zigbee2MQTT Interview sollte jetzt starten");
                         zigbee_rtc.channel = esp_zb_get_current_channel();
                         
                         // Extended Address aktualisieren
@@ -1668,6 +1678,10 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 zigbee_rtc.network_addr = network_addr;
                 zigbee_rtc.pan_id = pan_id;
                 zigbee_rtc.channel = esp_zb_get_current_channel();
+                
+                // WICHTIG: device_announce senden, damit Zigbee2MQTT das Interview starten kann!
+                esp_zb_zdo_device_announcement_req();
+                ESP_LOGI(TAG, "        → DEVICE_ANNCE gesendet → Zigbee2MQTT Interview sollte jetzt starten");
                 
                 // Extended Address aktualisieren
                 esp_zb_ieee_addr_t ieee_addr;
@@ -2086,9 +2100,7 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     // [2/4] Stelle sicher, dass Device mit Netzwerk verbunden ist (Pairing/Rejoin)
     ESP_LOGI(TAG, "  [2/4] Stelle sicher, dass Device mit ZigBee-Netzwerk verbunden ist...");
     
-    // WICHTIG: Prüfe, ob Device bereits joined war (vor ensure_joined)
-    // Wenn ja UND Device war vorher NICHT joined (Stack-seitig), war es ein Rejoin
-    // Der Stack sendet automatisch Reports für REPORTABLE-Attribute nach Rejoin
+    // WICHTIG: Prüfe, ob Device bereits joined war (vor ensure_joined) - nur für Logging
     bool was_already_joined_in_rtc = zigbee_rtc.joined && ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr);
     bool was_joined_in_stack_before = esp_zb_bdb_dev_joined();  // Prüfe Stack-Status VOR ensure_joined
     
@@ -2100,17 +2112,19 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     }
     ESP_LOGI(TAG, "        → Device ist mit ZigBee-Netzwerk verbunden");
     
-    // Prüfe, ob gerade ein Rejoin stattgefunden hat
-    // Rejoin: was_already_joined_in_rtc=true (Config vorhanden) UND was_joined_in_stack_before=false (Stack war nicht joined)
-    // Der Stack sendet automatisch Reports für REPORTABLE-Attribute nach Rejoin
-    // AUSNAHME: Beim ersten Pairing (first_pairing_after_join) senden wir trotzdem manuelle Reports (für Interview)
-    bool rejoin_just_happened = was_already_joined_in_rtc && !was_joined_in_stack_before && esp_zb_bdb_dev_joined() && !first_pairing_after_join;
+    // Logging: Art der Verbindung (für Diagnose)
+    // WICHTIG: Stack sendet NICHT automatisch Reports nach Rejoin (GitHub Issues #9, #67, #102)
+    // Timer werden nach Rejoin zurückgesetzt → Erster Report erst nach MinInterval (bis zu 1 Stunde!)
+    // Daher: IMMER manuell senden mit esp_zb_zcl_report_attr_cmd_req() (ignoriert Config, sendet sofort)
+    bool rejoin_just_happened = was_already_joined_in_rtc && !was_joined_in_stack_before && esp_zb_bdb_dev_joined();
     if (rejoin_just_happened) {
-        ESP_LOGI(TAG, "        → Rejoin erkannt → Stack sendet automatisch Attribute Reports (keine manuellen Reports nötig)");
+        ESP_LOGI(TAG, "        → Rejoin erkannt → Sende manuelle Reports (Stack sendet NICHT automatisch!)");
     } else if (was_already_joined_in_rtc && was_joined_in_stack_before) {
-        ESP_LOGI(TAG, "        → Device war bereits verbunden (kein Rejoin) → Sende manuelle Reports");
+        ESP_LOGI(TAG, "        → Device war bereits verbunden → Sende manuelle Reports");
     } else if (first_pairing_after_join) {
         ESP_LOGI(TAG, "        → Erstes Pairing erkannt → Sende manuelle Reports (für Interview)");
+    } else {
+        ESP_LOGI(TAG, "        → Normale Verbindung → Sende manuelle Reports");
     }
     
     // [3/4] Datenübertragung: Setze Metering Cluster Attribute
@@ -2144,14 +2158,11 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     }
     
     // [3.1/4] Sende Attribute Report für CurrentSummationDelivered an Coordinator
-    // WICHTIG: Nach Rejoin sendet der Stack automatisch Reports für REPORTABLE-Attribute
-    // Daher senden wir manuelle Reports nur, wenn KEIN Rejoin stattgefunden hat
-    if (!rejoin_just_happened) {
-        ESP_LOGI(TAG, "  [3.1/4] Sende Attribute Report (CurrentSummationDelivered)...");
-        send_attribute_report(ZIGBEE_CLUSTER_METERING, ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED);
-    } else {
-        ESP_LOGI(TAG, "  [3.1/4] Überspringe manuellen Report (Stack sendet automatisch nach Rejoin)");
-    }
+    // WICHTIG: esp_zb_zcl_report_attr_cmd_req() sendet one-shot Report, ignoriert Reporting Config
+    // Stack sendet NICHT automatisch nach Rejoin → IMMER manuell senden!
+    ESP_LOGI(TAG, "  [3.1/4] Sende Attribute Report (CurrentSummationDelivered)...");
+    send_attribute_report(ZIGBEE_CLUSTER_METERING, ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED);
+    vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));  // Kurze Pause zwischen Reports
     
     // Battery Percentage aktualisieren (Power Configuration Cluster)
     // WICHTIG: Battery Percentage ist 0-200 (0-100%), data->battery_percent ist float 0.0-100.0
@@ -2256,25 +2267,23 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     }
     
     // [3.2/4] Sende Attribute Report für Battery Percentage an Coordinator
-    // WICHTIG: Nach Rejoin sendet der Stack automatisch Reports für REPORTABLE-Attribute
-    // Daher senden wir manuelle Reports nur, wenn KEIN Rejoin stattgefunden hat
-    if (!rejoin_just_happened) {
-        ESP_LOGI(TAG, "  [3.2/4] Sende Attribute Report (Battery Percentage)...");
-        send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_PERCENT);
-        
-        // [3.3/4] Sende Attribute Report für Battery Voltage an Coordinator
-        if (data->battery_voltage > 0.0f) {
-            ESP_LOGI(TAG, "  [3.3/4] Sende Attribute Report (Battery Voltage)...");
-            send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_VOLTAGE);
-        }
-        
-        // [3.4/4] Sende Attribute Report für Battery Alarm State an Coordinator
-        if (data->battery_voltage > 0.0f) {
-            ESP_LOGI(TAG, "  [3.4/4] Sende Attribute Report (Battery Alarm State)...");
-            send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_ALARM_STATE);
-        }
-    } else {
-        ESP_LOGI(TAG, "  [3.2-3.4/4] Überspringe manuelle Battery Reports (Stack sendet automatisch nach Rejoin)");
+    // WICHTIG: esp_zb_zcl_report_attr_cmd_req() sendet one-shot Report, ignoriert Reporting Config
+    // Stack sendet NICHT automatisch nach Rejoin → IMMER manuell senden!
+    ESP_LOGI(TAG, "  [3.2/4] Sende Attribute Report (Battery Percentage)...");
+    send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_PERCENT);
+    vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));  // Kurze Pause zwischen Reports
+    
+    // [3.3/4] Sende Attribute Report für Battery Voltage an Coordinator
+    if (data->battery_voltage > 0.0f) {
+        ESP_LOGI(TAG, "  [3.3/4] Sende Attribute Report (Battery Voltage)...");
+        send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_VOLTAGE);
+        vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));  // Kurze Pause zwischen Reports
+    }
+    
+    // [3.4/4] Sende Attribute Report für Battery Alarm State an Coordinator
+    if (data->battery_voltage > 0.0f) {
+        ESP_LOGI(TAG, "  [3.4/4] Sende Attribute Report (Battery Alarm State)...");
+        send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_ALARM_STATE);
     }
     
     ESP_LOGI(TAG, "        → Daten erfolgreich gesendet");
@@ -2305,11 +2314,14 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
         ESP_LOGI(TAG, "  [3.6/4] Push Attribute Reports nach Interview (erstes Pairing)...");
         ESP_LOGI(TAG, "        → Coordinator kann Attribute auch pullen (Read Attribute Request), aber wir pushen aktiv");
         send_attribute_report(ZIGBEE_CLUSTER_METERING, ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED);
+        vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));
         send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_PERCENT);
+        vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));
         
         // Battery Voltage und Alarm State auch beim ersten Pairing senden (falls verfügbar)
         if (data && data->battery_voltage > 0.0f) {
             send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_VOLTAGE);
+            vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));
             send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_ALARM_STATE);
         }
         

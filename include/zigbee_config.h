@@ -62,18 +62,19 @@
 #define ZIGBEE_METERING_REPORT_CHANGE 0       // Report bei JEDER Änderung (zeitbasierte Übertragung, keine Mindeständerung)
 
 // Retry & Timeout Konfiguration
-#define ZIGBEE_JOIN_RETRY_COUNT       3       // Anzahl Join-Versuche
+// HINWEIS: Erhöhte Werte für bessere Stabilität bei schwachem Zigbee-Netz
+#define ZIGBEE_JOIN_RETRY_COUNT       5       // Anzahl Join-Versuche (erhöht von 3 auf 5 für schwaches Netz)
 #define ZIGBEE_JOIN_TIMEOUT_MS        30000   // 30 Sekunden pro Join-Versuch
 #define ZIGBEE_DATA_RETRY_COUNT       3       // Anzahl Daten-Übertragungs-Versuche
 #define ZIGBEE_DATA_TIMEOUT_MS        5000    // 5 Sekunden pro Paket
-#define ZIGBEE_NETWORK_DISCOVERY_MS   30000   // 30 Sekunden für Network Discovery
+#define ZIGBEE_NETWORK_DISCOVERY_MS   45000   // 45 Sekunden für Network Discovery (erhöht von 30s für schwaches Netz)
 #define ZIGBEE_PAIRING_TIMEOUT_MS     180000  // 3 Minuten (180 Sekunden) für Pairing-Timeout (Standard nach ZigBee-Spezifikation und Best Practice)
 #define ZIGBEE_CYCLE_TIMEOUT_MS       300000  // 5 Minuten (300 Sekunden) Gesamt-Timeout für gesamten ZigBee-Zyklus (Pairing + Rejoin + Datenübertragung)
 #define ZIGBEE_INIT_TIMEOUT_MS        5000    // 5 Sekunden Timeout für Stack-Initialisierung
 #define ZIGBEE_INIT_POLL_INTERVAL_MS  100     // Poll-Intervall für Stack-Initialisierung
 #define ZIGBEE_STEERING_POLL_INTERVAL_MS 500  // Poll-Intervall für Network Steering (500ms = weniger CPU-Last, aber immer noch responsiv)
-#define ZIGBEE_STEERING_RETRY_COUNT   3       // Anzahl Retry-Versuche bei Network Steering FAIL
-#define ZIGBEE_STEERING_RETRY_TIMER_MS 3000   // Wartezeit zwischen Retry-Versuchen (3 Sekunden = gibt Coordinator Zeit, Permit Join zu aktivieren)
+#define ZIGBEE_STEERING_RETRY_COUNT   5       // Anzahl Retry-Versuche bei Network Steering FAIL (erhöht von 3 auf 5 für schwaches Netz)
+#define ZIGBEE_STEERING_RETRY_TIMER_MS 5000   // Wartezeit zwischen Retry-Versuchen (erhöht von 3s auf 5s für mehr Zeit bei schwachem Netz)
 #define ZIGBEE_INTERVIEW_WAIT_MS      90000   // 90 Sekunden Wartezeit nach erstem Pairing für Interview (Zigbee2MQTT benötigt Zeit für Active Endpoints, Simple Descriptor, etc.)
 #define ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS  30000  // 30 Sekunden Wartezeit für automatischen Rejoin durch Stack (nach esp_zb_start() mit gespeicherten Netzwerk-Informationen)
 
@@ -149,6 +150,7 @@
 #define ZIGBEE_MAIN_TASK_PRIORITY     5              // Task Priority (0-25, höher = wichtiger)
 #define ZIGBEE_MAIN_TASK_DELAY_MS     100            // Delay zwischen Main Loop Iterationen (ms)
 #define ZIGBEE_DEINIT_DELAY_MS        500            // Delay beim Deinitialisieren (ms)
+#define ZIGBEE_MANUAL_REPORT_DELAY_MS 100            // Delay zwischen manuellen Attribute Reports (ms)
 
 // NVS Konfiguration
 #define ZIGBEE_NVS_NAMESPACE          "zigbee_config"
