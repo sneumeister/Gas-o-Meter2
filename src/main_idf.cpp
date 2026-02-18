@@ -2023,6 +2023,33 @@ const char* processor_get_value(const char* var) {
             return "Nicht synchronisiert";
         }
     }
+    if (strcmp(var, "time_sync_last") == 0) {
+        int64_t sec_since = time_sync_seconds_since_last();
+        if (sec_since < 0) {
+            snprintf(buffer, sizeof(buffer), "Nie synchronisiert");
+            return buffer;
+        }
+        struct tm timeinfo;
+        time_t last_epoch = (time_t)time_sync_last_epoch;
+        if (gmtime_r(&last_epoch, &timeinfo)) {
+            char time_buf[32];
+            snprintf(time_buf, sizeof(time_buf), "%04d-%02d-%02d %02d:%02d:%02d UTC",
+                     timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                     timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+            if (sec_since < 60) {
+                snprintf(buffer, sizeof(buffer), "%s (vor %lld s)", time_buf, (long long)sec_since);
+            } else if (sec_since < 3600) {
+                snprintf(buffer, sizeof(buffer), "%s (vor %lld Min)", time_buf, (long long)(sec_since / 60));
+            } else if (sec_since < 86400) {
+                snprintf(buffer, sizeof(buffer), "%s (vor %lld Std)", time_buf, (long long)(sec_since / 3600));
+            } else {
+                snprintf(buffer, sizeof(buffer), "%s (vor %lld Tagen)", time_buf, (long long)(sec_since / 86400));
+            }
+            return buffer;
+        }
+        snprintf(buffer, sizeof(buffer), "vor %lld s", (long long)sec_since);
+        return buffer;
+    }
     if (strcmp(var, "transfer_minutes") == 0) {
         snprintf(buffer, sizeof(buffer), "%d", config_rtc.transfer_minutes);
         return buffer;
