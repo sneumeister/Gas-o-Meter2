@@ -2,6 +2,7 @@
 #include "zigbee_config.h"
 #include "hardware.h"
 #include "version.h"
+#include "time_sync.h"
 #include <string.h>  // Für strlen(), memcpy()
 
 #ifndef ARDUINO
@@ -21,13 +22,15 @@
     #include "zcl/esp_zigbee_zcl_metering.h"  // Für Metering Cluster (ESP_ZB_ZCL_METERING_UNIT_M3_M3H_BINARY, etc.)
     #include "esp_zigbee_attribute.h"  // Für esp_zb_zcl_set_attribute_val()
     #include "zcl/esp_zigbee_zcl_command.h"  // Für esp_zb_zcl_report_attr_cmd_req()
+    #include "zcl/esp_zigbee_zcl_core.h"  // Für esp_zb_core_action_handler_register, ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID
     #include "zdo/esp_zigbee_zdo_common.h"  // Für ESP_ZB_ZDO_SIGNAL_PRODUCTION_CONFIG_READY
     #include "zdo/esp_zigbee_zdo_command.h"  // Für esp_zb_zdo_device_announcement_req()
     #include "esp_zigbee_secur.h"  // Für esp_zb_secur_network_min_join_lqi_set()
     #include "freertos/FreeRTOS.h"
     #include "freertos/task.h"
     #include "esp_partition.h"  // Für Factory-Reset (Partitionen löschen)
-    #include <ctime>  // Für time_t, struct tm, gmtime_r()
+    #include <ctime>   // Für time_t, struct tm, gmtime_r()
+    #include <cstdio>  // Für printf (Serial-Ausgabe)
     #if CONFIG_ESP_ZB_TRACE_ENABLE
         #include "esp_zigbee_trace.h"  // Für erweiterte ZigBee-Logging-Funktionen
     #endif
@@ -81,12 +84,6 @@ static uint8_t battery_voltage_zigbee = 40;  // 4.0V in Zigbee-Format (100mV Ein
 // Bit 0 = Low Voltage Alarm (wenn battery_voltage < BATTERY_VOLTAGE_30 = 3.57V)
 // Initialwert: 0 (kein Alarm)
 static uint32_t battery_alarm_state = 0;  // Bitmap: Bit 0 = Low Voltage Alarm
-
-// Persistente Variable für Power Source (wird vom Basic Cluster verwendet)
-// WICHTIG: Diese Variable muss persistent sein, da der Cluster einen Pointer darauf speichert
-// 0x03 = ESP_ZB_ZCL_BASIC_POWER_SOURCE_BATTERY (batteriebetrieben)
-// Zigbee2MQTT zeigt basierend auf diesem Wert das Batterie-Icon statt "?" an
-static uint8_t basic_power_source = ESP_ZB_ZCL_BASIC_POWER_SOURCE_BATTERY;  // 0x03 = Battery Powered
 
 // Persistente Variable für CurrentSummationDelivered (wird vom Metering Cluster verwendet)
 // WICHTIG: Diese Variable muss persistent sein, da der Cluster einen Pointer darauf speichert
@@ -561,11 +558,26 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
     }
 }
 
+// Forward-Deklaration für read_attr_resp_callback (wird von zigbee_core_action_callback aufgerufen)
+static void read_attr_resp_callback(esp_zb_zcl_cmd_read_attr_resp_message_t *message);
+
+/**
+ * @brief Zigbee Core Action Callback – leitet Read Attribute Response an read_attr_resp_callback weiter
+ */
+static esp_err_t zigbee_core_action_callback(esp_zb_core_action_callback_id_t callback_id, const void *message) {
+    if (callback_id == ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID && message) {
+        read_attr_resp_callback((esp_zb_zcl_cmd_read_attr_resp_message_t *)message);
+        return ESP_OK;
+    }
+    return ESP_ERR_INVALID_ARG;
+}
+
 /**
  * @brief Device-Callback für Read Attribute Response
  * 
  * Wird aufgerufen, wenn eine Read Attribute Response empfangen wird.
- * Verarbeitet die Zeit vom Coordinator (Time Cluster).
+ * Verarbeitet die Zeit vom Coordinator (Time Cluster) und gibt sie auf Serial aus.
+ * Später: lokale RTC-Synchronisation.
  * 
  * @param message Read Attribute Response Message
  */
@@ -573,51 +585,47 @@ static void read_attr_resp_callback(esp_zb_zcl_cmd_read_attr_resp_message_t *mes
     if (!message || !message->variables) {
         return;
     }
-    
-    // Prüfe, ob es eine Time Cluster Response ist
     if (message->info.cluster != ZIGBEE_CLUSTER_TIME) {
-        return;  // Nicht Time Cluster, ignorieren
+        return;
     }
-    
-    ESP_LOGI(TAG, "Read Attribute Response empfangen (Time Cluster)");
     
     // Durchlaufe alle Variablen in der Response
     esp_zb_zcl_read_attr_resp_variable_t *var = message->variables;
     while (var != NULL) {
-        // Prüfe, ob es das Time Attribut (0x0000) ist
-        // HINWEIS: esp_zb_zcl_attribute_t hat 'id' und 'data' (esp_zb_zcl_attribute_data_t)
-        //          esp_zb_zcl_attribute_data_t hat 'type', 'size' und 'value'
         if (var->attribute.id == ZIGBEE_ATTR_TIME_TIME) {
-            if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS) {
-                // Time Attribut: uint32_t (UTC Time, Sekunden seit 1. Januar 2000)
-                // HINWEIS: Der Typ ist in var->attribute.data.type, der Wert in var->attribute.data.value
-                if (var->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U32) {
-                    uint32_t utc_time = *(uint32_t *)var->attribute.data.value;
-                    
-                    // Konvertiere UTC Time (Sekunden seit 1. Januar 2000) zu Unix Timestamp (Sekunden seit 1. Januar 1970)
-                    // Offset: 946684800 Sekunden (30 Jahre = 2000-01-01 00:00:00 UTC)
-                    const uint32_t ZIGBEE_EPOCH_OFFSET = 946684800;
-                    time_t unix_time = (time_t)(utc_time + ZIGBEE_EPOCH_OFFSET);
-                    
-                    // Konvertiere zu struct tm für Ausgabe
-                    struct tm timeinfo;
-                    if (gmtime_r(&unix_time, &timeinfo)) {
-                        ESP_LOGI(TAG, "  → Coordinator-Zeit empfangen: %04d-%02d-%02d %02d:%02d:%02d UTC",
-                                 timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-                        ESP_LOGI(TAG, "  → UTC Time (Zigbee): %lu Sekunden seit 2000-01-01", (unsigned long)utc_time);
-                        ESP_LOGI(TAG, "  → Unix Timestamp: %lu", (unsigned long)unix_time);
-                    } else {
-                        ESP_LOGW(TAG, "  → Coordinator-Zeit empfangen, aber Konvertierung fehlgeschlagen (UTC Time: %lu)", 
-                                 (unsigned long)utc_time);
-                    }
+            if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS &&
+                (var->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U32 ||
+                 var->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_UTC_TIME)) {
+                uint32_t utc_time = *(uint32_t *)var->attribute.data.value;
+                const uint32_t ZIGBEE_EPOCH_OFFSET = 946684800;  // Sekunden 1970→2000
+                time_t zigbee_unix = (time_t)(utc_time + ZIGBEE_EPOCH_OFFSET);
+                struct tm timeinfo;
+                if (gmtime_r(&zigbee_unix, &timeinfo)) {
+                    // Aktuelle ESP32-Zeit (RTC) vor Korrektur
+                    time_t esp32_unix = time(NULL);
+                    int64_t delta_sec = (int64_t)zigbee_unix - (int64_t)esp32_unix;
+                    const char *delta_sign = (delta_sec >= 0) ? "+" : "";
+                    const char *delta_hint = (delta_sec > 0) ? " (ESP32 hinterher)"
+                                     : (delta_sec < 0) ? " (ESP32 voreilend)" : " (synchron)";
+                    ESP_LOGI(TAG, "========== AKTUELLE ZEIT (Coordinator) ==========");
+                    printf("  Datum/Zeit (UTC): %04d-%02d-%02d %02d:%02d:%02d\n",
+                           timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                           timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+                    ESP_LOGI(TAG, "  Delta ESP32 ↔ Zigbee: %s%lld s%s",
+                             delta_sign, (long long)delta_sec, delta_hint);
+                    ESP_LOGI(TAG, "  Zigbee UTC: %lu s | Unix: %lu", (unsigned long)utc_time, (unsigned long)zigbee_unix);
+                    // Harte Zeitkorrektur (settimeofday) – gemeinsame Sub-Routine für NTP/ZigBee/BLE
+                    time_sync_set_hard(zigbee_unix, "ZigBee");
+                    ESP_LOGI(TAG, "================================================");
                 } else {
-                    ESP_LOGW(TAG, "  → Time Attribut hat falschen Datentyp (erwartet: U32, erhalten: %d)", var->attribute.data.type);
+                    ESP_LOGW(TAG, "  Coordinator-Zeit: Konvertierung fehlgeschlagen (UTC: %lu)", (unsigned long)utc_time);
                 }
+            } else if (var->status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+                ESP_LOGW(TAG, "  Time Attribut-Status: %d", var->status);
             } else {
-                ESP_LOGW(TAG, "  → Time Attribut-Status: %d (nicht erfolgreich)", var->status);
+                ESP_LOGW(TAG, "  Time Attribut falscher Typ (erwartet U32, erhalten: %d)", var->attribute.data.type);
             }
-            break;  // Time Attribut gefunden, keine weiteren Variablen prüfen
+            break;
         }
         var = var->next;
     }
@@ -714,7 +722,12 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     }
     
     // Basic Cluster hinzufügen (für Firmware-Version, Manufacturer Name, Model ID)
-    esp_zb_attribute_list_t *basic_cluster = esp_zb_basic_cluster_create(NULL);
+    // Power Source per Config setzen (nicht add_attr – sonst "attribute 0x7 already existed")
+    esp_zb_basic_cluster_cfg_t basic_cfg = {
+        .zcl_version = ESP_ZB_ZCL_BASIC_ZCL_VERSION_DEFAULT_VALUE,
+        .power_source = ESP_ZB_ZCL_BASIC_POWER_SOURCE_BATTERY,
+    };
+    esp_zb_attribute_list_t *basic_cluster = esp_zb_basic_cluster_create(&basic_cfg);
     if (basic_cluster == NULL) {
         ESP_LOGE(TAG, "Fehler beim Erstellen des Basic Clusters");
         return NULL;
@@ -788,15 +801,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
                                    sw_build_id);
     ESP_LOGI(TAG, "  → Software Build ID hinzugefügt: %s (Länge: %d)", sw_build_id_str, sw_build_id_len);
     
-    // Power Source (Leistung) hinzufügen (Attribute ID: 0x0007)
-    // WICHTIG: powerSource ist ein enum (esp_zb_zcl_basic_power_source_e)
-    // Zigbee2MQTT zeigt basierend auf diesem Wert das Batterie-Icon an (statt "?")
-    // 0x03 = ESP_ZB_ZCL_BASIC_POWER_SOURCE_BATTERY (batteriebetrieben)
-    // WICHTIG: Verwende persistente Variable (basic_power_source), da Cluster einen Pointer speichert!
-    esp_zb_basic_cluster_add_attr(basic_cluster, 
-                                   ESP_ZB_ZCL_ATTR_BASIC_POWER_SOURCE_ID, 
-                                   &basic_power_source);  // Pointer auf persistente Variable
-    ESP_LOGI(TAG, "  → Power Source hinzugefügt: Battery Powered (0x%02X)", basic_power_source);
+    // Power Source (0x03 = Battery) wird über basic_cfg gesetzt (esp_zb_basic_cluster_create)
     
     esp_err_t err = esp_zb_cluster_list_add_basic_cluster(cluster_list, basic_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
     if (err != ESP_OK) {
@@ -1237,18 +1242,11 @@ bool transfer_zigbee_init(void) {
     ESP_LOGI(TAG, "        → Device Endpoint registriert");
     
     // [4/5] Signal Handler und Callbacks registrieren
-    // HINWEIS: esp_zb_app_signal_handler wird automatisch vom Stack aufgerufen,
-    // wenn er definiert ist. Keine explizite Registrierung nötig.
-    // esp_zb_core_action_handler_register() ist nur für Custom Cluster Commands.
     ESP_LOGI(TAG, "  [4/5] Signal Handler und Callbacks werden registriert...");
-    // Signal Handler wird automatisch verwendet (wenn Funktion definiert ist)
     ESP_LOGI(TAG, "        → Signal Handler registriert (automatisch)");
-    
-    // Read Attribute Response Callback
-    // HINWEIS: Der Callback read_attr_resp_callback() wird automatisch aufgerufen,
-    //          wenn eine Read Attribute Response empfangen wird (über Device Handler)
-    //          Keine explizite Registrierung nötig, da der Stack automatisch Responses verarbeitet
-    ESP_LOGI(TAG, "        → Read Attribute Response wird automatisch verarbeitet (read_attr_resp_callback)");
+    // Read Attribute Response: für Time Cluster (Zeit vom Coordinator)
+    esp_zb_core_action_handler_register(zigbee_core_action_callback);
+    ESP_LOGI(TAG, "        → Read-Attribute-Response Handler registriert (Time Cluster → Serial)");
     
     // Primary Network Channel setzen
     ESP_LOGI(TAG, "        → Setze Primary Network Channel...");
@@ -2095,6 +2093,23 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
         } else {
             ESP_LOGD(TAG, "        → Hinweis: esp_zb_zcl_set_attribute_val() vor Rejoin fehlgeschlagen (Status: %d), aber Variable wurde direkt aktualisiert", attr_status);
         }
+        // Battery-Cluster VOR Rejoin setzen, damit Z2M bei Read nach device_announce sofort echte Werte bekommt (nicht 40 = 4.0V)
+        uint8_t bp = (uint8_t)(data->battery_percent * 2.0f);
+        if (bp > 200) bp = 200;
+        battery_percentage_remaining = bp;
+        if (data->battery_voltage > 0.0f) {
+            uint8_t bv = (uint8_t)(data->battery_voltage * 10.0f + 0.5f);
+            if (bv > 255) bv = 255;
+            battery_voltage_zigbee = bv;
+            battery_alarm_state = (data->battery_voltage < BATTERY_VOLTAGE_30) ? (battery_alarm_state | 1) : (battery_alarm_state & 0xFFFFFFFE);
+            esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                ZIGBEE_ATTR_BATTERY_VOLTAGE, &battery_voltage_zigbee, false);
+            esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                ZIGBEE_ATTR_BATTERY_ALARM_STATE, &battery_alarm_state, false);
+        }
+        esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+            ZIGBEE_ATTR_BATTERY_PERCENT, &battery_percentage_remaining, false);
+        ESP_LOGI(TAG, "        → Battery-Cluster vor Rejoin gesetzt (%.1f%%, %.2fV) für Z2M-Read nach device_announce", data->battery_percent, data->battery_voltage);
     }
     
     // [2/4] Stelle sicher, dass Device mit Netzwerk verbunden ist (Pairing/Rejoin)
@@ -2113,18 +2128,75 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     ESP_LOGI(TAG, "        → Device ist mit ZigBee-Netzwerk verbunden");
     
     // Logging: Art der Verbindung (für Diagnose)
-    // WICHTIG: Stack sendet NICHT automatisch Reports nach Rejoin (GitHub Issues #9, #67, #102)
-    // Timer werden nach Rejoin zurückgesetzt → Erster Report erst nach MinInterval (bis zu 1 Stunde!)
-    // Daher: IMMER manuell senden mit esp_zb_zcl_report_attr_cmd_req() (ignoriert Config, sendet sofort)
+    // Wir senden IMMER manuell mit esp_zb_zcl_report_attr_cmd_req() (one-shot, SDK: "ignoring the reporting configuration").
+    // Grund: Sofortige, deterministische Übertragung nach Verbindung. Wir rufen diesen Code nur auf, wenn bereits
+    // verbunden (nach Rejoin/Join) – kein "Report vor Verbindung". Bei späteren Wake-ups (nicht factory-new)
+    // wäre automatisches Reporting theoretisch möglich, wir verlassen uns darauf aber nicht und pushen explizit.
+    //
+    // Automatisches Reporting pro Attribut wird in [2.5/4] mit esp_zb_zcl_stop_attr_reporting() deaktiviert,
+    // damit nur unsere One-Shot-Reports gesendet werden und Doppel-Reports entfallen.
     bool rejoin_just_happened = was_already_joined_in_rtc && !was_joined_in_stack_before && esp_zb_bdb_dev_joined();
     if (rejoin_just_happened) {
-        ESP_LOGI(TAG, "        → Rejoin erkannt → Sende manuelle Reports (Stack sendet NICHT automatisch!)");
+        ESP_LOGI(TAG, "        → Rejoin erkannt → Sende manuelle Reports");
     } else if (was_already_joined_in_rtc && was_joined_in_stack_before) {
         ESP_LOGI(TAG, "        → Device war bereits verbunden → Sende manuelle Reports");
     } else if (first_pairing_after_join) {
         ESP_LOGI(TAG, "        → Erstes Pairing erkannt → Sende manuelle Reports (für Interview)");
     } else {
         ESP_LOGI(TAG, "        → Normale Verbindung → Sende manuelle Reports");
+    }
+    
+    // [2.5/4] Auto-Reporting für unsere Report-Attribute deaktivieren (nur One-Shot-Reports nutzen)
+    {
+        const uint16_t manuf_code = 0xFFFF;  // Nicht herstellerspezifisch (Standard-ZCL)
+        esp_zb_zcl_attr_location_info_t loc = {
+            .endpoint_id = ZIGBEE_ENDPOINT_ID,
+            .cluster_id = 0,
+            .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+            .manuf_code = manuf_code,
+            .attr_id = 0,
+        };
+        esp_zb_lock_acquire(portMAX_DELAY);
+        loc.cluster_id = ZIGBEE_CLUSTER_METERING;
+        loc.attr_id = ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED;
+        esp_zb_zcl_stop_attr_reporting(loc);
+        loc.cluster_id = ZIGBEE_CLUSTER_BATTERY;
+        loc.attr_id = ZIGBEE_ATTR_BATTERY_PERCENT;
+        esp_zb_zcl_stop_attr_reporting(loc);
+        loc.attr_id = ZIGBEE_ATTR_BATTERY_VOLTAGE;
+        esp_zb_zcl_stop_attr_reporting(loc);
+        loc.attr_id = ZIGBEE_ATTR_BATTERY_ALARM_STATE;
+        esp_zb_zcl_stop_attr_reporting(loc);
+        esp_zb_lock_release();
+        ESP_LOGI(TAG, "  [2.5/4] Auto-Reporting für Metering/Battery-Attribute deaktiviert");
+    }
+    
+    // [2.6/4] Battery-Cluster-Werte sofort setzen (bevor wir Reports senden)
+    // Zigbee2MQTT kann nach device_announce Read Attribute senden – dann liefert der Stack bereits
+    // die echten Werte (z. B. 4.22V) statt des Initialwerts 40 (4.0V) und vermeidet 4000 vs 4200 mV in HA.
+    {
+        uint8_t battery_percent_zigbee = (uint8_t)(data->battery_percent * 2.0f);
+        if (battery_percent_zigbee > 200) battery_percent_zigbee = 200;
+        battery_percentage_remaining = battery_percent_zigbee;
+        
+        if (data->battery_voltage > 0.0f) {
+            uint8_t battery_voltage_zigbee_new = (uint8_t)(data->battery_voltage * 10.0f + 0.5f);
+            if (battery_voltage_zigbee_new > 255) battery_voltage_zigbee_new = 255;
+            battery_voltage_zigbee = battery_voltage_zigbee_new;
+            battery_alarm_state = (data->battery_voltage < BATTERY_VOLTAGE_30)
+                ? (battery_alarm_state | 0x00000001)
+                : (battery_alarm_state & 0xFFFFFFFE);
+        }
+        
+        esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+            ZIGBEE_ATTR_BATTERY_PERCENT, &battery_percentage_remaining, false);
+        if (data->battery_voltage > 0.0f) {
+            esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                ZIGBEE_ATTR_BATTERY_VOLTAGE, &battery_voltage_zigbee, false);
+            esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                ZIGBEE_ATTR_BATTERY_ALARM_STATE, &battery_alarm_state, false);
+        }
+        ESP_LOGI(TAG, "  [2.6/4] Battery-Cluster für Z2M-Read gesetzt (%.1f%%, %.2fV)", data->battery_percent, data->battery_voltage);
     }
     
     // [3/4] Datenübertragung: Setze Metering Cluster Attribute
@@ -2158,117 +2230,15 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     }
     
     // [3.1/4] Sende Attribute Report für CurrentSummationDelivered an Coordinator
-    // WICHTIG: esp_zb_zcl_report_attr_cmd_req() sendet one-shot Report, ignoriert Reporting Config
-    // Stack sendet NICHT automatisch nach Rejoin → IMMER manuell senden!
+    // esp_zb_zcl_report_attr_cmd_req() = one-shot, ignoriert Reporting-Config (SDK ZCL Command API).
     ESP_LOGI(TAG, "  [3.1/4] Sende Attribute Report (CurrentSummationDelivered)...");
     send_attribute_report(ZIGBEE_CLUSTER_METERING, ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED);
     vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));  // Kurze Pause zwischen Reports
     
-    // Battery Percentage aktualisieren (Power Configuration Cluster)
-    // WICHTIG: Battery Percentage ist 0-200 (0-100%), data->battery_percent ist float 0.0-100.0
-    // LÖSUNG: Direkt die persistente Variable aktualisieren, die beim Cluster-Erstellen übergeben wurde
-    // Dies funktioniert, da der Cluster einen Pointer auf diese Variable speichert
-    uint8_t battery_percent_zigbee = (uint8_t)(data->battery_percent * 2.0f);  // 0.0-100.0 → 0-200
-    if (battery_percent_zigbee > 200) {
-        battery_percent_zigbee = 200;  // Clamp auf Maximum
-    }
-    
-    // Direkt die persistente Variable aktualisieren (der Cluster verwendet einen Pointer darauf)
-    battery_percentage_remaining = battery_percent_zigbee;
-    ESP_LOGI(TAG, "        → Battery Percentage aktualisiert: %u (%.1f%%)", battery_percentage_remaining, data->battery_percent);
-    
-    // Optional: Versuche auch esp_zb_zcl_set_attribute_val() (kann fehlschlagen, wenn Attribut read-only ist)
-    // Aber die direkte Variable-Aktualisierung sollte ausreichen
-    attr_status = esp_zb_zcl_set_attribute_val(
-        ZIGBEE_ENDPOINT_ID,
-        ZIGBEE_CLUSTER_BATTERY,
-        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-        ZIGBEE_ATTR_BATTERY_PERCENT,
-        &battery_percentage_remaining,
-        false
-    );
-    
-    if (attr_status != ESP_ZB_ZCL_STATUS_SUCCESS) {
-        // Warnung nur loggen, aber nicht als Fehler behandeln, da direkte Variable-Aktualisierung funktioniert
-        ESP_LOGD(TAG, "        → Hinweis: esp_zb_zcl_set_attribute_val() fehlgeschlagen (Status: %d), aber Variable wurde direkt aktualisiert", attr_status);
-    } else {
-        ESP_LOGD(TAG, "        → Battery Percentage auch via esp_zb_zcl_set_attribute_val() gesetzt");
-    }
-    
-    // Battery Voltage aktualisieren (Power Configuration Cluster)
-    // WICHTIG: Battery Voltage ist uint8 in 100mV Einheiten (z.B. 35 = 3.5V, 40 = 4.0V)
-    //          Format: (uint8_t)(battery_voltage * 10.0f + 0.5f) - mit Rundung statt Truncation
-    //          Maximalwert: 255 (25.5V, aber unsere Akkus sind < 4.5V, also sicher)
-    if (data->battery_voltage > 0.0f) {
-        uint8_t battery_voltage_zigbee_new = (uint8_t)(data->battery_voltage * 10.0f + 0.5f);  // Rundung statt Truncation
-        if (battery_voltage_zigbee_new > 255) {
-            battery_voltage_zigbee_new = 255;  // Clamp auf Maximum (25.5V)
-        }
-        
-        // Direkt die persistente Variable aktualisieren (der Cluster verwendet einen Pointer darauf)
-        battery_voltage_zigbee = battery_voltage_zigbee_new;
-        ESP_LOGI(TAG, "        → Battery Voltage aktualisiert: %u (%.2fV)", 
-                 battery_voltage_zigbee, data->battery_voltage);
-        
-        // Optional: Versuche auch esp_zb_zcl_set_attribute_val()
-        attr_status = esp_zb_zcl_set_attribute_val(
-            ZIGBEE_ENDPOINT_ID,
-            ZIGBEE_CLUSTER_BATTERY,
-            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-            ZIGBEE_ATTR_BATTERY_VOLTAGE,
-            &battery_voltage_zigbee,
-            false
-        );
-        
-        if (attr_status != ESP_ZB_ZCL_STATUS_SUCCESS) {
-            ESP_LOGD(TAG, "        → Hinweis: esp_zb_zcl_set_attribute_val() für Battery Voltage fehlgeschlagen (Status: %d), aber Variable wurde direkt aktualisiert", attr_status);
-        } else {
-            ESP_LOGD(TAG, "        → Battery Voltage auch via esp_zb_zcl_set_attribute_val() gesetzt");
-        }
-    } else {
-        ESP_LOGW(TAG, "        → Warnung: battery_voltage ist 0.0V oder nicht gesetzt, überspringe Aktualisierung");
-    }
-    
-    // Battery Alarm State aktualisieren (Power Configuration Cluster)
-    // WICHTIG: Battery Alarm State ist map32 (32-bit Bitmap)
-    //          Bit 0 = Low Voltage Alarm (wenn battery_voltage < BATTERY_VOLTAGE_30 = 3.57V)
-    //          Wir setzen Bit 0, wenn battery_voltage < 3.57V (Schwelle für Ring-Speicher-Schreibung)
-    if (data->battery_voltage > 0.0f) {
-        // Prüfe, ob battery_voltage < BATTERY_VOLTAGE_30 (3.57V = 30% Schwelle)
-        if (data->battery_voltage < BATTERY_VOLTAGE_30) {
-            // Setze Bit 0 (Low Voltage Alarm)
-            battery_alarm_state = battery_alarm_state | 0x00000001;  // Bit 0 setzen
-            ESP_LOGI(TAG, "        → Battery Alarm State: Low Voltage Alarm AKTIV (Spannung: %.2fV < %.2fV)", 
-                     data->battery_voltage, BATTERY_VOLTAGE_30);
-        } else {
-            // Lösche Bit 0 (Low Voltage Alarm)
-            battery_alarm_state = battery_alarm_state & 0xFFFFFFFE;  // Bit 0 löschen
-            ESP_LOGI(TAG, "        → Battery Alarm State: Low Voltage Alarm INAKTIV (Spannung: %.2fV >= %.2fV)", 
-                     data->battery_voltage, BATTERY_VOLTAGE_30);
-        }
-        
-        ESP_LOGI(TAG, "        → Battery Alarm State aktualisiert: 0x%08lX", (unsigned long)battery_alarm_state);
-        
-        // Optional: Versuche auch esp_zb_zcl_set_attribute_val()
-        attr_status = esp_zb_zcl_set_attribute_val(
-            ZIGBEE_ENDPOINT_ID,
-            ZIGBEE_CLUSTER_BATTERY,
-            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-            ZIGBEE_ATTR_BATTERY_ALARM_STATE,
-            &battery_alarm_state,
-            false
-        );
-        
-        if (attr_status != ESP_ZB_ZCL_STATUS_SUCCESS) {
-            ESP_LOGD(TAG, "        → Hinweis: esp_zb_zcl_set_attribute_val() für Battery Alarm State fehlgeschlagen (Status: %d), aber Variable wurde direkt aktualisiert", attr_status);
-        } else {
-            ESP_LOGD(TAG, "        → Battery Alarm State auch via esp_zb_zcl_set_attribute_val() gesetzt");
-        }
-    }
+    // Battery-Werte wurden bereits in [2.6/4] im Cluster gesetzt (für Z2M-Read und Reports)
     
     // [3.2/4] Sende Attribute Report für Battery Percentage an Coordinator
-    // WICHTIG: esp_zb_zcl_report_attr_cmd_req() sendet one-shot Report, ignoriert Reporting Config
-    // Stack sendet NICHT automatisch nach Rejoin → IMMER manuell senden!
+    // esp_zb_zcl_report_attr_cmd_req() = one-shot, ignoriert Reporting-Config (SDK ZCL Command API).
     ESP_LOGI(TAG, "  [3.2/4] Sende Attribute Report (Battery Percentage)...");
     send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_PERCENT);
     vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));  // Kurze Pause zwischen Reports
@@ -2284,6 +2254,29 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     if (data->battery_voltage > 0.0f) {
         ESP_LOGI(TAG, "  [3.4/4] Sende Attribute Report (Battery Alarm State)...");
         send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_ALARM_STATE);
+    }
+    
+    // [3.45/4] Auto-Reporting erneut deaktivieren (Zigbee2MQTT kann nach device_announce Configure Reporting senden)
+    {
+        const uint16_t manuf_code = 0xFFFF;
+        esp_zb_zcl_attr_location_info_t loc = {
+            .endpoint_id = ZIGBEE_ENDPOINT_ID,
+            .cluster_id = ZIGBEE_CLUSTER_METERING,
+            .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+            .manuf_code = manuf_code,
+            .attr_id = ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED,
+        };
+        esp_zb_lock_acquire(portMAX_DELAY);
+        esp_zb_zcl_stop_attr_reporting(loc);
+        loc.cluster_id = ZIGBEE_CLUSTER_BATTERY;
+        loc.attr_id = ZIGBEE_ATTR_BATTERY_PERCENT;
+        esp_zb_zcl_stop_attr_reporting(loc);
+        loc.attr_id = ZIGBEE_ATTR_BATTERY_VOLTAGE;
+        esp_zb_zcl_stop_attr_reporting(loc);
+        loc.attr_id = ZIGBEE_ATTR_BATTERY_ALARM_STATE;
+        esp_zb_zcl_stop_attr_reporting(loc);
+        esp_zb_lock_release();
+        ESP_LOGI(TAG, "  [3.45/4] Auto-Reporting nach Reports erneut deaktiviert");
     }
     
     ESP_LOGI(TAG, "        → Daten erfolgreich gesendet");
@@ -2332,9 +2325,8 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     // [4/4] Zeit-Synchronisation mit Coordinator
     ESP_LOGI(TAG, "  [4/4] Synchronisiere Zeit mit Coordinator...");
     if (transfer_zigbee_sync_time()) {
-        ESP_LOGI(TAG, "        → Zeit-Synchronisation Request gesendet (warte auf Response)");
-        // HINWEIS: Response wird im read_attr_resp_callback() verarbeitet
-        //          Wir warten nicht aktiv, da der Callback asynchron aufgerufen wird
+        ESP_LOGI(TAG, "        → Zeit-Synchronisation Request gesendet (warte %d s auf Response)", ZIGBEE_TIME_SYNC_WAIT_MS / 1000);
+        vTaskDelay(pdMS_TO_TICKS(ZIGBEE_TIME_SYNC_WAIT_MS));
     } else {
         ESP_LOGW(TAG, "        → Zeit-Synchronisation fehlgeschlagen (nicht kritisch)");
     }

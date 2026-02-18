@@ -13,6 +13,7 @@ idf_component_register(
     SRCS "main_idf.cpp"
           "transfer.cpp"
           "transfer_zigbee.cpp"
+          "time_sync.cpp"
     INCLUDE_DIRS "${INCLUDE_DIR}"
     REQUIRES 
         mdns                    # Externe Komponente via Component Manager (idf_component.yml)

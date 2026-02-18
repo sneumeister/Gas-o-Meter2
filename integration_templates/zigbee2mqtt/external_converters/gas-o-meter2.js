@@ -3,9 +3,8 @@
 // Externe Konverter-Datei für Zigbee2MQTT zur Integration eines Custom ESP32C6 Gaszählers
 // 
 // Getestet mit:
-// - Zigbee2MQTT Version: 2.7.2
-// - zigbee-herdsman Version: 8.0.1
-// - zigbee-herdsman-converters: ~25.x (automatisch mit Z2M 2.7.2 installiert)
+// - Zigbee2MQTT Version: 2.8.0 (bzw. 2.8.0-1)
+// - zigbee-herdsman / zigbee-herdsman-converters: mit Z2M 2.8.x installiert
 //
 // Beschreibung:
 // Dieser Konverter verarbeitet Daten vom Simple Metering Cluster (0x0702) für Gaszählung
@@ -119,60 +118,13 @@ const definition = {
     ],
     
     // Configure-Funktion: Wird nach dem Pairing/Join ausgeführt
-    // Konfiguriert das Reporting-Verhalten des Geräts
+    // Nur Bind – kein configureReporting. Das Device sendet ausschließlich manuelle
+    // Attribute Reports (esp_zb_zcl_report_attr_cmd_req); automatisches Reporting wird
+    // in der Firmware mit esp_zb_zcl_stop_attr_reporting deaktiviert. So vermeiden wir
+    // Doppel-Reports und wechselnde Spannungswerte (z. B. 4.0 V vs 4.2 V) in Z2M/HA.
     configure: async (device, coordinatorEndpoint) => {
-        // Endpoint 1 ist der Haupt-Endpoint des ESP32C6
         const endpoint = device.getEndpoint(1);
-        
-        // Bind: Verbindet die Cluster mit dem Coordinator für Reporting
         await reporting.bind(endpoint, coordinatorEndpoint, ['seMetering', 'genPowerCfg']);
-        
-        // --- Gas Metering Reporting konfigurieren ---
-        // Konfiguriert nur currentSummDelivered (0x0000), nicht instantaneousDemand
-        // um UNSUPPORTED_ATTRIBUTE Fehler zu vermeiden
-        // WICHTIG: minimumReportInterval=0 bedeutet: kein Minimum (Device sendet manuell mit
-        //          esp_zb_zcl_report_attr_cmd_req(), das ignoriert diese Config sowieso)
-        // maximumReportInterval dient als Fallback für automatisches Reporting
-        try {
-            await endpoint.configureReporting('seMetering', [{
-                attribute: 'currentSummDelivered',
-                minimumReportInterval: 0,       // Kein Minimum (Device sendet manuell, ignoriert Config)
-                maximumReportInterval: 65000,   // Max. ~18 Stunden ohne Report (Fallback)
-                reportableChange: 1,            // Melden bei Änderung von 1 raw unit (0.01 m³)
-            }]);
-        } catch (error) {
-            // Fehler werden ignoriert - manche Geräte unterstützen kein Reporting
-        }
-        
-        // --- Battery Reporting konfigurieren ---
-        // Explizite Konfiguration für alle Battery-Attribute (inkl. batteryAlarmState für battery_low)
-        // WICHTIG: Device sendet manuell mit esp_zb_zcl_report_attr_cmd_req() (ignoriert diese Config)
-        //          Diese Config dient als Fallback, falls manuelles Senden fehlschlägt
-        // Kürzere Intervalle als Standard (1h statt 6h max), da battery_low kritisch ist
-        try {
-            await endpoint.configureReporting('genPowerCfg', [
-                {
-                    attribute: 'batteryPercentageRemaining',
-                    minimumReportInterval: 0,       // Kein Minimum (Device sendet manuell)
-                    maximumReportInterval: 3600,    // Max. 1 Stunde ohne Report (Fallback)
-                    reportableChange: 2,            // Melden bei 1% Änderung (ZCL: 0-200 = 0-100%)
-                },
-                {
-                    attribute: 'batteryVoltage',
-                    minimumReportInterval: 0,       // Kein Minimum (Device sendet manuell)
-                    maximumReportInterval: 3600,    // Max. 1 Stunde ohne Report (Fallback)
-                    reportableChange: 1,            // Melden bei 100mV Änderung (ZCL: uint8 in 100mV)
-                },
-                {
-                    attribute: 'batteryAlarmState',
-                    minimumReportInterval: 0,       // Kein Minimum (Device sendet manuell)
-                    maximumReportInterval: 3600,    // Max. 1 Stunde ohne Report (Fallback, kritisch!)
-                    reportableChange: 1,            // Melden bei JEDER Änderung (Bit 0 = Low Voltage Alarm)
-                },
-            ]);
-        } catch (error) {
-            // Fehler werden ignoriert - manche Geräte unterstützen nicht alle Attribute
-        }
     },
     
     meta: {

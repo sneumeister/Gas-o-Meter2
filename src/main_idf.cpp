@@ -28,6 +28,7 @@
 #include "transfer.h"
 #include "transfer_zigbee.h"
 #include "zigbee_config.h"
+#include "time_sync.h"
 
 // ArduinoJson (ESP-IDF-kompatibel)
 #include <ArduinoJson.h>
@@ -136,7 +137,6 @@ RTC_DATA_ATTR config_rtc_t config_rtc = {
 };
 RTC_DATA_ATTR int wakeupCount = 0;  // Zählt nur Deep-Sleep-Wake-ups (nicht ESP.restart())
 RTC_DATA_ATTR bool isPowerOn = false;
-RTC_DATA_ATTR uint8_t ntp_sync_marker = 0;  // NTP-Sync-Status: 0=kein Sync, 1=letzter erfolgreich, 2+=fehlgeschlagene Versuche
 RTC_DATA_ATTR uint32_t ring_idx = RING_BUFFER_SIZE;  // Ring-Buffer-Index (im RTC-RAM, wird bei Power-On/ESP.restart() neu ermittelt)
 
 // ============================================
@@ -1878,13 +1878,6 @@ static void time_sync_notification_cb(struct timeval *tv) {
 bool sync_ntp_time() {
     if (!wifi_connected) {
         ESP_LOGE(TAG, "NTP-Sync: WiFi nicht verbunden");
-        // Fehlgeschlagen: Marker erhöhen (wenn > 0) oder bei 0 bleiben
-        if (ntp_sync_marker > 0) {
-            ntp_sync_marker++;
-            if (ntp_sync_marker > 255) {
-                ntp_sync_marker = 0;  // Nach 255 fehlgeschlagenen Versuchen auf 0 zurücksetzen
-            }
-        }
         return false;
     }
     
@@ -1897,9 +1890,6 @@ bool sync_ntp_time() {
     // NTP-Konfiguration (ESP-IDF SNTP)
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_setservername(0, config_rtc.ntp_server);
-    // Hinweis: sntp_set_time_sync_notification_cb() existiert nicht in ESP-IDF 5.x
-    // Die Callback-Registrierung erfolgt über sntp_set_time_sync_notification_cb() in älteren Versionen,
-    // aber in ESP-IDF 5.x wird die Zeit-Synchronisation über SNTP-Events gehandhabt
     sntp_init();
     
     // Warte auf Zeit-Synchronisation
@@ -1920,23 +1910,17 @@ bool sync_ntp_time() {
     }
     
     if (synced) {
-        // Sync erfolgreich: Marker auf 1 setzen
-        ntp_sync_marker = 1;
+        time_sync_set_hard(now, "NTP");
         ESP_LOGI(TAG, "NTP-Sync erfolgreich (UTC): %04d-%02d-%02d %02d:%02d:%02d UTC",
                  timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
                  timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-        ESP_LOGI(TAG, "NTP-Sync-Marker: %d (1=erfolgreich, 2+=%d fehlgeschlagene Versuche)",
-                 ntp_sync_marker, ntp_sync_marker > 1 ? ntp_sync_marker - 1 : 0);
+        int64_t sec_since = time_sync_seconds_since_last();
+        if (sec_since >= 0) {
+            ESP_LOGI(TAG, "  Letzte Sync: vor %lld Sekunden", (long long)sec_since);
+        }
         return true;
     } else {
-        // Sync fehlgeschlagen: Marker erhöhen (wenn > 0) oder bei 0 bleiben
-        if (ntp_sync_marker > 0) {
-            ntp_sync_marker++;
-            if (ntp_sync_marker > 255) {
-                ntp_sync_marker = 0;  // Nach 255 fehlgeschlagenen Versuchen auf 0 zurücksetzen
-            }
-        }
-        ESP_LOGE(TAG, "NTP-Sync fehlgeschlagen (Timeout), Marker: %d", ntp_sync_marker);
+        ESP_LOGE(TAG, "NTP-Sync fehlgeschlagen (Timeout)");
         return false;
     }
 }
