@@ -21,7 +21,7 @@
     #include "zcl/esp_zigbee_zcl_power_config.h"  // Für Power Config Cluster (esp_zb_power_config_cluster_cfg_t, esp_zb_power_config_cluster_add_attr, etc.)
     #include "zcl/esp_zigbee_zcl_metering.h"  // Für Metering Cluster (ESP_ZB_ZCL_METERING_UNIT_M3_M3H_BINARY, etc.)
     #include "esp_zigbee_attribute.h"  // Für esp_zb_zcl_set_attribute_val()
-    #include "zcl/esp_zigbee_zcl_command.h"  // Für esp_zb_zcl_report_attr_cmd_req()
+    #include "zcl/esp_zigbee_zcl_command.h"  // Für esp_zb_zcl_read_attr_cmd_req() (Time Cluster)
     #include "zcl/esp_zigbee_zcl_core.h"  // Für esp_zb_core_action_handler_register, ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID
     #include "zdo/esp_zigbee_zdo_common.h"  // Für ESP_ZB_ZDO_SIGNAL_PRODUCTION_CONFIG_READY
     #include "zdo/esp_zigbee_zdo_command.h"  // Für esp_zb_zdo_device_announcement_req()
@@ -193,11 +193,6 @@ bool zigbee_config_save_to_nvs(void) {
     nvs_handle_t nvs_handle;
     esp_err_t err;
     
-    // HINZUFÜGEN: Prüfe, was gespeichert wird
-    ESP_LOGI(TAG, "zigbee_config_save_to_nvs: Speichere Config: joined=%s, network_addr=0x%04X, pan_id=0x%04X, channel=%d, extended_addr=0x%016llX",
-             zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id, zigbee_rtc.channel,
-             (unsigned long long)zigbee_rtc.extended_addr);
-    
     err = nvs_open(ZIGBEE_NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
     if (err != ESP_OK) {
         // Namespace existiert nicht → erstellen
@@ -211,7 +206,21 @@ bool zigbee_config_save_to_nvs(void) {
         ESP_LOGI(TAG, "zigbee_config_save_to_nvs: NVS-Namespace '%s' erfolgreich erstellt", ZIGBEE_NVS_NAMESPACE);
     }
     
+    // Wear-Leveling: Prüfe ob sich Daten geändert haben – nur schreiben wenn nötig
+    zigbee_rtc_t stored;
+    size_t stored_size = sizeof(zigbee_rtc_t);
+    err = nvs_get_blob(nvs_handle, ZIGBEE_NVS_KEY_CONFIG, &stored, &stored_size);
+    if (err == ESP_OK && stored_size == sizeof(zigbee_rtc_t) &&
+        memcmp(&stored, &zigbee_rtc, sizeof(zigbee_rtc_t)) == 0) {
+        nvs_close(nvs_handle);
+        ESP_LOGI(TAG, "zigbee_config_save_to_nvs: Config unverändert → kein NVS-Schreibvorgang (Wear-Leveling)");
+        return true;
+    }
+    
     // Speichere gesamte Config-Struktur als Blob
+    ESP_LOGI(TAG, "zigbee_config_save_to_nvs: Speichere Config: joined=%s, network_addr=0x%04X, pan_id=0x%04X, channel=%d, extended_addr=0x%016llX",
+             zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id, zigbee_rtc.channel,
+             (unsigned long long)zigbee_rtc.extended_addr);
     err = nvs_set_blob(nvs_handle, ZIGBEE_NVS_KEY_CONFIG, &zigbee_rtc, sizeof(zigbee_rtc_t));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "zigbee_config_save_to_nvs: Fehler beim Speichern (nvs_set_blob): %s (Size: %zu Bytes)", 
@@ -1996,46 +2005,6 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
     return TRANSFER_STATUS_OK;
 }
 
-/**
- * @brief Sendet einen Attribute Report an den Coordinator
- * 
- * @param cluster_id Cluster ID (z.B. ZIGBEE_CLUSTER_METERING oder ZIGBEE_CLUSTER_BATTERY)
- * @param attribute_id Attribute ID (z.B. ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED)
- * @return true bei Erfolg, false bei Fehler
- */
-static bool send_attribute_report(uint16_t cluster_id, uint16_t attribute_id) {
-    // Coordinator Adresse: Normalerweise 0x0000, aber verwende zigbee_rtc.coord_addr falls gesetzt
-    uint16_t coordinator_addr = (zigbee_rtc.coord_addr != ZIGBEE_DEFAULT_COORD_ADDR) 
-                                ? zigbee_rtc.coord_addr 
-                                : 0x0000;  // Standard Coordinator Adresse
-    
-    esp_zb_zcl_report_attr_cmd_t report_cmd = {0};
-    
-    // Basis-ZCL-Command-Konfiguration
-    report_cmd.zcl_basic_cmd.dst_addr_u.addr_short = coordinator_addr;
-    report_cmd.zcl_basic_cmd.src_endpoint = ZIGBEE_ENDPOINT_ID;
-    report_cmd.zcl_basic_cmd.dst_endpoint = 1;  // Coordinator Endpoint (Standard: 1)
-    report_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;  // 16-bit Adresse + Endpoint
-    report_cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;  // Server → Client (Device → Coordinator)
-    report_cmd.clusterID = cluster_id;
-    report_cmd.attributeID = attribute_id;
-    
-    // Thread-Safety: Zigbee Stack Lock
-    esp_zb_lock_acquire(portMAX_DELAY);
-    esp_err_t err = esp_zb_zcl_report_attr_cmd_req(&report_cmd);
-    esp_zb_lock_release();
-    
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "        → Attribute Report fehlgeschlagen (Cluster: 0x%04X, Attr: 0x%04X, Error: %s)", 
-                 cluster_id, attribute_id, esp_err_to_name(err));
-        return false;
-    }
-    
-    ESP_LOGI(TAG, "        → Attribute Report gesendet (Cluster: 0x%04X, Attr: 0x%04X, Coordinator: 0x%04X)", 
-             cluster_id, attribute_id, coordinator_addr);
-    return true;
-}
-
 transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     if (data == nullptr) {
         ESP_LOGE(TAG, "transfer_zigbee_send_data: data ist NULL");
@@ -2128,52 +2097,22 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     ESP_LOGI(TAG, "        → Device ist mit ZigBee-Netzwerk verbunden");
     
     // Logging: Art der Verbindung (für Diagnose)
-    // Wir senden IMMER manuell mit esp_zb_zcl_report_attr_cmd_req() (one-shot, SDK: "ignoring the reporting configuration").
-    // Grund: Sofortige, deterministische Übertragung nach Verbindung. Wir rufen diesen Code nur auf, wenn bereits
-    // verbunden (nach Rejoin/Join) – kein "Report vor Verbindung". Bei späteren Wake-ups (nicht factory-new)
-    // wäre automatisches Reporting theoretisch möglich, wir verlassen uns darauf aber nicht und pushen explizit.
-    //
-    // Automatisches Reporting pro Attribut wird in [2.5/4] mit esp_zb_zcl_stop_attr_reporting() deaktiviert,
-    // damit nur unsere One-Shot-Reports gesendet werden und Doppel-Reports entfallen.
+    // Automatisches Reporting: Zigbee2MQTT konfiguriert Reporting in configure(). Der Stack sendet
+    // Reports bei Attributänderung automatisch. Wir setzen nur noch die Werte (esp_zb_zcl_set_attribute_val).
     bool rejoin_just_happened = was_already_joined_in_rtc && !was_joined_in_stack_before && esp_zb_bdb_dev_joined();
     if (rejoin_just_happened) {
-        ESP_LOGI(TAG, "        → Rejoin erkannt → Sende manuelle Reports");
+        ESP_LOGI(TAG, "        → Rejoin erkannt → Stack sendet Reports automatisch bei Wertänderung");
     } else if (was_already_joined_in_rtc && was_joined_in_stack_before) {
-        ESP_LOGI(TAG, "        → Device war bereits verbunden → Sende manuelle Reports");
+        ESP_LOGI(TAG, "        → Device war bereits verbunden → Stack sendet Reports automatisch");
     } else if (first_pairing_after_join) {
-        ESP_LOGI(TAG, "        → Erstes Pairing erkannt → Sende manuelle Reports (für Interview)");
+        ESP_LOGI(TAG, "        → Erstes Pairing erkannt → Stack sendet Reports nach Z2M-Configure");
     } else {
-        ESP_LOGI(TAG, "        → Normale Verbindung → Sende manuelle Reports");
+        ESP_LOGI(TAG, "        → Normale Verbindung → Stack sendet Reports automatisch");
     }
     
-    // [2.5/4] Auto-Reporting für unsere Report-Attribute deaktivieren (nur One-Shot-Reports nutzen)
-    {
-        const uint16_t manuf_code = 0xFFFF;  // Nicht herstellerspezifisch (Standard-ZCL)
-        esp_zb_zcl_attr_location_info_t loc = {
-            .endpoint_id = ZIGBEE_ENDPOINT_ID,
-            .cluster_id = 0,
-            .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-            .manuf_code = manuf_code,
-            .attr_id = 0,
-        };
-        esp_zb_lock_acquire(portMAX_DELAY);
-        loc.cluster_id = ZIGBEE_CLUSTER_METERING;
-        loc.attr_id = ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED;
-        esp_zb_zcl_stop_attr_reporting(loc);
-        loc.cluster_id = ZIGBEE_CLUSTER_BATTERY;
-        loc.attr_id = ZIGBEE_ATTR_BATTERY_PERCENT;
-        esp_zb_zcl_stop_attr_reporting(loc);
-        loc.attr_id = ZIGBEE_ATTR_BATTERY_VOLTAGE;
-        esp_zb_zcl_stop_attr_reporting(loc);
-        loc.attr_id = ZIGBEE_ATTR_BATTERY_ALARM_STATE;
-        esp_zb_zcl_stop_attr_reporting(loc);
-        esp_zb_lock_release();
-        ESP_LOGI(TAG, "  [2.5/4] Auto-Reporting für Metering/Battery-Attribute deaktiviert");
-    }
-    
-    // [2.6/4] Battery-Cluster-Werte sofort setzen (bevor wir Reports senden)
+    // [2.5/4] Battery-Cluster-Werte setzen
     // Zigbee2MQTT kann nach device_announce Read Attribute senden – dann liefert der Stack bereits
-    // die echten Werte (z. B. 4.22V) statt des Initialwerts 40 (4.0V) und vermeidet 4000 vs 4200 mV in HA.
+    // die echten Werte. Bei Configure Reporting durch Z2M sendet der Stack Reports automatisch bei Änderung.
     {
         uint8_t battery_percent_zigbee = (uint8_t)(data->battery_percent * 2.0f);
         if (battery_percent_zigbee > 200) battery_percent_zigbee = 200;
@@ -2196,7 +2135,7 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
             esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
                 ZIGBEE_ATTR_BATTERY_ALARM_STATE, &battery_alarm_state, false);
         }
-        ESP_LOGI(TAG, "  [2.6/4] Battery-Cluster für Z2M-Read gesetzt (%.1f%%, %.2fV)", data->battery_percent, data->battery_voltage);
+        ESP_LOGI(TAG, "  [2.5/4] Battery-Cluster gesetzt (%.1f%%, %.2fV)", data->battery_percent, data->battery_voltage);
     }
     
     // [3/4] Datenübertragung: Setze Metering Cluster Attribute
@@ -2226,100 +2165,24 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
         // Warnung nur loggen, aber nicht als Fehler behandeln, da direkte Variable-Aktualisierung funktioniert
         ESP_LOGD(TAG, "        → Hinweis: esp_zb_zcl_set_attribute_val() nach Rejoin fehlgeschlagen (Status: %d), aber Variable wurde bereits vor Rejoin aktualisiert", attr_status);
     } else {
-        ESP_LOGD(TAG, "        → CurrentSummationDelivered auch via esp_zb_zcl_set_attribute_val() gesetzt (nach Rejoin)");
+        ESP_LOGD(TAG, "        → CurrentSummationDelivered via esp_zb_zcl_set_attribute_val() gesetzt (Stack sendet Report bei Configure Reporting durch Z2M)");
     }
     
-    // [3.1/4] Sende Attribute Report für CurrentSummationDelivered an Coordinator
-    // esp_zb_zcl_report_attr_cmd_req() = one-shot, ignoriert Reporting-Config (SDK ZCL Command API).
-    ESP_LOGI(TAG, "  [3.1/4] Sende Attribute Report (CurrentSummationDelivered)...");
-    send_attribute_report(ZIGBEE_CLUSTER_METERING, ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED);
-    vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));  // Kurze Pause zwischen Reports
+    // Stack sendet Attribute Reports automatisch bei Wertänderung (wenn Z2M Configure Reporting gesendet hat)
+    ESP_LOGI(TAG, "        → Daten in Cluster gesetzt, Stack sendet Reports automatisch");
     
-    // Battery-Werte wurden bereits in [2.6/4] im Cluster gesetzt (für Z2M-Read und Reports)
-    
-    // [3.2/4] Sende Attribute Report für Battery Percentage an Coordinator
-    // esp_zb_zcl_report_attr_cmd_req() = one-shot, ignoriert Reporting-Config (SDK ZCL Command API).
-    ESP_LOGI(TAG, "  [3.2/4] Sende Attribute Report (Battery Percentage)...");
-    send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_PERCENT);
-    vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));  // Kurze Pause zwischen Reports
-    
-    // [3.3/4] Sende Attribute Report für Battery Voltage an Coordinator
-    if (data->battery_voltage > 0.0f) {
-        ESP_LOGI(TAG, "  [3.3/4] Sende Attribute Report (Battery Voltage)...");
-        send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_VOLTAGE);
-        vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));  // Kurze Pause zwischen Reports
-    }
-    
-    // [3.4/4] Sende Attribute Report für Battery Alarm State an Coordinator
-    if (data->battery_voltage > 0.0f) {
-        ESP_LOGI(TAG, "  [3.4/4] Sende Attribute Report (Battery Alarm State)...");
-        send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_ALARM_STATE);
-    }
-    
-    // [3.45/4] Auto-Reporting erneut deaktivieren (Zigbee2MQTT kann nach device_announce Configure Reporting senden)
-    {
-        const uint16_t manuf_code = 0xFFFF;
-        esp_zb_zcl_attr_location_info_t loc = {
-            .endpoint_id = ZIGBEE_ENDPOINT_ID,
-            .cluster_id = ZIGBEE_CLUSTER_METERING,
-            .cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-            .manuf_code = manuf_code,
-            .attr_id = ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED,
-        };
-        esp_zb_lock_acquire(portMAX_DELAY);
-        esp_zb_zcl_stop_attr_reporting(loc);
-        loc.cluster_id = ZIGBEE_CLUSTER_BATTERY;
-        loc.attr_id = ZIGBEE_ATTR_BATTERY_PERCENT;
-        esp_zb_zcl_stop_attr_reporting(loc);
-        loc.attr_id = ZIGBEE_ATTR_BATTERY_VOLTAGE;
-        esp_zb_zcl_stop_attr_reporting(loc);
-        loc.attr_id = ZIGBEE_ATTR_BATTERY_ALARM_STATE;
-        esp_zb_zcl_stop_attr_reporting(loc);
-        esp_zb_lock_release();
-        ESP_LOGI(TAG, "  [3.45/4] Auto-Reporting nach Reports erneut deaktiviert");
-    }
-    
-    ESP_LOGI(TAG, "        → Daten erfolgreich gesendet");
-    
-    // [3.5/4] Wartezeit nach erstem Pairing für Interview + Push Attribute Reports
+    // [3.5/4] Wartezeit nach erstem Pairing für Interview + Configure Reporting
     // WICHTIG: Nach dem ersten Pairing muss das Device wach bleiben, damit Zigbee2MQTT
-    // das Interview abschließen kann (Active Endpoints, Simple Descriptor, etc.)
-    // Das Interview dauert normalerweise 30-90 Sekunden
-    // WICHTIG: End Devices müssen während des Interviews kontinuierlich auf Nachrichten hören,
-    // damit Node Descriptor Requests nicht verpasst werden
-    // HINWEIS: rx_on_when_idle wurde bereits im DEVICE_ANNCE Signal-Handler aktiviert (sofort nach Join)
+    // das Interview abschließen und Configure Reporting (Bind + Report-Konfiguration) durchführen kann.
+    // Das Interview und Configure dauern normalerweise 30-90 Sekunden.
     if (first_pairing_after_join) {
-        ESP_LOGI(TAG, "  [3.5/4] Warte auf Interview-Abschluss (erstes Pairing)...");
-        ESP_LOGI(TAG, "        → Device bleibt %d Sekunden wach für Zigbee2MQTT Interview", ZIGBEE_INTERVIEW_WAIT_MS / 1000);
-        ESP_LOGI(TAG, "        → Zigbee2MQTT muss Zeit haben, Active Endpoints, Simple Descriptor, etc. abzufragen");
-        ESP_LOGI(TAG, "        → RX-on-when-idle ist bereits aktiviert (wurde sofort nach Join aktiviert)");
+        ESP_LOGI(TAG, "  [3.5/4] Warte auf Interview + Configure Reporting (erstes Pairing)...");
+        ESP_LOGI(TAG, "        → Device bleibt %d Sekunden wach für Zigbee2MQTT (Interview + Configure)", ZIGBEE_INTERVIEW_WAIT_MS / 1000);
         
         vTaskDelay(pdMS_TO_TICKS(ZIGBEE_INTERVIEW_WAIT_MS));
         ESP_LOGI(TAG, "        → Interview-Wartezeit abgeschlossen");
         
-        // HINWEIS: rx_on_when_idle bleibt auf true, da das Device nach der Datenübertragung
-        // sofort in Deep-Sleep geht. Der Energieverbrauch während der kurzen aktiven Phase
-        // ist nicht relevant, da das Device danach in Deep-Sleep geht (wo rx_on_when_idle irrelevant ist)
-        
-        // [3.6/4] Nach Interview: Push Attribute Reports an Coordinator
-        // WICHTIG: Nach dem Interview kann Zigbee2MQTT die Attribute lesen (Pull),
-        // aber wir pushen sie auch aktiv, um sicherzustellen, dass die Werte ankommen
-        ESP_LOGI(TAG, "  [3.6/4] Push Attribute Reports nach Interview (erstes Pairing)...");
-        ESP_LOGI(TAG, "        → Coordinator kann Attribute auch pullen (Read Attribute Request), aber wir pushen aktiv");
-        send_attribute_report(ZIGBEE_CLUSTER_METERING, ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED);
-        vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));
-        send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_PERCENT);
-        vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));
-        
-        // Battery Voltage und Alarm State auch beim ersten Pairing senden (falls verfügbar)
-        if (data && data->battery_voltage > 0.0f) {
-            send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_VOLTAGE);
-            vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MANUAL_REPORT_DELAY_MS));
-            send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_ALARM_STATE);
-        }
-        
-        first_pairing_after_join = false;  // Flag zurücksetzen (nur beim ersten Pairing warten)
-        ESP_LOGI(TAG, "        → Attribute Reports nach Interview gesendet");
+        first_pairing_after_join = false;
     }
     
     // [4/4] Zeit-Synchronisation mit Coordinator

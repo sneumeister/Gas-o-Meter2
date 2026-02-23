@@ -23,6 +23,7 @@ extern "C" {
  * Ermöglicht: Sekunden seit letztem Sync = time(NULL) - time_sync_last_epoch
  */
 extern uint64_t time_sync_last_epoch;
+extern char time_sync_last_source[12];  /* "NTP", "ZigBee", "BLE", etc. */
 
 /**
  * Setzt Systemzeit per settimeofday() und aktualisiert time_sync_last_epoch.

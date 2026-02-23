@@ -118,13 +118,16 @@ const definition = {
     ],
     
     // Configure-Funktion: Wird nach dem Pairing/Join ausgeführt
-    // Nur Bind – kein configureReporting. Das Device sendet ausschließlich manuelle
-    // Attribute Reports (esp_zb_zcl_report_attr_cmd_req); automatisches Reporting wird
-    // in der Firmware mit esp_zb_zcl_stop_attr_reporting deaktiviert. So vermeiden wir
-    // Doppel-Reports und wechselnde Spannungswerte (z. B. 4.0 V vs 4.2 V) in Z2M/HA.
+    // Bind + Configure Reporting. Das Device setzt nur die Cluster-Werte; der Zigbee-Stack
+    // sendet Attribute Reports automatisch bei Wertänderung (sobald Reporting konfiguriert ist).
     configure: async (device, coordinatorEndpoint) => {
         const endpoint = device.getEndpoint(1);
         await reporting.bind(endpoint, coordinatorEndpoint, ['seMetering', 'genPowerCfg']);
+        // Configure Reporting – Stack sendet bei Änderung automatisch
+        await reporting.report(endpoint, 'seMetering', 'currentSummDelivered', {min: 300, max: 3600, change: 0}).catch(() => {});
+        await reporting.batteryPercentageRemaining(endpoint).catch(() => {});
+        await reporting.batteryVoltage(endpoint).catch(() => {});
+        await reporting.report(endpoint, 'genPowerCfg', 'batteryAlarmState', {min: 3600, max: 86400, change: 0}).catch(() => {});
     },
     
     meta: {

@@ -150,7 +150,6 @@
 #define ZIGBEE_MAIN_TASK_PRIORITY     5              // Task Priority (0-25, höher = wichtiger)
 #define ZIGBEE_MAIN_TASK_DELAY_MS     100            // Delay zwischen Main Loop Iterationen (ms)
 #define ZIGBEE_DEINIT_DELAY_MS        500            // Delay beim Deinitialisieren (ms)
-#define ZIGBEE_MANUAL_REPORT_DELAY_MS 100            // Delay zwischen manuellen Attribute Reports (ms)
 #define ZIGBEE_TIME_SYNC_WAIT_MS      3000           // Wartezeit nach Time-Cluster-Request auf Response (ms, typ. 1–3 s)
 
 // NVS Konfiguration

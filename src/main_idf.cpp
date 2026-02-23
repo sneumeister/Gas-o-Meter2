@@ -2032,10 +2032,11 @@ const char* processor_get_value(const char* var) {
         struct tm timeinfo;
         time_t last_epoch = (time_t)time_sync_last_epoch;
         if (gmtime_r(&last_epoch, &timeinfo)) {
-            char time_buf[32];
-            snprintf(time_buf, sizeof(time_buf), "%04d-%02d-%02d %02d:%02d:%02d UTC",
+            char time_buf[48];
+            const char *src = (time_sync_last_source[0] != '\0') ? time_sync_last_source : "?";
+            snprintf(time_buf, sizeof(time_buf), "%04d-%02d-%02d %02d:%02d:%02d UTC (%s)",
                      timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                     timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+                     timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, src);
             if (sec_since < 60) {
                 snprintf(buffer, sizeof(buffer), "%s (vor %lld s)", time_buf, (long long)sec_since);
             } else if (sec_since < 3600) {
