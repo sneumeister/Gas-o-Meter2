@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gas-O-Meter Konfiguration</title>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="/style.css">
     <link rel="stylesheet" href="/bootstrap.min.css">
     <style>
@@ -38,6 +39,26 @@
         }
         .form-label {
             font-weight: bold;
+        }
+        /* Dropdown-Icon für Select-Felder */
+        .select-with-icon {
+            position: relative;
+        }
+        .select-with-icon::after {
+            content: "▼";
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            pointer-events: none;
+            color: #666;
+            font-size: 0.8em;
+        }
+        .select-with-icon select {
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            padding-right: 35px;
         }
     </style>
 </head>
@@ -123,8 +144,67 @@
             </div>
             
             <div class="mb-3">
-                <label for="transfer_minutes" class="form-label">Transfer Intervall (Minuten)</label>
-                <input type="number" class="form-control" id="transfer_minutes" name="transfer_minutes" value="`transfer_minutes`" min="1" max="60" required>
+                <label for="transfer_mode" class="form-label">Datenübertragung</label>
+                <div class="select-with-icon">
+                    <select class="form-control" id="transfer_mode" name="transfer_mode" required onchange="toggleZigbeeConfig()">
+                        <option value="none" `transfer_mode_none`>Keine Übertragung</option>
+                        <option value="zigbee" `transfer_mode_zigbee`>ZigBee</option>
+                        <option value="ble" `transfer_mode_ble`>BLE (geplant)</option>
+                        <option value="mqtt" `transfer_mode_mqtt`>MQTT via WiFi (geplant)</option>
+                    </select>
+                </div>
+            </div>
+            
+            <!-- ZigBee-Konfiguration (nur sichtbar wenn transfer_mode=zigbee) -->
+            <div class="mb-3" id="zigbeeConfigSection" style="display: none;">
+                <button class="btn btn-outline-primary btn-sm" type="button" id="zigbeeConfigToggle" onclick="toggleZigbeeConfigPanel()">
+                    📡 ZigBee-Einstellungen...
+                </button>
+                <div class="collapse mt-2" id="zigbeeConfigCollapse" style="display: none;">
+                    <div class="card card-body">
+                        <h5 class="mb-3">ZigBee-Status</h5>
+                        <div class="mb-3">
+                            <table class="table table-sm table-bordered">
+                                <tr>
+                                    <td><strong>Status:</strong></td>
+                                    <td>`zigbee_status`</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Network Address:</strong></td>
+                                    <td>`zigbee_network_addr`</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>PAN ID:</strong></td>
+                                    <td>`zigbee_pan_id`</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Channel:</strong></td>
+                                    <td>`zigbee_channel`</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Extended Address (MAC):</strong></td>
+                                    <td>`zigbee_extended_addr`</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="mb-3">
+                            <button type="button" class="btn btn-warning btn-sm" id="zigbeeFactoryResetBtn" onclick="zigbeeFactoryReset()">
+                                🔄 Factory-Reset ZigBee
+                            </button>
+                            <span id="zigbeeFactoryResetStatus" class="ms-2"></span>
+                            <button type="button" class="btn btn-info btn-sm" onclick="zigbeeStartPairing()">
+                                🔗 Start Pairing
+                            </button>
+                        </div>
+                        <div id="zigbeeActionStatus" class="text-muted"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mb-3">
+                <label for="transfer_minutes" class="form-label">Transfer Intervall (alle x Wake-up Intervall)</label>
+                <input type="number" class="form-control" id="transfer_minutes" name="transfer_minutes" value="`transfer_interval_x`" min="0" max="60" required>
+                <small class="form-text text-muted">0 = nie, 1-60 = alle x Wake-up Intervalle (max. 60 Min. pro Stunde)</small>
             </div>
             
             <div class="mb-3">

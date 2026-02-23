@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gas-O-Meter Status</title>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="/style.css">
     <link rel="stylesheet" href="/bootstrap.min.css">
 </head>
@@ -121,8 +122,12 @@
                             <td>`wakeup_minutes` Minuten</td>
                         </tr>
                         <tr>
+                            <td>Transfer Modus</td>
+                            <td>`transfer_mode`</td>
+                        </tr>
+                        <tr>
                             <td>Transfer Intervall</td>
-                            <td>`transfer_minutes` Minuten</td>
+                            <td>`transfer_interval_display`</td>
                         </tr>
                         <tr>
                             <td>NTP-Server</td>
@@ -140,6 +145,10 @@
                             <td>Akku-Ladestatus</td>
                             <td>`battery_percent`&#37;</td>
                         </tr>
+                        <tr>
+                            <td>Letzte Zeit-Sync</td>
+                            <td>`time_sync_last`</td>
+                        </tr>
                     </table>
                 </div>
             </div>
@@ -149,7 +158,7 @@
             <div class="status">
                 <p>Wake-up Count: `wakeup_count`</p>
                 <p>WiFi Status: `wifi_status`</p>
-                <p id="wifi_info" style="`wifi_info_style`">
+                <p id="wifi_info" data-style="`wifi_info_style`" style="display:none;">
                     IP-Adresse: `wifi_ip`<br>
                     RSSI: `wifi_rssi` dBm
                 </p>
@@ -159,8 +168,8 @@
         
         <div class="refresh">
             <button onclick="location.reload()">Aktualisieren</button>
-            <button onclick="autoRefresh()">Auto-Refresh: <span id="autoRefreshStatus">Aus</span></button>
             <button onclick="window.location.href='/config'" style="background-color: #667eea; color: white;">Config</button>
+            <button onclick="deepSleepDevice()" style="background-color: #6c757d; color: white;">Deep-Sleep</button>
             <button onclick="rebootDevice()" style="background-color: #dc3545; color: white;">Reboot</button>
         </div>
     </div>

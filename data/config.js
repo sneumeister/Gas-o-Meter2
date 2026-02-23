@@ -37,10 +37,31 @@ function rebootDevice() {
         body: formData
     })
     .then(response => {
+        if (!response.ok) {
+            // Fehler-Response (z.B. 409 Conflict)
+            return response.json().then(data => {
+                throw new Error(data.error || `HTTP ${response.status}`);
+            });
+        }
         console.log("Reboot-Request erfolgreich gesendet");
     })
     .catch(error => {
-        console.log("Request-Fehler (erwartet nach Reboot):", error);
+        // Fehler anzeigen (z.B. Factory-Reset läuft)
+        alert("Reboot nicht möglich:\n\n" + error.message);
+        
+        // Button wieder aktivieren
+        const rebootButton = document.querySelector('button[onclick="rebootDevice()"]');
+        if (rebootButton) {
+            rebootButton.disabled = false;
+            rebootButton.textContent = 'Reboot';
+        }
+        
+        // Countdown-Intervall beenden (falls aktiv)
+        if (typeof countdownInterval !== 'undefined') {
+            clearInterval(countdownInterval);
+        }
+        
+        console.error("Reboot-Fehler:", error);
     });
     
     // Countdown: 5 Sekunden
@@ -488,6 +509,7 @@ function saveConfig() {
     // Sammle alle Formular-Daten mit Validierung
     const hostname = document.getElementById('hostname').value.trim();
     const wakeupMinutesStr = document.getElementById('wakeup_minutes').value.trim();
+    const transferMode = document.getElementById('transfer_mode').value.trim();
     const transferMinutesStr = document.getElementById('transfer_minutes').value.trim();
     const adcOffsetStr = document.getElementById('adc_voltage_offset').value.trim();
     const ntpServer = document.getElementById('ntp_server').value.trim();
@@ -506,12 +528,30 @@ function saveConfig() {
         return;
     }
     
-    // Validierung: Transfer Intervall
+    // Validierung: Transfer-Mode
+    if (transferMode.length === 0 || 
+        (transferMode !== 'none' && transferMode !== 'zigbee' && transferMode !== 'ble' && transferMode !== 'mqtt')) {
+        alert("Bitte wählen Sie einen gültigen Transfer-Mode aus.");
+        document.getElementById('transfer_mode').focus();
+        return;
+    }
+    
+    // Validierung: Transfer Intervall (Multiplikator)
     const transfer_minutes = parseInt(transferMinutesStr);
-    if (isNaN(transfer_minutes) || transfer_minutes < 1 || transfer_minutes > 60) {
-        alert("Bitte geben Sie ein gültiges Transfer Intervall zwischen 1 und 60 Minuten an.");
+    if (isNaN(transfer_minutes) || transfer_minutes < 0 || transfer_minutes > 60) {
+        alert("Bitte geben Sie einen gültigen Transfer Intervall Multiplikator zwischen 0 und 60 an (0 = nie).");
         document.getElementById('transfer_minutes').focus();
         return;
+    }
+    // Prüfen, ob Multiplikator * Wake-up-Intervall <= 60
+    if (transfer_minutes > 0) {
+        const wakeup_minutes = parseInt(wakeupMinutesStr);
+        const calculated_minutes = transfer_minutes * wakeup_minutes;
+        if (calculated_minutes > 60) {
+            alert(`Transfer Intervall ungültig: ${transfer_minutes} * ${wakeup_minutes} = ${calculated_minutes} Min. (muss <= 60 sein)`);
+            document.getElementById('transfer_minutes').focus();
+            return;
+        }
     }
     
     // Validierung: ADC Spannungs-Offset
@@ -539,6 +579,7 @@ function saveConfig() {
         hostname: hostname,
         adminpass: adminpass,
         wakeup_minutes: wakeup_minutes,
+        transfer_mode: transferMode,
         transfer_minutes: transfer_minutes,
         adc_voltage_offset: adc_voltage_offset,
         ntp_server: ntpServer,
@@ -1091,3 +1132,282 @@ function showRebootProgress(hostnameChanged, wifiChanged, newHostname) {
     // Starte erste Reload-Versuche nach 10 Sekunden (Countdown)
     setTimeout(tryReload, initialCountdown * 1000);
 }
+
+// ZigBee-Konfiguration: Zeigt/versteckt das ZigBee-Section basierend auf transfer_mode
+function toggleZigbeeConfig() {
+    const transferMode = document.getElementById('transfer_mode').value;
+    const zigbeeSection = document.getElementById('zigbeeConfigSection');
+    
+    if (transferMode === 'zigbee') {
+        zigbeeSection.style.display = 'block';
+    } else {
+        zigbeeSection.style.display = 'none';
+        // Panel auch schließen, wenn ZigBee deaktiviert wird
+        const collapse = document.getElementById('zigbeeConfigCollapse');
+        if (collapse) {
+            collapse.style.display = 'none';
+        }
+    }
+}
+
+// ZigBee-Konfiguration: Klappt das Panel auf/zu
+function toggleZigbeeConfigPanel() {
+    const collapse = document.getElementById('zigbeeConfigCollapse');
+    const toggleBtn = document.getElementById('zigbeeConfigToggle');
+    
+    if (collapse.style.display === 'none') {
+        // Aufklappen
+        collapse.style.display = 'block';
+        toggleBtn.textContent = '📡 ZigBee-Einstellungen... (ausblenden)';
+        // ZigBee-Status aktualisieren
+        updateZigbeeStatus();
+    } else {
+        // Zuklappen
+        collapse.style.display = 'none';
+        toggleBtn.textContent = '📡 ZigBee-Einstellungen...';
+    }
+}
+
+// ZigBee-Status aktualisieren
+function updateZigbeeStatus() {
+    // Prüfe, ob ZigBee aktiv ist
+    const transferMode = document.getElementById('transfer_mode');
+    if (!transferMode || transferMode.value !== 'zigbee') {
+        // ZigBee ist nicht aktiv - keine Status-Abfrage nötig
+        const statusDiv = document.getElementById('zigbeeActionStatus');
+        if (statusDiv) {
+            statusDiv.innerHTML = '<p class="text-muted">ZigBee ist nicht aktiv</p>';
+        }
+        return;
+    }
+    
+    const statusDiv = document.getElementById('zigbeeActionStatus');
+    if (statusDiv) {
+        statusDiv.textContent = 'Lade ZigBee-Status...';
+    }
+    
+    // Keine Authentifizierung nötig - liefert nur Verbindungsstatus
+    fetch('/zigbee/status', {
+        method: 'GET'
+    })
+    .then(response => {
+        if (!response.ok) {
+            // Prüfe, ob es ein 400-Fehler ist (ZigBee nicht aktiv)
+            if (response.status === 400) {
+                return response.json().then(data => {
+                    // ZigBee ist nicht aktiv
+                    if (statusDiv) {
+                        statusDiv.innerHTML = '<p class="text-muted">ZigBee ist nicht aktiv</p>';
+                    }
+                    return null; // Keine weitere Verarbeitung
+                });
+            }
+            throw new Error('Fehler beim Laden des Status');
+        }
+        return response.json();
+    })
+    .then(data => {
+        // Wenn data null ist (ZigBee nicht aktiv), nichts weiter tun
+        if (!data) {
+            return;
+        }
+        
+        // Status in der Tabelle aktualisieren (falls vorhanden)
+        if (data.status) {
+            // Status wird bereits über Template-Variablen angezeigt, hier nur Logging
+            console.log('ZigBee-Status:', data);
+        }
+        if (statusDiv) {
+            statusDiv.innerHTML = '<p class="text-success">Status aktualisiert</p>';
+        }
+    })
+    .catch(error => {
+        if (statusDiv) {
+            statusDiv.innerHTML = `<p class="text-danger">Fehler beim Laden des Status: ${error.message}</p>`;
+        }
+    });
+}
+
+// ZigBee Factory-Reset
+function zigbeeFactoryReset() {
+    if (!confirm("Möchten Sie wirklich einen Factory-Reset für ZigBee durchführen?\n\nDies löscht alle ZigBee-Netzwerkdaten und setzt ZigBee auf 'factory-new' zurück.")) {
+        return;
+    }
+    
+    const statusDiv = document.getElementById('zigbeeActionStatus');
+    const statusSpan = document.getElementById('zigbeeFactoryResetStatus');
+    const resetButton = document.getElementById('zigbeeFactoryResetBtn');
+    
+    // Button deaktivieren und Status anzeigen
+    if (resetButton) {
+        resetButton.disabled = true;
+    }
+    if (statusSpan) {
+        statusSpan.innerHTML = '<span class="text-info"><span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>läuft...</span>';
+    }
+    if (statusDiv) {
+        statusDiv.innerHTML = '<p class="text-info">Factory-Reset wird durchgeführt...</p>';
+    }
+    
+    // Aktuelles Admin-Passwort für Basic-Auth
+    const currentAdminPass = document.getElementById('adminpass').value;
+    const authHeader = 'Basic ' + btoa('admin:' + currentAdminPass);
+    
+    const formData = new FormData();
+    formData.append('cmd', 'factory-reset');
+    
+    fetch('/zigbee/action', {
+        method: 'POST',
+        headers: {
+            'Authorization': authHeader
+        },
+        body: formData
+    })
+    .then(response => {
+        if (!response.ok) {
+            if (response.status === 401) {
+                throw new Error('Authentifizierung fehlgeschlagen. Bitte Seite neu laden.');
+            }
+            return response.json().then(data => {
+                throw new Error(data.message || 'Fehler beim Factory-Reset');
+            });
+        }
+        return response.json();
+    })
+    .then(data => {
+        // Erfolg: Zeige persistentes Alert-Fenster (wie bei Config-Speicherung)
+        // Entferne alte Erfolgs-Alerts (falls vorhanden)
+        const oldAlerts = document.querySelectorAll('.alert-success');
+        oldAlerts.forEach(alert => alert.remove());
+        
+        // Erstelle neues Alert-Fenster
+        const successAlert = document.createElement('div');
+        successAlert.className = 'alert alert-success alert-dismissible fade show';
+        successAlert.setAttribute('role', 'alert');
+        successAlert.style.cssText = 'margin-bottom: 20px;';
+        
+        let alertMessage = `<strong>✓ ${data.message || 'Factory-Reset erfolgreich.'}</strong><br>`;
+        alertMessage += `Alle ZigBee-Netzwerkdaten wurden gelöscht.<br>`;
+        alertMessage += `<strong>Bitte betätigen Sie den "Reboot"-Button, damit der ZigBee-Stack sauber initialisiert wird.</strong><br><br>`;
+        
+        // Zeige empfangene JSON-Daten (für Debugging)
+        alertMessage += `<details style="margin-top: 10px;">`;
+        alertMessage += `<summary style="cursor: pointer; color: #667eea;">📋 Empfangene JSON-Daten anzeigen (Debugging)</summary>`;
+        alertMessage += `<pre style="background: #f8f9fa; padding: 10px; border-radius: 4px; margin-top: 10px; font-size: 0.85em; overflow-x: auto;">`;
+        alertMessage += JSON.stringify(data, null, 2);
+        alertMessage += `</pre>`;
+        alertMessage += `</details>`;
+        
+        alertMessage += `<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>`;
+        
+        successAlert.innerHTML = alertMessage;
+        
+        // Füge Alert am Anfang des Containers ein
+        const container = document.querySelector('.config-container');
+        if (container) {
+            container.insertBefore(successAlert, container.firstChild);
+        } else {
+            // Fallback: Am Anfang des Body einfügen
+            document.body.insertBefore(successAlert, document.body.firstChild);
+        }
+        
+        // Scroll zum Alert
+        successAlert.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        
+        // Status neben Button anzeigen
+        if (statusSpan) {
+            statusSpan.innerHTML = '<span class="text-success">✓ OK</span>';
+        }
+        if (statusDiv) {
+            statusDiv.innerHTML = '<p class="text-muted">Status wird aktualisiert...</p>';
+        }
+        
+        // Status nach 3 Sekunden aktualisieren, um zu sehen, ob ZigBee jetzt "factory-new" ist
+        setTimeout(() => {
+            updateZigbeeStatus();
+        }, 3000);
+        
+        // Status-Span nach 5 Sekunden wieder leeren
+        setTimeout(() => {
+            if (statusSpan) {
+                statusSpan.innerHTML = '';
+            }
+        }, 5000);
+    })
+    .catch(error => {
+        // Fehler: Status neben Button anzeigen
+        if (statusSpan) {
+            statusSpan.innerHTML = '<span class="text-danger">✗ Fehler</span>';
+        }
+        if (statusDiv) {
+            statusDiv.innerHTML = `<p class="text-danger">Fehler: ${error.message}</p>`;
+        }
+        // Status-Span nach 5 Sekunden wieder leeren
+        setTimeout(() => {
+            if (statusSpan) {
+                statusSpan.innerHTML = '';
+            }
+        }, 5000);
+    })
+    .finally(() => {
+        // Button wieder aktivieren
+        if (resetButton) {
+            resetButton.disabled = false;
+        }
+    });
+}
+
+// ZigBee Pairing starten
+function zigbeeStartPairing() {
+    if (!confirm("Möchten Sie das ZigBee-Pairing jetzt starten?\n\nStellen Sie sicher, dass der Coordinator im 'Permit Join' Modus ist.")) {
+        return;
+    }
+    
+    const statusDiv = document.getElementById('zigbeeActionStatus');
+    if (statusDiv) {
+        statusDiv.innerHTML = '<p class="text-info">Pairing wird gestartet...</p>';
+    }
+    
+    // Aktuelles Admin-Passwort für Basic-Auth
+    const currentAdminPass = document.getElementById('adminpass').value;
+    const authHeader = 'Basic ' + btoa('admin:' + currentAdminPass);
+    
+    const formData = new FormData();
+    formData.append('cmd', 'start-pairing');
+    
+    fetch('/zigbee/action', {
+        method: 'POST',
+        headers: {
+            'Authorization': authHeader
+        },
+        body: formData
+    })
+    .then(response => {
+        if (!response.ok) {
+            if (response.status === 401) {
+                throw new Error('Authentifizierung fehlgeschlagen. Bitte Seite neu laden.');
+            }
+            return response.json().then(data => {
+                throw new Error(data.message || 'Fehler beim Starten des Pairings');
+            });
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (statusDiv) {
+            statusDiv.innerHTML = '<p class="text-success">Pairing gestartet. Warten auf Coordinator...</p>';
+        }
+        // Status nach 5 Sekunden aktualisieren
+        setTimeout(updateZigbeeStatus, 5000);
+    })
+    .catch(error => {
+        if (statusDiv) {
+            statusDiv.innerHTML = `<p class="text-danger">Fehler: ${error.message}</p>`;
+        }
+    });
+}
+
+// Beim Laden der Seite: ZigBee-Config anzeigen, wenn transfer_mode=zigbee
+document.addEventListener('DOMContentLoaded', function() {
+    toggleZigbeeConfig();
+});

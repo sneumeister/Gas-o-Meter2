@@ -143,6 +143,16 @@
 #define DEFAULT_NTP_SERVER    "pool.ntp.org"  // Default NTP-Server (gut für Europa)
 #define NTP_TIMEOUT_MS        5000            // Timeout für NTP-Synchronisation (ms)
 
+// WiFi TX Power Konfiguration (Sendeleistung)
+// ESP32-C6: Gültiger Bereich: 8-84 (in 0.25 dBm Einheiten)
+//   Minimum: 8  =  2 dBm
+//   Maximum: 84 = 20 dBm (wird intern auf 20 dBm begrenzt, auch wenn 84 = 21 dBm wäre)
+//   Default: 84 = 20 dBm (Maximum für beste Reichweite)
+// Höhere Werte = größere Reichweite, aber höherer Stromverbrauch
+// WICHTIG: Wert außerhalb [8, 84] führt zu ESP_ERR_INVALID_ARG
+// WICHTIG: Dieser Wert wird zur Compile-Zeit in hardware.h definiert, daher wird keine Laufzeit-Prüfung durchgeführt
+#define WIFI_TX_POWER_DEFAULT       84      // Default WiFi TX Power: 20 dBm (84 * 0.25 dBm = 21 dBm, wird auf 20 dBm begrenzt)
+
 // Deep-Sleep Konfiguration
 #define WIFI_WAIT_FOR_SLEEP   5               // Minuten ohne Web-Server-Zugriff → Deep-Sleep
 
@@ -185,6 +195,11 @@
 // Pulse-Zähler verwendet uint32_t (32-bit unsigned int)
 // Vom Gas-zähler max 9999999 (inklusive der 2 Nachkommastellen 99999.99)
 // Maximaler Wert: UINT32_MAX = 4294967295 (automatisch durch Datentyp)
+
+// Pulse-Counter Divisor (für Formatierung: Integer → Dezimal)
+// Wird verwendet für: Web-Darstellung (pulse_counter_left/right), Log-Ausgabe, ZigBee-Übertragung
+// Beispiel: pulse_counter = 12345 → 123.45 m³ (12345 / 100 = 123, 12345 % 100 = 45)
+#define PULSE_COUNTER_DIVISOR  100  // Divisor für 2 Nachkommastellen (m³)
 
 // Ringspeicher-Konfiguration
 #define RING_BUFFER_SIZE  12000  // Anzahl Einträge im Ringspeicher (10 Jahre @ 1200 Pulse/Jahr)

@@ -4,5 +4,10 @@
     "wifiCredentials": [
       {"ssid": "FritzensBox24",   "password": "TheQuickBrownFoxJumpsOverTheLazyDog"},
       {"ssid": "MNAccessPoint-2", "password": "TheQuickBrownFoxJumpsOverTheLazyDog!"}
-    ]
+    ],
+    "wakeup_minutes": 10,
+    "transfer_interval_x": 2,
+    "transfer_mode": "none",
+    "adc_voltage_offset": -0.05,
+    "ntp_server": "pool.ntp.org"
 }
