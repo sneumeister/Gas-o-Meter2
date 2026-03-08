@@ -4,32 +4,158 @@
         "type": "tab",
         "label": "Gas-O-Meter2 BLE",
         "disabled": false,
-        "info": "BLE Flow für Gas-O-Meter2 Datenübertragung\n\n**Voraussetzungen:**\n- node-red-contrib-noble-bluetooth\n- BLE-Device-Name: 'Gas-O-Meter2'\n\n**Anpassungen:**\n- BLE-Device-Name in 'BLE Scanner' Node ändern\n- MQTT-Topics anpassen (falls verwendet)\n- Datenbank-Integration konfigurieren (optional)",
+        "info": "BLE Flow für Gas-O-Meter2 (node-red-contrib-generic-ble, BlueZ D-Bus).\n\n**Ersteinrichtung (Pairing):**\n1. ESP32C6: config.html öffnen → Transfer-Modus 'BLE' → 'BLE Pairing starten' klicken\n2. Node-RED: Generic BLE Config öffnen (Stift-Icon) → BLE Scanning aktivieren\n3. Gas-O-Meter2 im Dropdown wählen → Apply → Done → Deploy\n4. MAC wird gespeichert – danach automatische Verbindung bei jedem Wake-up\n\n**Voraussetzungen:**\n- node-red-contrib-generic-ble\n- bluetoothd muss laufen\n- Node-RED-User in Gruppe bluetooth\n\nSiehe integration_templates/nodered/README.md für Details.",
         "env": []
     },
     {
-        "id": "ble-scanner",
-        "type": "noble-bluetooth",
+        "id": "inject-connect",
+        "type": "inject",
         "z": "gas-o-meter2-ble-flow",
-        "name": "BLE Scanner",
-        "deviceName": "Gas-O-Meter2",
-        "serviceUuid": "",
-        "characteristicUuid": "",
-        "x": 120,
+        "name": "Connect & Read",
+        "props": [
+            {
+                "p": "topic",
+                "v": "connect",
+                "vt": "str"
+            }
+        ],
+        "repeat": "30",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 2,
+        "x": 130,
+        "y": 80,
+        "wires": [
+            [
+                "ble-connect-then-read"
+            ]
+        ]
+    },
+    {
+        "id": "ble-connect-then-read",
+        "type": "function",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "Connect, dann Read nach 10s",
+        "func": "// 1. Connect sofort senden\nnode.send([{topic: \"connect\", payload: \"\"}, null]);\n// 2. Read nach 10s (warten auf Verbindung)\nsetTimeout(function() {\n    node.send([null, {topic: \"fff1\", payload: \"\"}]);\n}, 10000);",
+        "outputs": 2,
+        "noerr": 0,
+        "x": 390,
+        "y": 80,
+        "wires": [
+            [
+                "generic-ble-out"
+            ],
+            [
+                "generic-ble-in"
+            ]
+        ]
+    },
+    {
+        "id": "generic-ble-out",
+        "type": "Generic BLE out",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "BLE Connect",
+        "genericBle": "fb56ea1418d21af9",
+        "x": 650,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "generic-ble-in",
+        "type": "Generic BLE in",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "BLE Read",
+        "genericBle": "fb56ea1418d21af9",
+        "useString": false,
+        "notification": false,
+        "x": 650,
         "y": 100,
-        "wires": [["data-parser"]]
+        "wires": [
+            [
+                "data-parser",
+                "debug-raw"
+            ]
+        ]
+    },
+    {
+        "id": "inject-mock",
+        "type": "inject",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "BLE Mock (Test)",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0,
+        "topic": "",
+        "payload": "{\"p\":12345,\"bv\":3910,\"bp\":85,\"bl\":0}",
+        "payloadType": "str",
+        "x": 120,
+        "y": 200,
+        "wires": [
+            [
+                "data-parser"
+            ]
+        ],
+        "info": "Test ohne BLE-Hardware: Sendet Mock-Daten direkt an den Data Parser.\nManuell auslösen (kein Auto-Repeat).\nFormat entspricht Custom Characteristic 0xFFF1."
+    },
+    {
+        "id": "debug-raw",
+        "type": "debug",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "Raw BLE",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1040,
+        "y": 100,
+        "wires": []
     },
     {
         "id": "data-parser",
         "type": "function",
         "z": "gas-o-meter2-ble-flow",
         "name": "Parse BLE Data",
-        "func": "// Parse BLE Characteristic Data\n// Format: JSON mit {pulse_counter, battery_percent, firmware_version}\n\nlet data = {};\n\ntry {\n    if (msg.payload) {\n        if (typeof msg.payload === 'string') {\n            data = JSON.parse(msg.payload);\n        } else if (typeof msg.payload === 'object') {\n            data = msg.payload;\n        }\n    }\n    \n    // Struktur für weitere Nodes\n    msg.payload = {\n        gas_counter: data.pulse_counter || 0,\n        battery: data.battery_percent || 0,\n        firmware_version: data.firmware_version || 'unknown',\n        timestamp: new Date().toISOString()\n    };\n    \n    return msg;\n} catch (error) {\n    node.error('Parse Error: ' + error.message, msg);\n    return null;\n}",
+        "func": "// Parse Gas-O-Meter2 Custom Characteristic 0xFFF1\n// Format: {\"p\":12345,\"bv\":3910,\"bp\":85,\"bl\":0}\n\nlet data = {};\n\ntry {\n    let raw = msg.payload;\n    if (typeof raw === 'object' && raw.fff1) {\n        raw = raw.fff1;\n    }\n    if (Buffer.isBuffer(raw)) {\n        raw = raw.toString('utf8');\n    }\n    if (typeof raw === 'string') {\n        data = JSON.parse(raw);\n    } else if (typeof raw === 'object' && raw !== null && !Buffer.isBuffer(raw)) {\n        data = raw;\n    }\n    \n    msg.payload = {\n        gas_counter: data.p || 0,\n        gas_m3: (data.p || 0) / 100,\n        battery: data.bp || 0,\n        battery_voltage_mv: data.bv || 0,\n        battery_low: (data.bl || 0) === 1,\n        firmware_version: msg.firmware || 'unknown',\n        timestamp: new Date().toISOString()\n    };\n    \n    return msg;\n} catch (error) {\n    node.error('Parse Error: ' + error.message, msg);\n    return null;\n}",
         "outputs": 1,
         "noerr": 0,
-        "x": 320,
-        "y": 100,
-        "wires": [["mqtt-publisher", "database-writer", "dashboard"]]
+        "x": 640,
+        "y": 200,
+        "wires": [
+            [
+                "debug-parsed",
+                "mqtt-publisher",
+                "database-writer",
+                "to-gas-gauge",
+                "to-battery-gauge"
+            ]
+        ]
+    },
+    {
+        "id": "debug-parsed",
+        "type": "debug",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "Parsed Data",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1030,
+        "y": 160,
+        "wires": []
     },
     {
         "id": "mqtt-publisher",
@@ -39,9 +165,14 @@
         "topic": "gas-o-meter2/data",
         "qos": "1",
         "retain": "true",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
         "broker": "",
-        "x": 540,
-        "y": 60,
+        "x": 1040,
+        "y": 200,
         "wires": []
     },
     {
@@ -49,80 +180,255 @@
         "type": "function",
         "z": "gas-o-meter2-ble-flow",
         "name": "Database Writer",
-        "func": "// Optional: Datenbank-Integration\n// Beispiel für SQLite oder InfluxDB\n\n// TODO: Implementierung je nach verwendeter Datenbank\n// Siehe node-red-node-sqlite oder node-red-contrib-influxdb\n\nreturn msg;",
+        "func": "// Optional: Datenbank-Integration\n// TODO: node-red-node-sqlite oder node-red-contrib-influxdb\nreturn msg;",
         "outputs": 1,
         "noerr": 0,
-        "x": 540,
-        "y": 100,
+        "x": 1040,
+        "y": 260,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "to-gas-gauge",
+        "type": "change",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "Gas → Gauge",
+        "rules": [
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "payload.gas_m3",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 880,
+        "y": 320,
+        "wires": [
+            [
+                "dashboard-gauge"
+            ]
+        ]
+    },
+    {
+        "id": "to-battery-gauge",
+        "type": "change",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "Battery → Gauge",
+        "rules": [
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "payload.battery",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 870,
+        "y": 360,
+        "wires": [
+            [
+                "dashboard-battery"
+            ]
+        ]
+    },
+    {
+        "id": "dashboard-gauge",
+        "type": "ui_gauge",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "Gas Counter",
+        "group": "dashboard-group",
+        "order": 1,
+        "width": 0,
+        "height": 0,
+        "gtype": "gage",
+        "title": "Gas Counter",
+        "label": "m³",
+        "format": "{{value}}",
+        "min": 0,
+        "max": 1000000,
+        "colors": [
+            "#00b500",
+            "#e6e600",
+            "#ca3838"
+        ],
+        "seg1": "",
+        "seg2": "",
+        "x": 1050,
+        "y": 320,
         "wires": []
     },
     {
-        "id": "dashboard",
-        "type": "ui_base",
+        "id": "dashboard-battery",
+        "type": "ui_gauge",
         "z": "gas-o-meter2-ble-flow",
-        "name": "Dashboard",
-        "theme": {
-            "name": "theme-light",
-            "lightMode": true,
-            "darkMode": false
-        },
-        "x": 540,
-        "y": 140,
+        "name": "Battery",
+        "group": "dashboard-group",
+        "order": 2,
+        "width": 0,
+        "height": 0,
+        "gtype": "gage",
+        "title": "Battery",
+        "label": "%",
+        "format": "{{value}}",
+        "min": 0,
+        "max": 100,
+        "colors": [
+            "#ca3838",
+            "#e6e600",
+            "#00b500"
+        ],
+        "seg1": "",
+        "seg2": "",
+        "x": 1060,
+        "y": 360,
+        "wires": []
+    },
+    {
+        "id": "ha-discovery-on",
+        "type": "inject",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "HA Discovery AN",
+        "props": [
+            {
+                "p": "payload",
+                "v": "true",
+                "vt": "bool"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0,
+        "x": 140,
+        "y": 440,
         "wires": [
             [
-                {
-                    "id": "dashboard-gauge",
-                    "type": "ui_gauge",
-                    "z": "gas-o-meter2-ble-flow",
-                    "name": "Gas Counter",
-                    "group": "dashboard-group",
-                    "order": 1,
-                    "width": 0,
-                    "height": 0,
-                    "gtype": "gage",
-                    "title": "Gas Counter",
-                    "label": "pulses",
-                    "format": "{{value}}",
-                    "min": 0,
-                    "max": 1000000,
-                    "colors": [
-                        "#00b500",
-                        "#e6e600",
-                        "#ca3838"
-                    ],
-                    "seg1": "",
-                    "seg2": "",
-                    "x": 760,
-                    "y": 100,
-                    "wires": []
-                },
-                {
-                    "id": "dashboard-battery",
-                    "type": "ui_gauge",
-                    "z": "gas-o-meter2-ble-flow",
-                    "name": "Battery",
-                    "group": "dashboard-group",
-                    "order": 2,
-                    "width": 0,
-                    "height": 0,
-                    "gtype": "gage",
-                    "title": "Battery",
-                    "label": "%",
-                    "format": "{{value}}%",
-                    "min": 0,
-                    "max": 100,
-                    "colors": [
-                        "#ca3838",
-                        "#e6e600",
-                        "#00b500"
-                    ],
-                    "seg1": "",
-                    "seg2": "",
-                    "x": 760,
-                    "y": 140,
-                    "wires": []
-                }
+                "ha-discovery-config"
             ]
+        ]
+    },
+    {
+        "id": "ha-discovery-off",
+        "type": "inject",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "HA Discovery AUS",
+        "props": [
+            {
+                "p": "payload",
+                "v": "false",
+                "vt": "bool"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0,
+        "x": 140,
+        "y": 490,
+        "wires": [
+            [
+                "ha-discovery-config"
+            ]
+        ]
+    },
+    {
+        "id": "ha-discovery-config",
+        "type": "function",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "HA Discovery Config",
+        "func": "var enable = msg.payload;\nvar stateTopic = 'gas-o-meter2/data';\nvar device = {\n    identifiers: ['gas_o_meter2'],\n    name: 'Gas-O-Meter2',\n    manufacturer: 'Custom',\n    model: 'Gas-O-Meter2 BLE'\n};\n\nvar configs = [\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_gas/config',\n        payload: {\n            name: 'Gas Counter',\n            unique_id: 'gas_o_meter2_gas',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.gas_m3 }}',\n            unit_of_measurement: 'm\\u00b3',\n            device_class: 'gas',\n            state_class: 'total_increasing',\n            icon: 'mdi:meter-gas',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_battery/config',\n        payload: {\n            name: 'Battery',\n            unique_id: 'gas_o_meter2_battery',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.battery }}',\n            unit_of_measurement: '%',\n            device_class: 'battery',\n            state_class: 'measurement',\n            icon: 'mdi:battery',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_voltage/config',\n        payload: {\n            name: 'Battery Voltage',\n            unique_id: 'gas_o_meter2_voltage',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.battery_voltage_mv }}',\n            unit_of_measurement: 'mV',\n            device_class: 'voltage',\n            state_class: 'measurement',\n            icon: 'mdi:flash',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/binary_sensor/gas_o_meter2_battery_low/config',\n        payload: {\n            name: 'Battery Low',\n            unique_id: 'gas_o_meter2_battery_low',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.battery_low }}',\n            payload_on: true,\n            payload_off: false,\n            device_class: 'battery',\n            icon: 'mdi:battery-alert',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_firmware/config',\n        payload: {\n            name: 'Firmware',\n            unique_id: 'gas_o_meter2_firmware',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.firmware_version }}',\n            icon: 'mdi:information',\n            entity_category: 'diagnostic',\n            device: device\n        }\n    }\n];\n\nfor (var i = 0; i < configs.length; i++) {\n    var out = {\n        topic: configs[i].topic,\n        payload: enable ? JSON.stringify(configs[i].payload) : '',\n        retain: true\n    };\n    node.send(out);\n}\n\nnode.status({text: enable ? 'AN (' + configs.length + ' Entities)' : 'AUS (entfernt)'});\nreturn null;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 620,
+        "y": 460,
+        "wires": [
+            [
+                "ha-discovery-mqtt",
+                "debug-ha-discovery"
+            ]
+        ]
+    },
+    {
+        "id": "ha-discovery-mqtt",
+        "type": "mqtt out",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "HA Discovery",
+        "topic": "",
+        "qos": "1",
+        "retain": "true",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "",
+        "x": 1040,
+        "y": 440,
+        "wires": []
+    },
+    {
+        "id": "debug-ha-discovery",
+        "type": "debug",
+        "z": "gas-o-meter2-ble-flow",
+        "name": "HA Discovery Debug",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1000,
+        "y": 500,
+        "wires": []
+    },
+    {
+        "id": "fb56ea1418d21af9",
+        "type": "Generic BLE",
+        "localName": "Gas-O-Meter2",
+        "address": "",
+        "uuid": "",
+        "characteristics": [
+            {
+                "uuid": "fff1",
+                "name": "Custom Data",
+                "type": "(Custom Type)",
+                "notifiable": true,
+                "readable": true,
+                "writable": false,
+                "writeWithoutResponse": false
+            },
+            {
+                "uuid": "2a26",
+                "name": "Firmware Revision",
+                "type": "org.bluetooth.characteristic.firmware_revision_string",
+                "notifiable": false,
+                "readable": true,
+                "writable": false,
+                "writeWithoutResponse": false
+            },
+            {
+                "uuid": "2a2b",
+                "name": "Current Time",
+                "type": "org.bluetooth.characteristic.current_time",
+                "notifiable": false,
+                "readable": true,
+                "writable": true,
+                "writeWithoutResponse": false
+            }
         ]
     },
     {
@@ -145,5 +451,14 @@
         "order": 1,
         "disabled": false,
         "hidden": false
+    },
+    {
+        "id": "efc3a5718f7305a9",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-generic-ble": "4.0.3",
+            "node-red-dashboard": "3.6.6"
+        }
     }
 ]
