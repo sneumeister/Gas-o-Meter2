@@ -13,6 +13,7 @@ idf_component_register(
     SRCS "main_idf.cpp"
           "transfer.cpp"
           "transfer_zigbee.cpp"
+          "transfer_ble.cpp"
           "time_sync.cpp"
     INCLUDE_DIRS "${INCLUDE_DIR}"
     REQUIRES 
@@ -27,6 +28,7 @@ idf_component_register(
         driver
         freertos
         ulp                     # ULP-Header für ulp_lp_core.h APIs
+        bt                      # Bluetooth (NimBLE) für BLE
         espressif__esp-zboss-lib    # ESP-Zigbee-SDK: ZBOSS Stack (über idf_component.yml)
         espressif__esp-zigbee-lib   # ESP-Zigbee-SDK: Espressif APIs (über idf_component.yml)
 )

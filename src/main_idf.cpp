@@ -28,6 +28,8 @@
 #include "transfer.h"
 #include "transfer_zigbee.h"
 #include "zigbee_config.h"
+#include "transfer_ble.h"
+#include "ble_config.h"
 #include "time_sync.h"
 
 // ArduinoJson (ESP-IDF-kompatibel)
@@ -108,7 +110,7 @@ bool start_lp_core(void) {
 // RTC Memory Struktur für Config-Werte
 // ============================================
 typedef struct {
-    char hostname[32];
+    char hostname[HOSTNAME_MAX_LEN + 1];
     char adminpass[32];
     struct {
         char ssid[32];
@@ -137,6 +139,11 @@ RTC_DATA_ATTR config_rtc_t config_rtc = {
 };
 RTC_DATA_ATTR int wakeupCount = 0;  // Zählt nur Deep-Sleep-Wake-ups (nicht ESP.restart())
 RTC_DATA_ATTR bool isPowerOn = false;
+
+// Hostname-Zugriff für transfer_ble.cpp (BLE Device Name = Hostname)
+const char* transfer_ble_get_hostname(void) {
+    return config_rtc.hostname;
+}
 RTC_DATA_ATTR uint32_t ring_idx = RING_BUFFER_SIZE;  // Ring-Buffer-Index (im RTC-RAM, wird bei Power-On/ESP.restart() neu ermittelt)
 
 // ============================================
@@ -1166,6 +1173,9 @@ bool load_config() {
     
     // Werte in RTC Memory speichern (mit Null-Terminierung)
     const char* hostname = doc["hostname"] | "gas-o-meter2";
+    if (strlen(hostname) > HOSTNAME_MAX_LEN) {
+        ESP_LOGW(TAG, "Hostname '%s' zu lang (%d > %d), wird gekürzt", hostname, strlen(hostname), HOSTNAME_MAX_LEN);
+    }
     strncpy(config_rtc.hostname, hostname, sizeof(config_rtc.hostname) - 1);
     config_rtc.hostname[sizeof(config_rtc.hostname) - 1] = '\0';
     
@@ -2078,6 +2088,9 @@ const char* processor_get_value(const char* var) {
     }
     if (strcmp(var, "transfer_mode_mqtt") == 0) {
         return (strcmp(config_rtc.transfer_mode, "mqtt") == 0) ? "selected" : "";
+    }
+    if (strcmp(var, "ble_status") == 0) {
+        return "Nicht aktiv";
     }
     if (strcmp(var, "transfer_interval_x") == 0) {
         // Wenn transfer_minutes == 255, dann ist Multiplikator = 0 (nie)
@@ -3249,6 +3262,32 @@ static esp_err_t zigbee_action_handler(httpd_req_t *req) {
     }
 }
 
+// ============================================
+// BLE-HTTP-Handler
+// ============================================
+
+static esp_err_t ble_status_handler(httpd_req_t *req) {
+    last_web_activity_us = esp_timer_get_time();
+    httpd_resp_set_type(req, "application/json");
+    char json_buf[128];
+    transfer_ble_get_status_json(json_buf, sizeof(json_buf));
+    httpd_resp_send(req, json_buf, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t ble_pairing_handler(httpd_req_t *req) {
+    last_web_activity_us = esp_timer_get_time();
+    httpd_resp_set_type(req, "application/json");
+    
+    if (transfer_ble_start_pairing()) {
+        httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"BLE Advertising gestartet (90 s)\"}", HTTPD_RESP_USE_STRLEN);
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"BLE Advertising konnte nicht gestartet werden\"}", HTTPD_RESP_USE_STRLEN);
+    }
+    return ESP_OK;
+}
+
 // Handler für /wifi/scan (GET)
 static esp_err_t wifi_scan_handler(httpd_req_t *req) {
     // Basic Auth prüfen
@@ -3616,6 +3655,22 @@ void setupWebServer() {
         .user_ctx  = NULL
     };
     httpd_register_uri_handler(server, &zigbee_action_uri);
+
+    httpd_uri_t ble_status_uri = {
+        .uri       = "/ble/status",
+        .method    = HTTP_GET,
+        .handler   = ble_status_handler,
+        .user_ctx  = NULL
+    };
+    httpd_register_uri_handler(server, &ble_status_uri);
+
+    httpd_uri_t ble_pairing_uri = {
+        .uri       = "/ble/pairing",
+        .method    = HTTP_POST,
+        .handler   = ble_pairing_handler,
+        .user_ctx  = NULL
+    };
+    httpd_register_uri_handler(server, &ble_pairing_uri);
     
     // Wildcard-Handler für alle statischen Dateien (muss als letzter registriert werden)
     // Spezifische Handler (oben) haben Vorrang vor dem Wildcard-Handler

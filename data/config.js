@@ -514,9 +514,10 @@ function saveConfig() {
     const adcOffsetStr = document.getElementById('adc_voltage_offset').value.trim();
     const ntpServer = document.getElementById('ntp_server').value.trim();
     
-    // Validierung: Hostname
-    if (hostname.length === 0) {
-        alert("Bitte geben Sie einen Hostname an.");
+    // Validierung: Hostname (max. 26 Zeichen = BLE-Limit)
+    if (hostname.length === 0 || hostname.length > 26) {
+        alert("Hostname muss 1-26 Zeichen lang sein (BLE-Limit).");
+        document.getElementById('hostname').focus();
         return;
     }
     
@@ -1133,22 +1134,33 @@ function showRebootProgress(hostnameChanged, wifiChanged, newHostname) {
     setTimeout(tryReload, initialCountdown * 1000);
 }
 
-// ZigBee-Konfiguration: Zeigt/versteckt das ZigBee-Section basierend auf transfer_mode
-function toggleZigbeeConfig() {
+// Transfer-Konfiguration: Zeigt/versteckt ZigBee/BLE-Sections basierend auf transfer_mode
+function toggleTransferConfig() {
     const transferMode = document.getElementById('transfer_mode').value;
     const zigbeeSection = document.getElementById('zigbeeConfigSection');
+    const bleSection = document.getElementById('bleConfigSection');
     
     if (transferMode === 'zigbee') {
         zigbeeSection.style.display = 'block';
     } else {
         zigbeeSection.style.display = 'none';
-        // Panel auch schließen, wenn ZigBee deaktiviert wird
         const collapse = document.getElementById('zigbeeConfigCollapse');
-        if (collapse) {
-            collapse.style.display = 'none';
+        if (collapse) collapse.style.display = 'none';
+    }
+
+    if (bleSection) {
+        if (transferMode === 'ble') {
+            bleSection.style.display = 'block';
+        } else {
+            bleSection.style.display = 'none';
+            const collapse = document.getElementById('bleConfigCollapse');
+            if (collapse) collapse.style.display = 'none';
         }
     }
 }
+
+// Rückwärtskompatibilität
+function toggleZigbeeConfig() { toggleTransferConfig(); }
 
 // ZigBee-Konfiguration: Klappt das Panel auf/zu
 function toggleZigbeeConfigPanel() {
@@ -1407,7 +1419,80 @@ function zigbeeStartPairing() {
     });
 }
 
-// Beim Laden der Seite: ZigBee-Config anzeigen, wenn transfer_mode=zigbee
+// ============================================
+// BLE-Konfiguration
+// ============================================
+
+function toggleBleConfigPanel() {
+    const collapse = document.getElementById('bleConfigCollapse');
+    const toggleBtn = document.getElementById('bleConfigToggle');
+    
+    if (collapse.style.display === 'none') {
+        collapse.style.display = 'block';
+        toggleBtn.textContent = '📶 BLE-Einstellungen... (ausblenden)';
+        updateBleStatus();
+    } else {
+        collapse.style.display = 'none';
+        toggleBtn.textContent = '📶 BLE-Einstellungen...';
+    }
+}
+
+function updateBleStatus() {
+    fetch('/ble/status')
+    .then(response => response.json())
+    .then(data => {
+        const statusText = document.getElementById('bleStatusText');
+        if (statusText) {
+            if (data.advertising) {
+                statusText.innerHTML = '<span class="text-warning">Advertising...</span>';
+            } else if (data.connected) {
+                statusText.innerHTML = '<span class="text-success">Verbunden</span>';
+            } else if (data.initialized) {
+                statusText.innerHTML = '<span class="text-info">Initialisiert</span>';
+            } else {
+                statusText.innerHTML = '<span class="text-muted">Nicht aktiv</span>';
+            }
+        }
+    })
+    .catch(error => {
+        const statusText = document.getElementById('bleStatusText');
+        if (statusText) {
+            statusText.innerHTML = '<span class="text-muted">Nicht verfügbar</span>';
+        }
+    });
+}
+
+function blePairing() {
+    const statusSpan = document.getElementById('blePairingStatus');
+    const btn = document.getElementById('blePairingBtn');
+    
+    if (btn) btn.disabled = true;
+    if (statusSpan) statusSpan.innerHTML = '<span class="text-info">Starte Advertising...</span>';
+
+    fetch('/ble/pairing', { method: 'POST' })
+    .then(response => {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.json();
+    })
+    .then(data => {
+        if (statusSpan) {
+            statusSpan.innerHTML = '<span class="text-success">Advertising aktiv (90 s). Jetzt im Node-RED Config-Node das Gerät wählen.</span>';
+        }
+        setTimeout(function() {
+            updateBleStatus();
+            if (btn) btn.disabled = false;
+            if (statusSpan) statusSpan.innerHTML = '';
+        }, 95000);
+    })
+    .catch(error => {
+        if (statusSpan) {
+            statusSpan.innerHTML = '<span class="text-danger">Fehler: ' + error.message + '</span>';
+        }
+        if (btn) btn.disabled = false;
+    });
+}
+
+// Beim Laden der Seite: Transfer-Config anzeigen
 document.addEventListener('DOMContentLoaded', function() {
-    toggleZigbeeConfig();
+    toggleTransferConfig();
 });

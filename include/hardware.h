@@ -153,6 +153,10 @@
 // WICHTIG: Dieser Wert wird zur Compile-Zeit in hardware.h definiert, daher wird keine Laufzeit-Prüfung durchgeführt
 #define WIFI_TX_POWER_DEFAULT       84      // Default WiFi TX Power: 20 dBm (84 * 0.25 dBm = 21 dBm, wird auf 20 dBm begrenzt)
 
+// Hostname/BLE-Device-Name: Gemeinsamer Wert für WiFi und BLE
+// BLE-Limit: 26 Zeichen (esp_ble_gap_set_device_name, IDFGH-5588)
+#define HOSTNAME_MAX_LEN  26
+
 // Deep-Sleep Konfiguration
 #define WIFI_WAIT_FOR_SLEEP   5               // Minuten ohne Web-Server-Zugriff → Deep-Sleep
 
