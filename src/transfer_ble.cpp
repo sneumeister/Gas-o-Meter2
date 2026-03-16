@@ -7,6 +7,7 @@
 #ifndef ARDUINO
 
 #include "esp_log.h"
+#include "esp_bt.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -14,6 +15,12 @@
 #include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "host/ble_store.h"
+
+/* ESP-IDF NimBLE Store-Config (NVS-Persist); nur bei CONFIG_BT_NIMBLE_NVS_PERSIST=y verlinkt */
+#if CONFIG_BT_NIMBLE_NVS_PERSIST
+extern "C" void ble_store_config_init(void);
+#endif
 
 #include <string.h>
 #include <stdlib.h>
@@ -30,6 +37,7 @@ static bool ble_connected = false;
 static bool ble_advertising = false;
 static bool ble_sync_ready = false;
 static bool ble_start_adv_on_sync = false;
+static uint8_t ble_own_addr_type = BLE_OWN_ADDR_PUBLIC;
 static uint16_t ble_conn_handle = 0;
 
 // Attribut-Handles (vom Stack zugewiesen)
@@ -43,6 +51,30 @@ static char ble_firmware_buf[32];
 
 // Hostname-Zugriff (definiert in main_idf.cpp)
 extern const char* transfer_ble_get_hostname(void);
+
+// ============================================
+// No-Op Store Callbacks (kein Bonding, aber NimBLE ruft store_write_cb
+// ohne NULL-Check auf wenn es neue IRKs generiert → Crash ohne diese)
+// ============================================
+static int ble_store_noop_read(int obj_type, const union ble_store_key *key,
+                                union ble_store_value *value) {
+    return BLE_HS_ENOENT;
+}
+
+static int ble_store_noop_write(int obj_type, const union ble_store_value *val) {
+    return 0;
+}
+
+static int ble_store_noop_delete(int obj_type, const union ble_store_key *key) {
+    return 0;
+}
+
+/* Store status callback (Signatur: int (*)(ble_store_status_event*, void*)) */
+static int ble_store_status_cb(struct ble_store_status_event *event, void *arg) {
+    (void)event;
+    (void)arg;
+    return 0;
+}
 
 // ============================================
 // Statische UUID-Instanzen (BLE_UUID16_DECLARE ist in C++ nicht in Initializers nutzbar)
@@ -93,13 +125,24 @@ static void ble_advertise(void) {
         return;
     }
 
+    /* Scan Response mit Gerätenamen – viele Scanner (z. B. Node-RED) lesen den Namen daraus */
+    struct ble_hs_adv_fields rsp_fields;
+    memset(&rsp_fields, 0, sizeof(rsp_fields));
+    rsp_fields.name = (uint8_t *)name;
+    rsp_fields.name_len = strlen(name);
+    rsp_fields.name_is_complete = 1;
+    rc = ble_gap_adv_rsp_set_fields(&rsp_fields);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "ble_gap_adv_rsp_set_fields fehlgeschlagen: %d (Advertising läuft trotzdem)", rc);
+    }
+
     memset(&adv_params, 0, sizeof(adv_params));
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
     adv_params.itvl_min = BLE_ADV_ITVL;
     adv_params.itvl_max = BLE_ADV_ITVL;
 
-    rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, 
+    rc = ble_gap_adv_start(ble_own_addr_type, NULL,
                            BLE_ADVERTISING_DURATION_MS,
                            &adv_params, ble_gap_event, NULL);
     if (rc != 0) {
@@ -327,14 +370,21 @@ static const struct ble_gatt_svc_def ble_gatt_svcs[] = {
 // ============================================
 
 static void ble_on_sync(void) {
-    int rc = ble_hs_id_infer_auto(0, NULL);
+    /* Reihenfolge wie ESP-IDF bleprph: ensure_addr → id_infer_auto → advertise */
+    int rc = ble_hs_util_ensure_addr(0);  /* 0 = prefer public */
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_hs_util_ensure_addr fehlgeschlagen: %d", rc);
+        return;
+    }
+    rc = ble_hs_id_infer_auto(0, &ble_own_addr_type);
     if (rc != 0) {
         ESP_LOGE(TAG, "ble_hs_id_infer_auto fehlgeschlagen: %d", rc);
         return;
     }
 
     uint8_t addr[6];
-    rc = ble_hs_id_copy_addr(BLE_ADDR_PUBLIC, addr, NULL);
+    rc = ble_hs_id_copy_addr(ble_own_addr_type == BLE_OWN_ADDR_RANDOM ? BLE_ADDR_RANDOM : BLE_ADDR_PUBLIC,
+                             addr, NULL);
     if (rc == 0) {
         ESP_LOGI(TAG, "BLE Public Address: %02X:%02X:%02X:%02X:%02X:%02X",
                  addr[5], addr[4], addr[3], addr[2], addr[1], addr[0]);
@@ -374,30 +424,55 @@ bool transfer_ble_init(void) {
 
     int rc;
 
-    // NimBLE initialisieren
+    // [1] NimBLE Port initialisieren (inkl. Controller)
     rc = nimble_port_init();
     if (rc != ESP_OK) {
         ESP_LOGE(TAG, "nimble_port_init fehlgeschlagen: %d", rc);
         return false;
     }
+    ESP_LOGI(TAG, "→ nimble_port_init OK");
 
-    // GAP Device Name setzen
-    const char *hostname = transfer_ble_get_hostname();
-    rc = ble_svc_gap_device_name_set(hostname);
-    if (rc != 0) {
-        ESP_LOGW(TAG, "ble_svc_gap_device_name_set fehlgeschlagen: %d", rc);
+    /* BLE-Sendeleistung für Advertising (Node-RED/Scanner-Erkennbarkeit) */
+    esp_power_level_t pwr = (BLE_TX_POWER_DBM >= 20) ? ESP_PWR_LVL_P20 :
+                            (BLE_TX_POWER_DBM >= 18) ? ESP_PWR_LVL_P18 :
+                            (BLE_TX_POWER_DBM >= 15) ? ESP_PWR_LVL_P15 :
+                            (BLE_TX_POWER_DBM >= 12) ? ESP_PWR_LVL_P12 :
+                            (BLE_TX_POWER_DBM >= 9)  ? ESP_PWR_LVL_P9  :
+                            (BLE_TX_POWER_DBM >= 6)  ? ESP_PWR_LVL_P6  : ESP_PWR_LVL_P3;
+    esp_err_t pw = esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, pwr);
+    if (pw == ESP_OK) {
+        ESP_LOGI(TAG, "→ BLE TX Power (Advertising): %d dBm", BLE_TX_POWER_DBM);
+    } else {
+        ESP_LOGW(TAG, "esp_ble_tx_power_set(ADV) fehlgeschlagen: %s", esp_err_to_name(pw));
     }
-    ESP_LOGI(TAG, "→ Device Name: %s", hostname);
 
-    // Host-Callbacks
+    // [2] Host-Konfiguration (VOR Service-Registrierung)
     ble_hs_cfg.sync_cb = ble_on_sync;
     ble_hs_cfg.reset_cb = ble_on_reset;
 
-    // GAP und GATT Standard-Services registrieren
+    // Kein Bonding (ad-hoc); SM ist build-mäßig aktiv für GAP-Init
+    ble_hs_cfg.sm_bonding = 0;
+    ble_hs_cfg.sm_mitm = 0;
+    ble_hs_cfg.sm_sc = 0;
+    ble_hs_cfg.sm_our_key_dist = 0;
+    ble_hs_cfg.sm_their_key_dist = 0;
+
+#if CONFIG_BT_NIMBLE_NVS_PERSIST
+    // Referenz bleprph: Store-Layer initialisieren (NVS), damit GAP/Identity-Strukturen vollständig da sind
+    ble_store_config_init();
+#else
+    ble_hs_cfg.store_read_cb = ble_store_noop_read;
+    ble_hs_cfg.store_write_cb = ble_store_noop_write;
+    ble_hs_cfg.store_delete_cb = ble_store_noop_delete;
+    ble_hs_cfg.store_status_cb = ble_store_status_cb;
+#endif
+
+    // [3] Standard-Services registrieren (Reihenfolge wie Referenz bleprph)
     ble_svc_gap_init();
     ble_svc_gatt_init();
+    ESP_LOGI(TAG, "→ GAP/GATT init OK");
 
-    // Custom GATT-Services registrieren
+    // [4] Custom GATT-Services registrieren
     rc = ble_gatts_count_cfg(ble_gatt_svcs);
     if (rc != 0) {
         ESP_LOGE(TAG, "ble_gatts_count_cfg fehlgeschlagen: %d", rc);
@@ -408,8 +483,17 @@ bool transfer_ble_init(void) {
         ESP_LOGE(TAG, "ble_gatts_add_svcs fehlgeschlagen: %d", rc);
         return false;
     }
+    ESP_LOGI(TAG, "→ GATT Services registriert");
 
-    // Host Task starten
+    // [5] GAP Device Name setzen (NACH gap_init, wie im ESP-IDF Beispiel)
+    const char *hostname = transfer_ble_get_hostname();
+    rc = ble_svc_gap_device_name_set(hostname);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "ble_svc_gap_device_name_set fehlgeschlagen: %d", rc);
+    }
+    ESP_LOGI(TAG, "→ Device Name: %s", hostname);
+
+    // [6] Host Task starten
     nimble_port_freertos_init(ble_host_task);
 
     ble_initialized = true;
@@ -468,6 +552,13 @@ transfer_status_t transfer_ble_send_data(const transfer_data_t* data) {
     }
 
     ESP_LOGI(TAG, "→ Central verbunden (nach %lu ms)", (unsigned long)waited);
+
+    // Kurz warten, bis der Central Service Discovery und Subscription auf 0xFFF1 abgeschlossen hat.
+    // Ohne Verzögerung geht das Notify oft verloren (Node-RED: Missing → Disconnected, keine Daten).
+    if (BLE_NOTIFY_DELAY_MS > 0) {
+        ESP_LOGI(TAG, "→ Warte %d ms vor Notify (Central-Subscription)", BLE_NOTIFY_DELAY_MS);
+        vTaskDelay(pdMS_TO_TICKS(BLE_NOTIFY_DELAY_MS));
+    }
 
     // Notify senden (falls Central subscribed)
     if (ble_custom_data_val_handle != 0) {

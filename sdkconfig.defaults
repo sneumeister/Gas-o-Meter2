@@ -698,6 +698,16 @@ CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 CONFIG_BT_NIMBLE_NVS_PERSIST=y
 CONFIG_BT_NIMBLE_GAP_DEVICE_NAME_MAX_LEN=29
+
+# Security: aktiviert damit GAP-Strukturen initialisiert werden (vermeidet Crash bei "stop advertising").
+# Bonding/SC/Encryption aus: ad-hoc Verbindungen, kein IRK-Code (SM_SC=n).
+CONFIG_BT_NIMBLE_SECURITY_ENABLE=y
+CONFIG_BT_NIMBLE_SM_LEGACY=n
+CONFIG_BT_NIMBLE_SM_SC=n
+CONFIG_BT_NIMBLE_LL_CFG_FEAT_LE_ENCRYPTION=n
+
+# Host Task Stack (Default 4096 ist zu knapp)
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=6144
 # end of Bluetooth
 
 #

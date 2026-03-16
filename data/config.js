@@ -1475,10 +1475,26 @@ function blePairing() {
         return response.json();
     })
     .then(data => {
+        let count = 90;
+        const msg = 'Jetzt im Node-RED Config-Node das Gerät wählen.';
         if (statusSpan) {
-            statusSpan.innerHTML = '<span class="text-success">Advertising aktiv (90 s). Jetzt im Node-RED Config-Node das Gerät wählen.</span>';
+            statusSpan.innerHTML = '<span class="text-success">Advertising aktiv (' + count + ' s). ' + msg + '</span>';
         }
+        const countdownInterval = setInterval(function() {
+            count--;
+            if (statusSpan) {
+                statusSpan.innerHTML = '<span class="text-success">Advertising aktiv (' + count + ' s). ' + msg + '</span>';
+            }
+            if (count <= 0) {
+                clearInterval(countdownInterval);
+                updateBleStatus();
+                if (btn) btn.disabled = false;
+                if (statusSpan) statusSpan.innerHTML = '';
+            }
+        }, 1000);
+        /* Fallback: nach 95 s aufräumen, falls Countdown ausbleibt */
         setTimeout(function() {
+            clearInterval(countdownInterval);
             updateBleStatus();
             if (btn) btn.disabled = false;
             if (statusSpan) statusSpan.innerHTML = '';

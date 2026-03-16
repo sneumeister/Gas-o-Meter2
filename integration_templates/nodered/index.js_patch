@@ -1,0 +1,100 @@
+"use strict";
+
+var _noble = _interopRequireDefault(require("@abandonware/noble/lib/noble"));
+var _os = _interopRequireDefault(require("os"));
+
+function _interopRequireDefault(e) {
+  return e && e.__esModule ? e : { default: e };
+}
+
+/**
+ * @license
+ * Copyright (c) 2020 CANDY LINE INC.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+const debug = (0, _interopRequireDefault(require("debug")).default)(
+  "node-red-contrib-generic-ble:noble"
+);
+const platform = _os.default.platform();
+let bindings;
+
+debug(`Detected Platform => [${platform}]`);
+
+if (platform === "linux") {
+  bindings = require("./lib/bluez/bindings").default;
+}
+if (!bindings) {
+  debug(
+    "Loading the default resolve-bindings module in @abandonware/noble."
+  );
+  bindings = require("@abandonware/noble/lib/resolve-bindings")();
+}
+
+class PeripheralRemovableNoble extends _noble.default {
+  constructor(e) {
+    super(e);
+    e.on("miss", this.onMiss.bind(this));
+    e.on("error", this.onError.bind(this));
+  }
+
+  onMiss(e) {
+    // Patch: Guard gegen "indexOf is not a function" (v4.0.3)
+    if (!Array.isArray(this._discoveredPeripheralUUids)) {
+      this._discoveredPeripheralUUids = [];
+    }
+
+    if (
+      debug(`<onMiss:${e}> this.initialized => ${this.initialized}`),
+      this._peripherals[e]
+    ) {
+      const peripheral = this._peripherals[e];
+      if (
+        debug(`<onMiss:${e}> peripheral.state => ${peripheral.state}`),
+        peripheral.state === "connected"
+      ) {
+        return (
+          peripheral.once("disconnect", () => {
+            debug(
+              `<onMiss:${e}:peripheral:disconnect> peripheral disconnected.`
+            );
+            this.onMiss(e);
+          }),
+          void peripheral.disconnect()
+        );
+      }
+      delete this._peripherals[e];
+      delete this._services[e];
+      delete this._characteristics[e];
+      delete this._descriptors[e];
+      const idx = this._discoveredPeripheralUUids.indexOf(e);
+      if (idx >= 0) {
+        this._discoveredPeripheralUUids.splice(idx, 1);
+      }
+      debug(`Peripheral(uuid:${e}) has gone.`);
+      this.emit("miss", peripheral);
+    }
+  }
+
+  onError(e) {
+    if (e.type === "org.freedesktop.DBus.Error.AccessDenied") {
+      this.initialized = false;
+    }
+    this.emit("error", e);
+  }
+}
+
+module.exports = new PeripheralRemovableNoble(bindings);
+
+//# sourceMappingURL=index.js.map

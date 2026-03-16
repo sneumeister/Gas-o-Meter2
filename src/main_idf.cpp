@@ -3275,16 +3275,27 @@ static esp_err_t ble_status_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+/* Einmal-Task: BLE-Pairing im Hintergrund, damit der HTTP-Handler sofort antwortet
+   (transfer_ble_init() blockiert sonst mehrere Sekunden → Browser NetworkError). */
+static void ble_pairing_task(void *pv) {
+    (void)pv;
+    transfer_ble_start_pairing();
+    vTaskDelete(NULL);
+}
+
 static esp_err_t ble_pairing_handler(httpd_req_t *req) {
     last_web_activity_us = esp_timer_get_time();
     httpd_resp_set_type(req, "application/json");
-    
-    if (transfer_ble_start_pairing()) {
-        httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"BLE Advertising gestartet (90 s)\"}", HTTPD_RESP_USE_STRLEN);
-    } else {
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"BLE Advertising konnte nicht gestartet werden\"}", HTTPD_RESP_USE_STRLEN);
+
+    BaseType_t created = xTaskCreate(ble_pairing_task, "ble_pair", 4096, NULL, 5, NULL);
+    if (created != pdPASS) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"BLE-Task konnte nicht gestartet werden\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
     }
+    /* Sofort 202 zurückgeben; BLE-Init/Advertising läuft im Hintergrund */
+    httpd_resp_set_status(req, "202 Accepted");
+    httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"BLE Advertising gestartet (90 s)\"}", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 

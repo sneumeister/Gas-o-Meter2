@@ -1,86 +1,211 @@
 [
     {
-        "id": "gas-o-meter2-ble-flow",
+        "id": "e1ad6b94a5c9cb11",
         "type": "tab",
         "label": "Gas-O-Meter2 BLE",
         "disabled": false,
-        "info": "BLE Flow für Gas-O-Meter2 (node-red-contrib-generic-ble, BlueZ D-Bus).\n\n**Ersteinrichtung (Pairing):**\n1. ESP32C6: config.html öffnen → Transfer-Modus 'BLE' → 'BLE Pairing starten' klicken\n2. Node-RED: Generic BLE Config öffnen (Stift-Icon) → BLE Scanning aktivieren\n3. Gas-O-Meter2 im Dropdown wählen → Apply → Done → Deploy\n4. MAC wird gespeichert – danach automatische Verbindung bei jedem Wake-up\n\n**Voraussetzungen:**\n- node-red-contrib-generic-ble\n- bluetoothd muss laufen\n- Node-RED-User in Gruppe bluetooth\n\nSiehe integration_templates/nodered/README.md für Details.",
+        "info": "BLE Flow für Gas-O-Meter2 (node-red-contrib-generic-ble, BlueZ D-Bus).\n\n**Datenempfang:** Beim Deploy startet einmal „BLE Scanning starten“ (scanStart) → Scanning läuft. Inject alle 2 s triggert Connect + Subscribe nur wenn Gerät sichtbar (Status ≠ missing), sonst keine „Not yet connected“-Logs.\n\n**Zeitsync:** Bei jedem Notify wird die aktuelle UTC-Zeit per Write auf 0x2A2B (Current Time) an den ESP32 gesendet.\n\n**Ersteinrichtung (Pairing):**\n1. ESP32C6: config.html → 'BLE Pairing starten'\n2. Node-RED: Generic BLE Config → BLE Scanning → Gas-O-Meter2 wählen → Apply → Done → Deploy\n3. MAC gespeichert – danach automatische Verbindung bei jedem Wake-up\n\n**Voraussetzungen:** node-red-contrib-generic-ble, bluetoothd, Node-RED-User in Gruppe bluetooth.\n\nSiehe integration_templates/nodered/README.md.",
         "env": []
     },
     {
-        "id": "inject-connect",
+        "id": "a0b0c0d0e0f00001",
         "type": "inject",
-        "z": "gas-o-meter2-ble-flow",
-        "name": "Connect & Read",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "BLE Scanning starten (einmal)",
         "props": [
             {
                 "p": "topic",
-                "v": "connect",
+                "v": "scanStart",
                 "vt": "str"
             }
         ],
-        "repeat": "30",
+        "repeat": "",
         "crontab": "",
         "once": true,
-        "onceDelay": 2,
-        "x": 130,
-        "y": 80,
-        "wires": [
-            [
-                "ble-connect-then-read"
-            ]
-        ]
-    },
-    {
-        "id": "ble-connect-then-read",
-        "type": "function",
-        "z": "gas-o-meter2-ble-flow",
-        "name": "Connect, dann Read nach 10s",
-        "func": "// 1. Connect sofort senden\nnode.send([{topic: \"connect\", payload: \"\"}, null]);\n// 2. Read nach 10s (warten auf Verbindung)\nsetTimeout(function() {\n    node.send([null, {topic: \"fff1\", payload: \"\"}]);\n}, 10000);",
-        "outputs": 2,
-        "noerr": 0,
-        "x": 390,
-        "y": 80,
-        "wires": [
-            [
-                "generic-ble-out"
-            ],
-            [
-                "generic-ble-in"
-            ]
-        ]
-    },
-    {
-        "id": "generic-ble-out",
-        "type": "Generic BLE out",
-        "z": "gas-o-meter2-ble-flow",
-        "name": "BLE Connect",
-        "genericBle": "fb56ea1418d21af9",
-        "x": 650,
+        "onceDelay": 0.5,
+        "topic": "scanStart",
+        "x": 150,
         "y": 40,
-        "wires": []
+        "wires": [
+            [
+                "47168c72c063c625"
+            ]
+        ]
     },
     {
-        "id": "generic-ble-in",
-        "type": "Generic BLE in",
-        "z": "gas-o-meter2-ble-flow",
-        "name": "BLE Read",
-        "genericBle": "fb56ea1418d21af9",
-        "useString": false,
-        "notification": false,
-        "x": 650,
+        "id": "b0e0f0a0c0d0e0f0",
+        "type": "inject",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "BLE Notify Trigger (alle 2 s)",
+        "props": [
+            {
+                "p": "topic",
+                "v": "fff1",
+                "vt": "str"
+            },
+            {
+                "p": "payload",
+                "v": "{\"notify\":true}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "2",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.5,
+        "topic": "fff1",
+        "payload": "{\"notify\":true}",
+        "payloadType": "json",
+        "x": 140,
         "y": 100,
         "wires": [
             [
-                "data-parser",
-                "debug-raw"
+                "ble-trigger-only-when-visible"
             ]
         ]
     },
     {
-        "id": "inject-mock",
+        "id": "ble-trigger-only-when-visible",
+        "type": "function",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "Nur bei sichtbarem Gerät triggern",
+        "func": "// Bei sichtbarem Gerät: Connect auslösen wenn nicht verbunden, Subscribe nur wenn connected → weniger \"Not yet connected\".\nvar status = flow.get('bleNotifyStatus') || '';\nif (!status || status === 'generic-ble.status.missing') return null;\nif (status === 'generic-ble.status.connected') {\n    return msg;\n}\nreturn { topic: 'connect', payload: {} };",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 320,
+        "y": 160,
+        "wires": [
+            [
+                "47168c72c063c625"
+            ]
+        ]
+    },
+    {
+        "id": "status-ble-notify",
+        "type": "status",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "BLE-Status",
+        "scope": [
+            "47168c72c063c625"
+        ],
+        "x": 70,
+        "y": 220,
+        "wires": [
+            [
+                "ble-status-store"
+            ]
+        ]
+    },
+    {
+        "id": "ble-status-store",
+        "type": "function",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "BLE-Status speichern",
+        "func": "var t = (msg.status && msg.status.text) ? String(msg.status.text) : '';\nflow.set('bleNotifyStatus', t);\nreturn null;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 300,
+        "y": 220,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "47168c72c063c625",
+        "type": "Generic BLE in",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "BLE Notify (0xFFF1)",
+        "genericBle": "6fb805cae803ac05",
+        "useString": true,
+        "notification": true,
+        "x": 540,
+        "y": 60,
+        "wires": [
+            [
+                "c3d4e5f600020102"
+            ]
+        ]
+    },
+    {
+        "id": "c3d4e5f600020102",
+        "type": "function",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "On Notify (0xFFF1)",
+        "func": "// Nur bei Notify 0xFFF1: Nachricht zwischenspeichern, Read 0x2A26 anfordern.\nconst pl = typeof msg.payload === 'string' ? JSON.parse(msg.payload) : (msg.payload || {});\nconst ch = pl.characteristics || {};\nif (ch.fff1 === undefined) return null;\nflow.set('lastNotifyMsg', msg);\nreturn { topic: '2a26', payload: {} };",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 750,
+        "y": 60,
+        "wires": [
+            [
+                "b2c3d4e5f6000201"
+            ]
+        ]
+    },
+    {
+        "id": "b2c3d4e5f6000201",
+        "type": "Generic BLE in",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "BLE Read (0x2A26)",
+        "genericBle": "6fb805cae803ac05",
+        "useString": true,
+        "notification": false,
+        "x": 660,
+        "y": 160,
+        "wires": [
+            [
+                "d4e5f60002010203"
+            ]
+        ]
+    },
+    {
+        "id": "d4e5f60002010203",
+        "type": "function",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "On Read Result (0x2A26)",
+        "func": "// Nur bei Read-Resultat 0x2A26: Firmware an gespeicherte Notify-Nachricht anhängen, an Parse/CTS/Raw weiterreichen.\nconst pl = typeof msg.payload === 'string' ? JSON.parse(msg.payload) : (msg.payload || {});\nconst ch = pl.characteristics || {};\nif (ch['2a26'] === undefined) return null;\nlet fw = ch['2a26'];\nif (Buffer.isBuffer(fw)) fw = fw.toString('utf8').trim();\nelse if (fw && fw.type === 'Buffer' && Array.isArray(fw.data)) fw = Buffer.from(fw.data).toString('utf8').trim();\nelse if (typeof fw !== 'string') fw = 'unknown';\nconst last = flow.get('lastNotifyMsg');\nflow.set('lastNotifyMsg', null);\nif (!last) return null;\nlast.firmware = fw;\nreturn last;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 810,
+        "y": 220,
+        "wires": [
+            [
+                "48548b727982ed5f",
+                "633402b8dc849099",
+                "aa7fbbc73a86a759"
+            ]
+        ]
+    },
+    {
+        "id": "aa7fbbc73a86a759",
+        "type": "function",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "CTS Write (Zeit-Sync)",
+        "func": "// Current Time 0x2A2B: Exact Time 256 (10 Bytes UTC) → ESP32 time_sync_set_hard()\n// Wird nur bei echtem BLE-Notify ausgeführt (nicht bei BLE Mock).\nconst now = new Date();\nconst buf = Buffer.alloc(10);\nbuf.writeUInt16LE(now.getUTCFullYear(), 0);\nbuf[2] = now.getUTCMonth() + 1;\nbuf[3] = now.getUTCDate();\nbuf[4] = now.getUTCHours();\nbuf[5] = now.getUTCMinutes();\nbuf[6] = now.getUTCSeconds();\nbuf[7] = (now.getUTCDay() === 0) ? 7 : now.getUTCDay();\nbuf[8] = 0;\nbuf[9] = 0;\n// Generic-ble erwartet Key = Characteristic-UUID wie im Config (kurz: 2a2b)\nmsg.payload = { '2a2b': buf.toString('hex') };\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 1020,
+        "y": 140,
+        "wires": [
+            [
+                "81956e7e52c59929"
+            ]
+        ]
+    },
+    {
+        "id": "81956e7e52c59929",
+        "type": "Generic BLE out",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "BLE Zeit schreiben (0x2A2B)",
+        "genericBle": "6fb805cae803ac05",
+        "x": 1280,
+        "y": 140,
+        "wires": []
+    },
+    {
+        "id": "4f4c4c717becacd9",
         "type": "inject",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "BLE Mock (Test)",
         "props": [
             {
@@ -94,19 +219,37 @@
         "topic": "",
         "payload": "{\"p\":12345,\"bv\":3910,\"bp\":85,\"bl\":0}",
         "payloadType": "str",
-        "x": 120,
-        "y": 200,
+        "x": 100,
+        "y": 520,
         "wires": [
             [
-                "data-parser"
+                "48548b727982ed5f",
+                "3050693931b94a90"
             ]
         ],
         "info": "Test ohne BLE-Hardware: Sendet Mock-Daten direkt an den Data Parser.\nManuell auslösen (kein Auto-Repeat).\nFormat entspricht Custom Characteristic 0xFFF1."
     },
     {
-        "id": "debug-raw",
+        "id": "3050693931b94a90",
         "type": "debug",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "Mock-Inject Ausgabe",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 480,
+        "y": 520,
+        "wires": []
+    },
+    {
+        "id": "633402b8dc849099",
+        "type": "debug",
+        "z": "e1ad6b94a5c9cb11",
         "name": "Raw BLE",
         "active": false,
         "tosidebar": true,
@@ -116,36 +259,86 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 1040,
-        "y": 100,
+        "x": 1300,
+        "y": 200,
         "wires": []
     },
     {
-        "id": "data-parser",
+        "id": "48548b727982ed5f",
         "type": "function",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "Parse BLE Data",
-        "func": "// Parse Gas-O-Meter2 Custom Characteristic 0xFFF1\n// Format: {\"p\":12345,\"bv\":3910,\"bp\":85,\"bl\":0}\n\nlet data = {};\n\ntry {\n    let raw = msg.payload;\n    if (typeof raw === 'object' && raw.fff1) {\n        raw = raw.fff1;\n    }\n    if (Buffer.isBuffer(raw)) {\n        raw = raw.toString('utf8');\n    }\n    if (typeof raw === 'string') {\n        data = JSON.parse(raw);\n    } else if (typeof raw === 'object' && raw !== null && !Buffer.isBuffer(raw)) {\n        data = raw;\n    }\n    \n    msg.payload = {\n        gas_counter: data.p || 0,\n        gas_m3: (data.p || 0) / 100,\n        battery: data.bp || 0,\n        battery_voltage_mv: data.bv || 0,\n        battery_low: (data.bl || 0) === 1,\n        firmware_version: msg.firmware || 'unknown',\n        timestamp: new Date().toISOString()\n    };\n    \n    return msg;\n} catch (error) {\n    node.error('Parse Error: ' + error.message, msg);\n    return null;\n}",
+        "func": "// Parse Gas-O-Meter2 Custom Characteristic 0xFFF1 → Format wie Zigbee2MQTT\n// Zigbee: gas (m³), battery, battery_voltage (mV), battery_low; BLE zusätzlich: firmware_version, timestamp\n// Rohformat: {\"p\":12345,\"bv\":3910,\"bp\":85,\"bl\":0}\n\nlet data = {};\n\ntry {\n    let raw = msg.payload;\n    if (typeof raw === 'object' && raw.characteristics && raw.characteristics.fff1) {\n        raw = raw.characteristics.fff1;\n    } else if (typeof raw === 'object' && raw.fff1) {\n        raw = raw.fff1;\n    }\n    if (raw && typeof raw === 'object' && raw.type === 'Buffer' && Array.isArray(raw.data)) {\n        raw = Buffer.from(raw.data).toString('utf8');\n    }\n    if (Buffer.isBuffer(raw)) {\n        raw = raw.toString('utf8');\n    }\n    if (typeof raw === 'string') {\n        data = JSON.parse(raw);\n        // Generic BLE in (useString: true): Nutzdaten in characteristics.fff1 (Buffer)\n        if (data && data.characteristics && data.characteristics.fff1) {\n            const fff1 = data.characteristics.fff1;\n            if (fff1.type === 'Buffer' && Array.isArray(fff1.data)) {\n                data = JSON.parse(Buffer.from(fff1.data).toString('utf8'));\n            } else if (Buffer.isBuffer(fff1)) {\n                data = JSON.parse(fff1.toString('utf8'));\n            }\n        }\n    } else if (typeof raw === 'object' && raw !== null && !Buffer.isBuffer(raw)) {\n        data = raw;\n    }\n    \n    const p = data.p || 0;\n    const bv = data.bv || 0;\n    const bp = data.bp || 0;\n    // Null-Abfrage: periodische BLE-Reads (z. B. alle 2 s) liefern oft 0/0/0 – nicht weitergeben\n    if (p === 0 && bv === 0 && bp === 0) {\n        return null;\n    }\n    \n    const gasM3 = p / 100;\n    msg.payload = {\n        gas: gasM3,\n        battery: bp,\n        battery_voltage: bv,\n        battery_low: (data.bl || 0) === 1,\n        firmware_version: msg.firmware || 'unknown',\n        timestamp: new Date().toISOString()\n    };\n    \n    return msg;\n} catch (error) {\n    node.error('Parse Error: ' + error.message, msg);\n    return null;\n}",
         "outputs": 1,
         "noerr": 0,
-        "x": 640,
-        "y": 200,
+        "x": 780,
+        "y": 380,
         "wires": [
             [
-                "debug-parsed",
-                "mqtt-publisher",
-                "database-writer",
-                "to-gas-gauge",
-                "to-battery-gauge"
+                "e73e0b81c7963fdb",
+                "d6218f2f244a3a20",
+                "a3caebcd970d92c8",
+                "585f25ae91980517",
+                "2a7ad3ae739f1578",
+                "71d52aa0cbb3ae41"
             ]
         ]
     },
     {
-        "id": "debug-parsed",
+        "id": "71d52aa0cbb3ae41",
+        "type": "function",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "Einzeltopics für MQTT",
+        "func": "// Pro Feld eine eigene Ausgabe → MQTT Out wird 6x einzeln aufgerufen (vermeidet \"nur 1 Topic\"-Problem)\nconst base = 'gas-o-meter2';\nconst p = msg.payload;\nif (typeof p !== 'object' || p === null) return null;\nconst str = (v) => (typeof v === 'object' ? JSON.stringify(v) : String(v));\nnode.send([\n  [{ topic: base + '/gas', payload: str(p.gas) }],\n  [{ topic: base + '/battery', payload: str(p.battery) }],\n  [{ topic: base + '/battery_voltage', payload: str(p.battery_voltage) }],\n  [{ topic: base + '/battery_low', payload: str(p.battery_low) }],\n  [{ topic: base + '/firmware_version', payload: str(p.firmware_version) }],\n  [{ topic: base + '/timestamp', payload: str(p.timestamp) }]\n]);\nreturn null;",
+        "outputs": 6,
+        "noerr": 0,
+        "x": 1060,
+        "y": 380,
+        "wires": [
+            [
+                "a9e15c007a820242"
+            ],
+            [
+                "a9e15c007a820242"
+            ],
+            [
+                "a9e15c007a820242"
+            ],
+            [
+                "a9e15c007a820242"
+            ],
+            [
+                "a9e15c007a820242"
+            ],
+            [
+                "a9e15c007a820242"
+            ]
+        ]
+    },
+    {
+        "id": "a9e15c007a820242",
+        "type": "mqtt out",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "MQTT Einzeltopics",
+        "topic": "",
+        "qos": "1",
+        "retain": "true",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "ba7b128702f022b0",
+        "x": 1270,
+        "y": 380,
+        "wires": []
+    },
+    {
+        "id": "e73e0b81c7963fdb",
         "type": "debug",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "Parsed Data",
-        "active": false,
+        "active": true,
         "tosidebar": true,
         "console": false,
         "tostatus": false,
@@ -153,14 +346,14 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 1030,
-        "y": 160,
+        "x": 1290,
+        "y": 240,
         "wires": []
     },
     {
-        "id": "mqtt-publisher",
+        "id": "d6218f2f244a3a20",
         "type": "mqtt out",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "MQTT Publisher",
         "topic": "gas-o-meter2/data",
         "qos": "1",
@@ -170,36 +363,36 @@
         "userProps": "",
         "correl": "",
         "expiry": "",
-        "broker": "",
-        "x": 1040,
-        "y": 200,
+        "broker": "ba7b128702f022b0",
+        "x": 1300,
+        "y": 300,
         "wires": []
     },
     {
-        "id": "database-writer",
+        "id": "a3caebcd970d92c8",
         "type": "function",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "Database Writer",
         "func": "// Optional: Datenbank-Integration\n// TODO: node-red-node-sqlite oder node-red-contrib-influxdb\nreturn msg;",
         "outputs": 1,
         "noerr": 0,
-        "x": 1040,
-        "y": 260,
+        "x": 1280,
+        "y": 440,
         "wires": [
             []
         ]
     },
     {
-        "id": "to-gas-gauge",
+        "id": "585f25ae91980517",
         "type": "change",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "Gas → Gauge",
         "rules": [
             {
                 "t": "set",
                 "p": "payload",
                 "pt": "msg",
-                "to": "payload.gas_m3",
+                "to": "payload.gas",
                 "tot": "msg"
             }
         ],
@@ -208,18 +401,18 @@
         "from": "",
         "to": "",
         "reg": false,
-        "x": 880,
-        "y": 320,
+        "x": 1040,
+        "y": 500,
         "wires": [
             [
-                "dashboard-gauge"
+                "4c5ccbb40631cae6"
             ]
         ]
     },
     {
-        "id": "to-battery-gauge",
+        "id": "2a7ad3ae739f1578",
         "type": "change",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "Battery → Gauge",
         "rules": [
             {
@@ -235,20 +428,20 @@
         "from": "",
         "to": "",
         "reg": false,
-        "x": 870,
-        "y": 360,
+        "x": 1030,
+        "y": 560,
         "wires": [
             [
-                "dashboard-battery"
+                "5c62d20cde662394"
             ]
         ]
     },
     {
-        "id": "dashboard-gauge",
+        "id": "4c5ccbb40631cae6",
         "type": "ui_gauge",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "Gas Counter",
-        "group": "dashboard-group",
+        "group": "429fb95b212dc818",
         "order": 1,
         "width": 0,
         "height": 0,
@@ -265,16 +458,16 @@
         ],
         "seg1": "",
         "seg2": "",
-        "x": 1050,
-        "y": 320,
+        "x": 1290,
+        "y": 500,
         "wires": []
     },
     {
-        "id": "dashboard-battery",
+        "id": "5c62d20cde662394",
         "type": "ui_gauge",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "Battery",
-        "group": "dashboard-group",
+        "group": "429fb95b212dc818",
         "order": 2,
         "width": 0,
         "height": 0,
@@ -291,14 +484,14 @@
         ],
         "seg1": "",
         "seg2": "",
-        "x": 1060,
-        "y": 360,
+        "x": 1300,
+        "y": 560,
         "wires": []
     },
     {
-        "id": "ha-discovery-on",
+        "id": "41b57a5c0d8c4fae",
         "type": "inject",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "HA Discovery AN",
         "props": [
             {
@@ -311,18 +504,18 @@
         "crontab": "",
         "once": false,
         "onceDelay": 0,
-        "x": 140,
-        "y": 440,
+        "x": 120,
+        "y": 640,
         "wires": [
             [
-                "ha-discovery-config"
+                "4b4c7903cc982446"
             ]
         ]
     },
     {
-        "id": "ha-discovery-off",
+        "id": "124f91a6acd62da9",
         "type": "inject",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "HA Discovery AUS",
         "props": [
             {
@@ -335,35 +528,35 @@
         "crontab": "",
         "once": false,
         "onceDelay": 0,
-        "x": 140,
-        "y": 490,
+        "x": 130,
+        "y": 700,
         "wires": [
             [
-                "ha-discovery-config"
+                "4b4c7903cc982446"
             ]
         ]
     },
     {
-        "id": "ha-discovery-config",
+        "id": "4b4c7903cc982446",
         "type": "function",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "HA Discovery Config",
-        "func": "var enable = msg.payload;\nvar stateTopic = 'gas-o-meter2/data';\nvar device = {\n    identifiers: ['gas_o_meter2'],\n    name: 'Gas-O-Meter2',\n    manufacturer: 'Custom',\n    model: 'Gas-O-Meter2 BLE'\n};\n\nvar configs = [\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_gas/config',\n        payload: {\n            name: 'Gas Counter',\n            unique_id: 'gas_o_meter2_gas',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.gas_m3 }}',\n            unit_of_measurement: 'm\\u00b3',\n            device_class: 'gas',\n            state_class: 'total_increasing',\n            icon: 'mdi:meter-gas',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_battery/config',\n        payload: {\n            name: 'Battery',\n            unique_id: 'gas_o_meter2_battery',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.battery }}',\n            unit_of_measurement: '%',\n            device_class: 'battery',\n            state_class: 'measurement',\n            icon: 'mdi:battery',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_voltage/config',\n        payload: {\n            name: 'Battery Voltage',\n            unique_id: 'gas_o_meter2_voltage',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.battery_voltage_mv }}',\n            unit_of_measurement: 'mV',\n            device_class: 'voltage',\n            state_class: 'measurement',\n            icon: 'mdi:flash',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/binary_sensor/gas_o_meter2_battery_low/config',\n        payload: {\n            name: 'Battery Low',\n            unique_id: 'gas_o_meter2_battery_low',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.battery_low }}',\n            payload_on: true,\n            payload_off: false,\n            device_class: 'battery',\n            icon: 'mdi:battery-alert',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_firmware/config',\n        payload: {\n            name: 'Firmware',\n            unique_id: 'gas_o_meter2_firmware',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.firmware_version }}',\n            icon: 'mdi:information',\n            entity_category: 'diagnostic',\n            device: device\n        }\n    }\n];\n\nfor (var i = 0; i < configs.length; i++) {\n    var out = {\n        topic: configs[i].topic,\n        payload: enable ? JSON.stringify(configs[i].payload) : '',\n        retain: true\n    };\n    node.send(out);\n}\n\nnode.status({text: enable ? 'AN (' + configs.length + ' Entities)' : 'AUS (entfernt)'});\nreturn null;",
+        "func": "var enable = msg.payload;\nvar stateTopic = 'gas-o-meter2/data';\nvar device = {\n    identifiers: ['gas_o_meter2'],\n    name: 'Gas-O-Meter2',\n    manufacturer: 'Custom',\n    model: 'Gas-O-Meter2 BLE'\n};\n\nvar configs = [\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_gas/config',\n        payload: {\n            name: 'Gas Counter',\n            unique_id: 'gas_o_meter2_gas',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.gas }}',\n            unit_of_measurement: 'm\\u00b3',\n            device_class: 'gas',\n            state_class: 'total_increasing',\n            icon: 'mdi:meter-gas',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_battery/config',\n        payload: {\n            name: 'Battery',\n            unique_id: 'gas_o_meter2_battery',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.battery }}',\n            unit_of_measurement: '%',\n            device_class: 'battery',\n            state_class: 'measurement',\n            icon: 'mdi:battery',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_voltage/config',\n        payload: {\n            name: 'Battery Voltage',\n            unique_id: 'gas_o_meter2_voltage',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.battery_voltage }}',\n            unit_of_measurement: 'mV',\n            device_class: 'voltage',\n            state_class: 'measurement',\n            icon: 'mdi:flash',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/binary_sensor/gas_o_meter2_battery_low/config',\n        payload: {\n            name: 'Battery Low',\n            unique_id: 'gas_o_meter2_battery_low',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.battery_low }}',\n            payload_on: true,\n            payload_off: false,\n            device_class: 'battery',\n            icon: 'mdi:battery-alert',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_firmware/config',\n        payload: {\n            name: 'Firmware',\n            unique_id: 'gas_o_meter2_firmware',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.firmware_version }}',\n            icon: 'mdi:information',\n            entity_category: 'diagnostic',\n            device: device\n        }\n    }\n];\n\nvar messages = [];\nfor (var i = 0; i < configs.length; i++) {\n    messages.push({\n        topic: configs[i].topic,\n        payload: enable ? JSON.stringify(configs[i].payload) : '',\n        retain: true\n    });\n}\nnode.status({text: enable ? 'AN (' + configs.length + ' Entities)' : 'AUS (entfernt)'});\nreturn [messages];",
         "outputs": 1,
         "noerr": 0,
-        "x": 620,
-        "y": 460,
+        "x": 420,
+        "y": 660,
         "wires": [
             [
-                "ha-discovery-mqtt",
-                "debug-ha-discovery"
+                "5c617f5b3f06ab91",
+                "c277aa39dd00d2d2"
             ]
         ]
     },
     {
-        "id": "ha-discovery-mqtt",
+        "id": "5c617f5b3f06ab91",
         "type": "mqtt out",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "HA Discovery",
         "topic": "",
         "qos": "1",
@@ -373,15 +566,15 @@
         "userProps": "",
         "correl": "",
         "expiry": "",
-        "broker": "",
-        "x": 1040,
-        "y": 440,
+        "broker": "ba7b128702f022b0",
+        "x": 1280,
+        "y": 640,
         "wires": []
     },
     {
-        "id": "debug-ha-discovery",
+        "id": "c277aa39dd00d2d2",
         "type": "debug",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "HA Discovery Debug",
         "active": true,
         "tosidebar": true,
@@ -391,32 +584,59 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 1000,
-        "y": 500,
+        "x": 1260,
+        "y": 700,
         "wires": []
     },
     {
-        "id": "fb56ea1418d21af9",
+        "id": "6fb805cae803ac05",
         "type": "Generic BLE",
-        "localName": "Gas-O-Meter2",
-        "address": "",
-        "uuid": "",
+        "localName": "gas-o-meter2",
+        "address": "98:a3:16:8f:d9:aa",
+        "uuid": "98a3168fd9aa",
         "characteristics": [
             {
-                "uuid": "fff1",
-                "name": "Custom Data",
-                "type": "(Custom Type)",
-                "notifiable": true,
+                "uuid": "2a01",
+                "name": "Appearance",
+                "type": "org.bluetooth.characteristic.gap.appearance",
+                "notifiable": false,
                 "readable": true,
                 "writable": false,
                 "writeWithoutResponse": false
             },
             {
-                "uuid": "2a26",
-                "name": "Firmware Revision",
-                "type": "org.bluetooth.characteristic.firmware_revision_string",
+                "uuid": "2a00",
+                "name": "Device Name",
+                "type": "org.bluetooth.characteristic.gap.device_name",
                 "notifiable": false,
                 "readable": true,
+                "writable": false,
+                "writeWithoutResponse": false
+            },
+            {
+                "uuid": "2b29",
+                "name": "<Unnamed>",
+                "type": "(Custom Type)",
+                "notifiable": false,
+                "readable": true,
+                "writable": true,
+                "writeWithoutResponse": false
+            },
+            {
+                "uuid": "2b3a",
+                "name": "<Unnamed>",
+                "type": "(Custom Type)",
+                "notifiable": false,
+                "readable": true,
+                "writable": false,
+                "writeWithoutResponse": false
+            },
+            {
+                "uuid": "2a05",
+                "name": "Service Changed",
+                "type": "org.bluetooth.characteristic.gatt.service_changed",
+                "notifiable": false,
+                "readable": false,
                 "writable": false,
                 "writeWithoutResponse": false
             },
@@ -428,24 +648,73 @@
                 "readable": true,
                 "writable": true,
                 "writeWithoutResponse": false
+            },
+            {
+                "uuid": "2a26",
+                "name": "Firmware Revision String",
+                "type": "org.bluetooth.characteristic.firmware_revision_string",
+                "notifiable": false,
+                "readable": true,
+                "writable": false,
+                "writeWithoutResponse": false
+            },
+            {
+                "uuid": "fff1",
+                "name": "<Unnamed>",
+                "type": "(Custom Type)",
+                "notifiable": true,
+                "readable": true,
+                "writable": false,
+                "writeWithoutResponse": false
             }
         ]
     },
     {
-        "id": "dashboard-group",
+        "id": "ba7b128702f022b0",
+        "type": "mqtt-broker",
+        "name": "debian-test",
+        "broker": "debian-test",
+        "port": 1883,
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": 4,
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "429fb95b212dc818",
         "type": "ui_group",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "Gas-O-Meter2",
-        "tab": "dashboard-tab",
+        "tab": "fe2215d6ce594b5a",
         "order": 1,
         "disp": true,
         "width": "6",
         "collapse": false
     },
     {
-        "id": "dashboard-tab",
+        "id": "fe2215d6ce594b5a",
         "type": "ui_tab",
-        "z": "gas-o-meter2-ble-flow",
+        "z": "e1ad6b94a5c9cb11",
         "name": "Gas-O-Meter2",
         "icon": "dashboard",
         "order": 1,
@@ -453,7 +722,7 @@
         "hidden": false
     },
     {
-        "id": "efc3a5718f7305a9",
+        "id": "587382cde69daf51",
         "type": "global-config",
         "env": [],
         "modules": {

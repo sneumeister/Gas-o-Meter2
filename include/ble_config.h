@@ -39,6 +39,11 @@
 // Nach Ablauf: BLE deinit, Deep-Sleep
 #define BLE_SESSION_TIMEOUT_MS          180000
 
+// Verzögerung nach Connect, bevor das erste Notify (0xFFF1) gesendet wird.
+// Gibt dem Central (z. B. Node-RED generic-ble) Zeit für Service Discovery und
+// Subscription auf die Characteristic – sonst geht das Notify oft verloren (Missing → Disconnected, keine Daten).
+#define BLE_NOTIFY_DELAY_MS             3000
+
 // Advertising-Intervall (beeinflusst Scan-Erkennbarkeit und Stromverbrauch)
 // NimBLE erwartet den Wert in 0.625ms Einheiten: 100ms / 0.625 = 160
 #define BLE_ADVERTISING_INTERVAL_MS     100
@@ -48,9 +53,9 @@
 // TX Power
 // ============================================
 
-// NimBLE setzt TX Power über ble_phy_txpwr_set/ble_phy_txpwr_get
-// Default-Wert in dBm (ESP32-C6 Bereich: -24 .. +21 dBm)
-#define BLE_TX_POWER_DBM                9
+// BLE-Sendeleistung für Advertising (ESP-IDF: esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, …))
+// Höchster Wert über API: +20 dBm (ESP_PWR_LVL_P20). ESP32-C6 Chipbereich: -24 .. +21 dBm.
+#define BLE_TX_POWER_DBM                20
 #define BLE_TX_POWER_STABILIZE_MS       50
 
 // ============================================
