@@ -780,6 +780,10 @@ function saveConfig() {
                     successAlert.appendChild(warningDiv);
                 }
             }
+
+            // Nach Save: keine Parameter-Sektionen mehr bis zum Neuladen (Verwechslung vermeiden)
+            configJustSaved = true;
+            toggleTransferConfig();
         } else {
             throw new Error(data.message || 'Unbekannter Fehler');
         }
@@ -1134,28 +1138,46 @@ function showRebootProgress(hostnameChanged, wifiChanged, newHostname) {
     setTimeout(tryReload, initialCountdown * 1000);
 }
 
-// Transfer-Konfiguration: Zeigt/versteckt ZigBee/BLE-Sections basierend auf transfer_mode
+// Transfer-Konfiguration: Sektion nur für den beim Laden gespeicherten Modus;
+// nach Dropdown-Änderung (ohne Save) keine Parameter-Sektion; nach Save beide aus.
+var savedTransferMode = '';   // beim DOMContentLoaded = Dropdown-Wert (gespeicherter Modus)
+var configJustSaved = false;  // nach erfolgreichem Save true → beide Sektionen aus bis Reload
+
 function toggleTransferConfig() {
     const transferMode = document.getElementById('transfer_mode').value;
     const zigbeeSection = document.getElementById('zigbeeConfigSection');
     const bleSection = document.getElementById('bleConfigSection');
-    
-    if (transferMode === 'zigbee') {
-        zigbeeSection.style.display = 'block';
-    } else {
-        zigbeeSection.style.display = 'none';
+
+    function hideZigbee() {
+        if (zigbeeSection) zigbeeSection.style.display = 'none';
         const collapse = document.getElementById('zigbeeConfigCollapse');
         if (collapse) collapse.style.display = 'none';
     }
+    function hideBle() {
+        if (bleSection) bleSection.style.display = 'none';
+        const collapse = document.getElementById('bleConfigCollapse');
+        if (collapse) collapse.style.display = 'none';
+    }
 
-    if (bleSection) {
-        if (transferMode === 'ble') {
+    if (configJustSaved) {
+        hideZigbee();
+        hideBle();
+        return;
+    }
+    if (transferMode === savedTransferMode) {
+        if (transferMode === 'zigbee') {
+            zigbeeSection.style.display = 'block';
+            hideBle();
+        } else if (transferMode === 'ble' && bleSection) {
             bleSection.style.display = 'block';
+            hideZigbee();
         } else {
-            bleSection.style.display = 'none';
-            const collapse = document.getElementById('bleConfigCollapse');
-            if (collapse) collapse.style.display = 'none';
+            hideZigbee();
+            hideBle();
         }
+    } else {
+        hideZigbee();
+        hideBle();
     }
 }
 
@@ -1508,7 +1530,10 @@ function blePairing() {
     });
 }
 
-// Beim Laden der Seite: Transfer-Config anzeigen
+// Beim Laden der Seite: gespeicherten Modus merken, nur dessen Parameter-Sektion anzeigen
 document.addEventListener('DOMContentLoaded', function() {
+    const sel = document.getElementById('transfer_mode');
+    if (sel) savedTransferMode = sel.value;
+    configJustSaved = false;
     toggleTransferConfig();
 });
