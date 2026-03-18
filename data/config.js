@@ -132,9 +132,30 @@ function showRebootLink(targetUrl, newHostname) {
 let stayAliveInterval = null;
 let originalHostname = null;  // Ursprünglicher Hostname beim Laden der Seite
 
+function syncTxPowerSelects() {
+    const wifiCurrent = document.getElementById('wifi_tx_power_dbm_current');
+    const wifiSelect = document.getElementById('wifi_tx_power_dbm');
+    if (wifiCurrent && wifiSelect) {
+        wifiSelect.value = wifiCurrent.value;
+    }
+
+    const bleCurrent = document.getElementById('ble_tx_power_dbm_current');
+    const bleSelect = document.getElementById('ble_tx_power_dbm');
+    if (bleCurrent && bleSelect) {
+        bleSelect.value = bleCurrent.value;
+    }
+
+    const zigbeeCurrent = document.getElementById('zigbee_tx_power_dbm_current');
+    const zigbeeSelect = document.getElementById('zigbee_tx_power_dbm');
+    if (zigbeeCurrent && zigbeeSelect) {
+        zigbeeSelect.value = zigbeeCurrent.value;
+    }
+}
+
 // Beim Laden: Aktuelle Config laden und Event-Listener registrieren
 window.addEventListener('load', () => {
     loadWifiCredentials();
+    syncTxPowerSelects();
     
     // Ursprünglichen Hostname speichern (für Stay-Alive und Config-Save)
     const hostnameInput = document.getElementById('hostname');
@@ -513,6 +534,10 @@ function saveConfig() {
     const transferMinutesStr = document.getElementById('transfer_minutes').value.trim();
     const adcOffsetStr = document.getElementById('adc_voltage_offset').value.trim();
     const ntpServer = document.getElementById('ntp_server').value.trim();
+
+    const wifiTxPowerDbm = parseInt(document.getElementById('wifi_tx_power_dbm').value);
+    const bleTxPowerDbm = parseInt(document.getElementById('ble_tx_power_dbm').value);
+    const zigbeeTxPowerDbm = parseInt(document.getElementById('zigbee_tx_power_dbm').value);
     
     // Validierung: Hostname (max. 26 Zeichen = BLE-Limit)
     if (hostname.length === 0 || hostname.length > 26) {
@@ -562,6 +587,28 @@ function saveConfig() {
         document.getElementById('adc_voltage_offset').focus();
         return;
     }
+
+    // Validierung: TX-Power (nur erlaubte UI-Stufen)
+    const wifiAllowed = [2, 5, 8, 11, 14, 17, 20];
+    if (isNaN(wifiTxPowerDbm) || !wifiAllowed.includes(wifiTxPowerDbm)) {
+        alert("WiFi TX Power ungültig (erlaubt: 2,5,8,11,14,17,20 dBm).");
+        document.getElementById('wifi_tx_power_dbm').focus();
+        return;
+    }
+
+    const bleAllowed = [3, 6, 9, 12, 15, 18, 20];
+    if (isNaN(bleTxPowerDbm) || !bleAllowed.includes(bleTxPowerDbm)) {
+        alert("BLE TX Power ungültig (erlaubt: 3,6,9,12,15,18,20 dBm).");
+        document.getElementById('ble_tx_power_dbm').focus();
+        return;
+    }
+
+    const zigbeeAllowed = [-9, -6, -3, 0, 3, 6, 10];
+    if (isNaN(zigbeeTxPowerDbm) || !zigbeeAllowed.includes(zigbeeTxPowerDbm)) {
+        alert("ZigBee TX Power ungültig (erlaubt: -9,-6,-3,0,3,6,10 dBm).");
+        document.getElementById('zigbee_tx_power_dbm').focus();
+        return;
+    }
     
     // Validierung: NTP-Server
     if (ntpServer.length === 0) {
@@ -584,6 +631,9 @@ function saveConfig() {
         transfer_minutes: transfer_minutes,
         adc_voltage_offset: adc_voltage_offset,
         ntp_server: ntpServer,
+        wifi_tx_power_dbm: wifiTxPowerDbm,
+        ble_tx_power_dbm: bleTxPowerDbm,
+        zigbee_tx_power_dbm: zigbeeTxPowerDbm,
         wifiCredentials: []
     };
     
@@ -712,7 +762,7 @@ function saveConfig() {
             if (data.wifi_changed) {
                 alertMessage += `<strong style="color: #dc3545;">⚠️ WiFi-Credentials wurden geändert!</strong><br>`;
             }
-            alertMessage += `<strong>Bitte betätigen Sie den "Reboot"-Button, damit die Änderungen wirksam werden.</strong><br><br>`;
+            alertMessage += `<strong>Bitte betätigen Sie den "Reboot"-Button oder warten Sie bis zum nächsten Deep-Sleep-Wake-up, damit die Änderungen wirksam werden.</strong><br><br>`;
             
             // Zeige empfangene JSON-Daten (für Debugging)
             alertMessage += `<details style="margin-top: 10px;">`;

@@ -69,6 +69,9 @@ RTC_DATA_ATTR zigbee_rtc_t zigbee_rtc = {
     .extended_addr = ZIGBEE_DEFAULT_EXTENDED_ADDR
 };
 
+// TX-Power Zugriff (definiert in main_idf.cpp)
+extern int8_t transfer_zigbee_get_tx_power_dbm(void);
+
 // Persistente Variable für Battery Percentage (wird vom Power Config Cluster verwendet)
 // WICHTIG: Diese Variable muss persistent sein, da der Cluster einen Pointer darauf speichert
 // Initialwert: 100% (200 in Zigbee-Format: 0-200 = 0-100%)
@@ -1214,10 +1217,11 @@ bool transfer_zigbee_init(void) {
     ESP_LOGI(TAG, "        → RX-on-when-idle aktiviert (Device geht nach Datenübertragung in Deep-Sleep)");
     
     // TX Power setzen (nach Stack-Initialisierung)
-    esp_zb_set_tx_power(ZIGBEE_TX_POWER_DEFAULT);
+    const int8_t zigbee_tx_power_dbm = transfer_zigbee_get_tx_power_dbm();
+    esp_zb_set_tx_power(zigbee_tx_power_dbm);
     int8_t current_tx_power = 0;
     esp_zb_get_tx_power(&current_tx_power);
-    ESP_LOGI(TAG, "        → TX Power gesetzt: %d dBm", current_tx_power);
+    ESP_LOGI(TAG, "        → TX Power gesetzt: %d dBm (requested: %d dBm)", current_tx_power, zigbee_tx_power_dbm);
     
     // Stabilisierungszeit nach TX Power Setzung (RF-Operationen benötigen Zeit zur Stabilisierung)
     vTaskDelay(pdMS_TO_TICKS(ZIGBEE_TX_POWER_STABILIZE_MS));

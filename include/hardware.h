@@ -144,14 +144,14 @@
 #define NTP_TIMEOUT_MS        5000            // Timeout für NTP-Synchronisation (ms)
 
 // WiFi TX Power Konfiguration (Sendeleistung)
-// ESP32-C6: Gültiger Bereich: 8-84 (in 0.25 dBm Einheiten)
+// ESP32-C6: Gültiger Bereich: 8-80 (in 0.25 dBm Einheiten)
 //   Minimum: 8  =  2 dBm
-//   Maximum: 84 = 20 dBm (wird intern auf 20 dBm begrenzt, auch wenn 84 = 21 dBm wäre)
-//   Default: 84 = 20 dBm (Maximum für beste Reichweite)
+//   Maximum: 80 = 20 dBm
+//   Default: 80 = 20 dBm (Maximum für beste Reichweite)
 // Höhere Werte = größere Reichweite, aber höherer Stromverbrauch
-// WICHTIG: Wert außerhalb [8, 84] führt zu ESP_ERR_INVALID_ARG
+// WICHTIG: Wert außerhalb [8, 80] führt zu ESP_ERR_INVALID_ARG
 // WICHTIG: Dieser Wert wird zur Compile-Zeit in hardware.h definiert, daher wird keine Laufzeit-Prüfung durchgeführt
-#define WIFI_TX_POWER_DEFAULT       84      // Default WiFi TX Power: 20 dBm (84 * 0.25 dBm = 21 dBm, wird auf 20 dBm begrenzt)
+#define WIFI_TX_POWER_DEFAULT       80      // Default WiFi TX Power: 20 dBm (80 * 0.25 dBm = 20 dBm)
 
 // Hostname/BLE-Device-Name: Gemeinsamer Wert für WiFi und BLE
 // BLE-Limit: 26 Zeichen (esp_ble_gap_set_device_name, IDFGH-5588)

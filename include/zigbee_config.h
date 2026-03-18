@@ -89,9 +89,10 @@
 #define ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS  1500  // Verzögerung nach erfolgreichem Network Steering vor Association Request (ms)
 
 // TX Power Konfiguration (Sendeleistung)
-// ESP32-C6 Maximum: +10 dBm, Minimum: SDK-abhängig (typisch -30 dBm)
+// ESP-Zigbee-SDK / IEEE802154: Default hängt vom Chip/SPI-SDK ab.
+// Für „kein Override gesetzt“ nutzen wir als konservativen/neutralen Default 0 dBm.
 // Höhere Werte = größere Reichweite, aber höherer Stromverbrauch
-#define ZIGBEE_TX_POWER_DEFAULT       10       // Default TX Power: +10 dBm (Maximum für beste Reichweite)
+#define ZIGBEE_TX_POWER_DEFAULT       0       // Default TX Power: 0 dBm (Fallback bei „kein Runtime-Override“)
 
 // Minimum LQI für Network Join (Link Quality Indicator)
 // LQI-Bereich: 0-255 (0 = schlechteste Qualität, 255 = beste Qualität)

@@ -1,13 +1,16 @@
 {
     "hostname": "gas-o-meter2",
-    "adminpass": "geheim123",
+    "adminpass": "AdminPasswort",
     "wifiCredentials": [
-      {"ssid": "FritzensBox24",   "password": "TheQuickBrownFoxJumpsOverTheLazyDog"},
-      {"ssid": "MNAccessPoint-2", "password": "TheQuickBrownFoxJumpsOverTheLazyDog!"}
+      {"ssid": "WIFI-SSID1", "password": "WIFI-PW1"},
+      {"ssid": "WIFI-SSID2", "password": "WIFI-PW2"}
     ],
     "wakeup_minutes": 10,
     "transfer_interval_x": 2,
     "transfer_mode": "none",
     "adc_voltage_offset": -0.05,
-    "ntp_server": "pool.ntp.org"
+    "ntp_server": "pool.ntp.org",
+    "wifi_tx_power_dbm": 20,
+    "ble_tx_power_dbm": 9,
+    "zigbee_tx_power_dbm": 0
 }

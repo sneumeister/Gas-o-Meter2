@@ -120,6 +120,9 @@ typedef struct {
     uint8_t wakeup_minutes;
     uint8_t transfer_minutes;
     char transfer_mode[16];  // "zigbee", "ble", "mqtt", "none" (Default: "none")
+    int8_t wifi_tx_power_dbm;     // WiFi TX Power in dBm (2..20 in UI-Stufen)
+    int8_t ble_tx_power_dbm;      // BLE TX Power in dBm (3/6/9/12/15/18/20)
+    int8_t zigbee_tx_power_dbm;   // ZigBee TX Power in dBm (-9/-6/-3/0/+3/+6/+10)
     float adc_voltage_offset;  // ADC-Offset-Korrektur in Volt (aus config.json oder hardware.h)
     char ntp_server[64];       // NTP-Server (aus config.json oder hardware.h)
     bool config_loaded;
@@ -133,6 +136,9 @@ RTC_DATA_ATTR config_rtc_t config_rtc = {
     .wakeup_minutes = DEFAULT_WAKEUP_INTERVAL_MIN,
     .transfer_minutes = DEFAULT_TRANSFER_INTERVAL_X * DEFAULT_WAKEUP_INTERVAL_MIN,
     .transfer_mode = "none",  // Default: keine Übertragung
+    .wifi_tx_power_dbm = (int8_t)(WIFI_TX_POWER_DEFAULT / 4), // Default: 20 dBm
+    .ble_tx_power_dbm = (int8_t)BLE_TX_POWER_DBM,               // Default: 9 dBm
+    .zigbee_tx_power_dbm = (int8_t)ZIGBEE_TX_POWER_DEFAULT,     // Default: 0 dBm
     .adc_voltage_offset = ADC_VOLTAGE_OFFSET,  // Default aus hardware.h
     .ntp_server = DEFAULT_NTP_SERVER,          // Default aus hardware.h
     .config_loaded = false
@@ -143,6 +149,16 @@ RTC_DATA_ATTR bool isPowerOn = false;
 // Hostname-Zugriff für transfer_ble.cpp (BLE Device Name = Hostname)
 const char* transfer_ble_get_hostname(void) {
     return config_rtc.hostname;
+}
+
+// TX Power-Zugriff für transfer_ble.cpp
+int8_t transfer_ble_get_tx_power_dbm(void) {
+    return config_rtc.ble_tx_power_dbm;
+}
+
+// TX Power-Zugriff für transfer_zigbee.cpp
+int8_t transfer_zigbee_get_tx_power_dbm(void) {
+    return config_rtc.zigbee_tx_power_dbm;
 }
 RTC_DATA_ATTR uint32_t ring_idx = RING_BUFFER_SIZE;  // Ring-Buffer-Index (im RTC-RAM, wird bei Power-On/ESP.restart() neu ermittelt)
 
@@ -1125,8 +1141,73 @@ void enter_deep_sleep_with_gpio_and_timer_wakeup(bool enable_timer = true) {
 bool load_config() {
     // Prüfen, ob Config bereits geladen ist (z.B. aus RTC-RAM nach Wake-up)
     if (config_rtc.config_loaded) {
-        ESP_LOGI(TAG, "Config bereits geladen (aus RTC-RAM) → kein erneutes Laden nötig");
-        return true;
+        bool rtc_valid = true;
+
+        // Wake-up Intervall plausibilisieren
+        if (config_rtc.wakeup_minutes < 1 || config_rtc.wakeup_minutes > 60) {
+            rtc_valid = false;
+        }
+
+        // WiFi-Creds Anzahl plausibilisieren
+        if (config_rtc.wifi_count > 2) {
+            rtc_valid = false;
+        }
+
+        // Transfer-Intervall plausibilisieren
+        if (!(config_rtc.transfer_minutes == 255 || config_rtc.transfer_minutes <= 60)) {
+            rtc_valid = false;
+        }
+
+        // Transfer-Mode plausibilisieren (sicher gegen fehlende Null-Terminierung)
+        bool transfer_mode_null_terminated = false;
+        for (size_t i = 0; i < sizeof(config_rtc.transfer_mode); i++) {
+            if (config_rtc.transfer_mode[i] == '\0') {
+                transfer_mode_null_terminated = true;
+                break;
+            }
+        }
+        if (!transfer_mode_null_terminated) {
+            rtc_valid = false;
+        } else {
+            if (strcmp(config_rtc.transfer_mode, "zigbee") != 0 &&
+                strcmp(config_rtc.transfer_mode, "ble") != 0 &&
+                strcmp(config_rtc.transfer_mode, "mqtt") != 0 &&
+                strcmp(config_rtc.transfer_mode, "none") != 0) {
+                rtc_valid = false;
+            }
+        }
+
+        // RTC-RAM Plausibilität (vor allem TX-Power, damit Brownout/seltene RAM-Korruption
+        // nicht zu ungültigen Funktionsparametern führt)
+        if (!(config_rtc.wifi_tx_power_dbm == 2 || config_rtc.wifi_tx_power_dbm == 5 ||
+              config_rtc.wifi_tx_power_dbm == 8 || config_rtc.wifi_tx_power_dbm == 11 ||
+              config_rtc.wifi_tx_power_dbm == 14 || config_rtc.wifi_tx_power_dbm == 17 ||
+              config_rtc.wifi_tx_power_dbm == 20)) {
+            ESP_LOGW(TAG, "RTC wifi_tx_power_dbm ungültig (%d) → Default", config_rtc.wifi_tx_power_dbm);
+            config_rtc.wifi_tx_power_dbm = (int8_t)(WIFI_TX_POWER_DEFAULT / 4);
+        }
+        if (!(config_rtc.ble_tx_power_dbm == 3 || config_rtc.ble_tx_power_dbm == 6 ||
+              config_rtc.ble_tx_power_dbm == 9 || config_rtc.ble_tx_power_dbm == 12 ||
+              config_rtc.ble_tx_power_dbm == 15 || config_rtc.ble_tx_power_dbm == 18 ||
+              config_rtc.ble_tx_power_dbm == 20)) {
+            ESP_LOGW(TAG, "RTC ble_tx_power_dbm ungültig (%d) → Default", config_rtc.ble_tx_power_dbm);
+            config_rtc.ble_tx_power_dbm = (int8_t)BLE_TX_POWER_DBM;
+        }
+        if (!(config_rtc.zigbee_tx_power_dbm == -9 || config_rtc.zigbee_tx_power_dbm == -6 ||
+              config_rtc.zigbee_tx_power_dbm == -3 || config_rtc.zigbee_tx_power_dbm == 0 ||
+              config_rtc.zigbee_tx_power_dbm == 3 || config_rtc.zigbee_tx_power_dbm == 6 ||
+              config_rtc.zigbee_tx_power_dbm == 10)) {
+            ESP_LOGW(TAG, "RTC zigbee_tx_power_dbm ungültig (%d) → Default", config_rtc.zigbee_tx_power_dbm);
+            config_rtc.zigbee_tx_power_dbm = (int8_t)ZIGBEE_TX_POWER_DEFAULT;
+        }
+
+        if (!rtc_valid) {
+            ESP_LOGW(TAG, "RTC-Config unplausibel → config.json nachladen");
+            config_rtc.config_loaded = false;  // -> normaler Pfad lädt aus Datei
+        } else {
+            ESP_LOGI(TAG, "Config bereits geladen (aus RTC-RAM) → kein erneutes Laden nötig");
+            return true;
+        }
     }
     
     if (!mount_littlefs()) {
@@ -1260,6 +1341,42 @@ bool load_config() {
         strncpy(config_rtc.transfer_mode, "none", sizeof(config_rtc.transfer_mode) - 1);
         config_rtc.transfer_mode[sizeof(config_rtc.transfer_mode) - 1] = '\0';
     }
+
+    // WiFi TX Power (dBm, UI-Stufen)
+    if (doc["wifi_tx_power_dbm"].is<int>()) {
+        int v = doc["wifi_tx_power_dbm"].as<int>();
+        bool ok = (v == 2 || v == 5 || v == 8 || v == 11 || v == 14 || v == 17 || v == 20);
+        if (ok) {
+            config_rtc.wifi_tx_power_dbm = (int8_t)v;
+        } else {
+            ESP_LOGW(TAG, "wifi_tx_power_dbm ungültig (%d) → Default", v);
+            config_rtc.wifi_tx_power_dbm = (int8_t)(WIFI_TX_POWER_DEFAULT / 4);
+        }
+    }
+
+    // BLE TX Power (dBm, Stufen)
+    if (doc["ble_tx_power_dbm"].is<int>()) {
+        int v = doc["ble_tx_power_dbm"].as<int>();
+        bool ok = (v == 3 || v == 6 || v == 9 || v == 12 || v == 15 || v == 18 || v == 20);
+        if (ok) {
+            config_rtc.ble_tx_power_dbm = (int8_t)v;
+        } else {
+            ESP_LOGW(TAG, "ble_tx_power_dbm ungültig (%d) → Default", v);
+            config_rtc.ble_tx_power_dbm = (int8_t)BLE_TX_POWER_DBM;
+        }
+    }
+
+    // ZigBee TX Power (dBm, Stufen)
+    if (doc["zigbee_tx_power_dbm"].is<int>()) {
+        int v = doc["zigbee_tx_power_dbm"].as<int>();
+        bool ok = (v == -9 || v == -6 || v == -3 || v == 0 || v == 3 || v == 6 || v == 10);
+        if (ok) {
+            config_rtc.zigbee_tx_power_dbm = (int8_t)v;
+        } else {
+            ESP_LOGW(TAG, "zigbee_tx_power_dbm ungültig (%d) → Default", v);
+            config_rtc.zigbee_tx_power_dbm = (int8_t)ZIGBEE_TX_POWER_DEFAULT;
+        }
+    }
     
     // WiFi-Credentials laden (max. 2 Paare)
     config_rtc.wifi_count = 0;
@@ -1287,6 +1404,28 @@ bool load_config() {
         }
         ESP_LOGI(TAG, "WiFi-Credentials geladen: %d Paar(e)", config_rtc.wifi_count);
     }
+    
+    // Debug: Geladene Config (inkl. TX-Power) ausgeben (ohne Passwörter im Klartext)
+    ESP_LOGI(TAG, "=== Geladene Config (runtime) ===");
+    ESP_LOGI(TAG, "  hostname: %s", config_rtc.hostname);
+    ESP_LOGI(TAG, "  adminpass: (Länge: %zu)", strlen(config_rtc.adminpass));
+    ESP_LOGI(TAG, "  wakeup_minutes: %d", config_rtc.wakeup_minutes);
+    ESP_LOGI(TAG, "  transfer_minutes: %d", config_rtc.transfer_minutes);
+    ESP_LOGI(TAG, "  transfer_mode: %s", config_rtc.transfer_mode);
+    ESP_LOGI(TAG, "  wifi_tx_power_dbm: %d", config_rtc.wifi_tx_power_dbm);
+    ESP_LOGI(TAG, "  ble_tx_power_dbm: %d", config_rtc.ble_tx_power_dbm);
+    ESP_LOGI(TAG, "  zigbee_tx_power_dbm: %d", config_rtc.zigbee_tx_power_dbm);
+    ESP_LOGI(TAG, "  adc_voltage_offset: %.3f V", config_rtc.adc_voltage_offset);
+    ESP_LOGI(TAG, "  ntp_server: %s", config_rtc.ntp_server);
+    ESP_LOGI(TAG, "  wifiCredentials: %d Set(s)", config_rtc.wifi_count);
+    for (uint8_t i = 0; i < config_rtc.wifi_count && i < 2; i++) {
+        ESP_LOGI(TAG, "    [%d] SSID: %s", i, config_rtc.wifi_credentials[i].ssid);
+        ESP_LOGI(TAG, "    [%d] Password: %s (Länge: %zu)",
+                 i,
+                 (strlen(config_rtc.wifi_credentials[i].password) > 0 ? "***" : "(leer)"),
+                 strlen(config_rtc.wifi_credentials[i].password));
+    }
+    ESP_LOGI(TAG, "================================");
     
     config_rtc.config_loaded = true;
     
@@ -1417,6 +1556,51 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
         strncpy(config_rtc.transfer_mode, transfer_mode, sizeof(config_rtc.transfer_mode) - 1);
         config_rtc.transfer_mode[sizeof(config_rtc.transfer_mode) - 1] = '\0';
     }
+
+    // WiFi TX Power (dBm, UI-Stufen)
+    if (doc["wifi_tx_power_dbm"].is<int>()) {
+        int v = doc["wifi_tx_power_dbm"].as<int>();
+        bool ok = (v == 2 || v == 5 || v == 8 || v == 11 || v == 14 || v == 17 || v == 20);
+        if (ok) {
+            config_rtc.wifi_tx_power_dbm = (int8_t)v;
+        } else {
+            ESP_LOGE(TAG, "FEHLER: wifi_tx_power_dbm ungültig (%d)", v);
+            if (errorMessage != nullptr) {
+                strncpy(errorMessage, "Fehler: wifi_tx_power_dbm ungültig", 255);
+            }
+            return false;
+        }
+    }
+
+    // BLE TX Power (dBm, Stufen)
+    if (doc["ble_tx_power_dbm"].is<int>()) {
+        int v = doc["ble_tx_power_dbm"].as<int>();
+        bool ok = (v == 3 || v == 6 || v == 9 || v == 12 || v == 15 || v == 18 || v == 20);
+        if (ok) {
+            config_rtc.ble_tx_power_dbm = (int8_t)v;
+        } else {
+            ESP_LOGE(TAG, "FEHLER: ble_tx_power_dbm ungültig (%d)", v);
+            if (errorMessage != nullptr) {
+                strncpy(errorMessage, "Fehler: ble_tx_power_dbm ungültig", 255);
+            }
+            return false;
+        }
+    }
+
+    // ZigBee TX Power (dBm, Stufen)
+    if (doc["zigbee_tx_power_dbm"].is<int>()) {
+        int v = doc["zigbee_tx_power_dbm"].as<int>();
+        bool ok = (v == -9 || v == -6 || v == -3 || v == 0 || v == 3 || v == 6 || v == 10);
+        if (ok) {
+            config_rtc.zigbee_tx_power_dbm = (int8_t)v;
+        } else {
+            ESP_LOGE(TAG, "FEHLER: zigbee_tx_power_dbm ungültig (%d)", v);
+            if (errorMessage != nullptr) {
+                strncpy(errorMessage, "Fehler: zigbee_tx_power_dbm ungültig", 255);
+            }
+            return false;
+        }
+    }
     
     if (doc["adc_voltage_offset"].is<float>()) {
         float adc_voltage_offset = doc["adc_voltage_offset"].as<float>();
@@ -1524,6 +1708,9 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
     }
     newDoc["transfer_interval_x"] = multiplier;
     newDoc["transfer_mode"] = config_rtc.transfer_mode;
+    newDoc["wifi_tx_power_dbm"] = (int)config_rtc.wifi_tx_power_dbm;
+    newDoc["ble_tx_power_dbm"] = (int)config_rtc.ble_tx_power_dbm;
+    newDoc["zigbee_tx_power_dbm"] = (int)config_rtc.zigbee_tx_power_dbm;
     newDoc["adc_voltage_offset"] = config_rtc.adc_voltage_offset;
     newDoc["ntp_server"] = config_rtc.ntp_server;
     
@@ -1628,7 +1815,7 @@ static bool mdns_initialized = false;
  * 
  * WICHTIG: Muss nach esp_wifi_start() aufgerufen werden!
  * 
- * @param tx_power TX Power in 0.25 dBm Einheiten (8-84, entspricht 2-20 dBm)
+ * @param tx_power TX Power in 0.25 dBm Einheiten (8-80, entspricht 2-20 dBm)
  *                 WICHTIG: Wert wird zur Compile-Zeit in hardware.h definiert (WIFI_TX_POWER_DEFAULT),
  *                 daher wird keine Laufzeit-Bereichsprüfung durchgeführt
  * @return true bei Erfolg, false bei Fehler
@@ -1706,7 +1893,7 @@ bool connect_wifi() {
     }
     
     // WiFi TX Power setzen (nach esp_wifi_start)
-    wifi_set_tx_power(WIFI_TX_POWER_DEFAULT);
+    wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
     
     vTaskDelay(pdMS_TO_TICKS(100));  // Kurze Verzögerung für WiFi-Initialisierung
     
@@ -1782,7 +1969,7 @@ bool connect_wifi() {
     // WiFi TX Power setzen (nach esp_wifi_start)
     // HINWEIS: TX Power wurde bereits beim ersten esp_wifi_start() für Scan gesetzt
     // und bleibt erhalten, daher ist das zweite Setzen optional (aber harmlos)
-    wifi_set_tx_power(WIFI_TX_POWER_DEFAULT);
+    wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
     
     esp_wifi_connect();
     
@@ -1869,7 +2056,7 @@ bool start_access_point() {
     }
     
     // WiFi TX Power setzen (nach esp_wifi_start)
-    wifi_set_tx_power(WIFI_TX_POWER_DEFAULT);
+    wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
     
     ESP_LOGI(TAG, "Access Point gestartet: %s", config_rtc.hostname);
     ESP_LOGI(TAG, "AP IP: %d.%d.%d.%d", AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
@@ -1991,6 +2178,18 @@ const char* processor_get_value(const char* var) {
     }
     if (strcmp(var, "ntp_server") == 0) {
         return config_rtc.ntp_server;
+    }
+    if (strcmp(var, "wifi_tx_power_dbm") == 0) {
+        snprintf(buffer, sizeof(buffer), "%d", config_rtc.wifi_tx_power_dbm);
+        return buffer;
+    }
+    if (strcmp(var, "ble_tx_power_dbm") == 0) {
+        snprintf(buffer, sizeof(buffer), "%d", config_rtc.ble_tx_power_dbm);
+        return buffer;
+    }
+    if (strcmp(var, "zigbee_tx_power_dbm") == 0) {
+        snprintf(buffer, sizeof(buffer), "%d", config_rtc.zigbee_tx_power_dbm);
+        return buffer;
     }
     if (strcmp(var, "nv_magic_key") == 0) {
         snprintf(buffer, sizeof(buffer), "%lu (0x%08lX)", RING_BUFFER_VERSION, RING_BUFFER_VERSION);
@@ -2789,6 +2988,15 @@ static esp_err_t config_save_handler(httpd_req_t *req) {
     if (doc["ntp_server"].is<const char*>()) {
         ESP_LOGI(TAG, "  ntp_server: %s", doc["ntp_server"].as<const char*>());
     }
+    if (doc["wifi_tx_power_dbm"].is<int>()) {
+        ESP_LOGI(TAG, "  wifi_tx_power_dbm: %d", doc["wifi_tx_power_dbm"].as<int>());
+    }
+    if (doc["ble_tx_power_dbm"].is<int>()) {
+        ESP_LOGI(TAG, "  ble_tx_power_dbm: %d", doc["ble_tx_power_dbm"].as<int>());
+    }
+    if (doc["zigbee_tx_power_dbm"].is<int>()) {
+        ESP_LOGI(TAG, "  zigbee_tx_power_dbm: %d", doc["zigbee_tx_power_dbm"].as<int>());
+    }
     if (doc["wifiCredentials"].is<JsonArray>()) {
         JsonArray credentials = doc["wifiCredentials"].as<JsonArray>();
         ESP_LOGI(TAG, "  wifiCredentials: %zu Set(s)", credentials.size());
@@ -2827,6 +3035,10 @@ static esp_err_t config_save_handler(httpd_req_t *req) {
         // DEBUG: Erfolgsmeldung (wie Arduino)
         ESP_LOGI(TAG, "Config erfolgreich gespeichert (config.json)");
         ESP_LOGI(TAG, "  → RTC-Config invalidiert - wird beim nächsten Start aus config.json geladen");
+        ESP_LOGI(TAG, "  → TX Power (applied): wifi=%d dBm, ble=%d dBm, zigbee=%d dBm",
+                 config_rtc.wifi_tx_power_dbm,
+                 config_rtc.ble_tx_power_dbm,
+                 config_rtc.zigbee_tx_power_dbm);
         if (wifi_credentials_changed) {
             ESP_LOGI(TAG, "  → WiFi-Credentials wurden geändert");
         }
@@ -3332,7 +3544,7 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
     }
     
     // WiFi TX Power setzen (nach esp_wifi_start)
-    wifi_set_tx_power(WIFI_TX_POWER_DEFAULT);
+    wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
     
     vTaskDelay(pdMS_TO_TICKS(100));  // Kurze Verzögerung für WiFi-Initialisierung
     

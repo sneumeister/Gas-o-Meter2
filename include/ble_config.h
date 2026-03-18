@@ -55,7 +55,8 @@
 
 // BLE-Sendeleistung für Advertising (ESP-IDF: esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, …))
 // Höchster Wert über API: +20 dBm (ESP_PWR_LVL_P20). ESP32-C6 Chipbereich: -24 .. +21 dBm.
-#define BLE_TX_POWER_DBM                20
+// Default entspricht der ESP-IDF-Standard-Default (bei keinem Runtime-Override).
+#define BLE_TX_POWER_DBM                9
 #define BLE_TX_POWER_STABILIZE_MS       50
 
 // ============================================

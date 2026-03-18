@@ -51,6 +51,8 @@ static char ble_firmware_buf[32];
 
 // Hostname-Zugriff (definiert in main_idf.cpp)
 extern const char* transfer_ble_get_hostname(void);
+// TX-Power Zugriff (definiert in main_idf.cpp)
+extern int8_t transfer_ble_get_tx_power_dbm(void);
 
 // ============================================
 // No-Op Store Callbacks (kein Bonding, aber NimBLE ruft store_write_cb
@@ -433,15 +435,16 @@ bool transfer_ble_init(void) {
     ESP_LOGI(TAG, "→ nimble_port_init OK");
 
     /* BLE-Sendeleistung für Advertising (Node-RED/Scanner-Erkennbarkeit) */
-    esp_power_level_t pwr = (BLE_TX_POWER_DBM >= 20) ? ESP_PWR_LVL_P20 :
-                            (BLE_TX_POWER_DBM >= 18) ? ESP_PWR_LVL_P18 :
-                            (BLE_TX_POWER_DBM >= 15) ? ESP_PWR_LVL_P15 :
-                            (BLE_TX_POWER_DBM >= 12) ? ESP_PWR_LVL_P12 :
-                            (BLE_TX_POWER_DBM >= 9)  ? ESP_PWR_LVL_P9  :
-                            (BLE_TX_POWER_DBM >= 6)  ? ESP_PWR_LVL_P6  : ESP_PWR_LVL_P3;
+    const int8_t ble_tx_power_dbm = transfer_ble_get_tx_power_dbm();
+    esp_power_level_t pwr = (ble_tx_power_dbm >= 20) ? ESP_PWR_LVL_P20 :
+                            (ble_tx_power_dbm >= 18) ? ESP_PWR_LVL_P18 :
+                            (ble_tx_power_dbm >= 15) ? ESP_PWR_LVL_P15 :
+                            (ble_tx_power_dbm >= 12) ? ESP_PWR_LVL_P12 :
+                            (ble_tx_power_dbm >= 9)  ? ESP_PWR_LVL_P9  :
+                            (ble_tx_power_dbm >= 6)  ? ESP_PWR_LVL_P6  : ESP_PWR_LVL_P3;
     esp_err_t pw = esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, pwr);
     if (pw == ESP_OK) {
-        ESP_LOGI(TAG, "→ BLE TX Power (Advertising): %d dBm", BLE_TX_POWER_DBM);
+        ESP_LOGI(TAG, "→ BLE TX Power (Advertising): %d dBm", ble_tx_power_dbm);
     } else {
         ESP_LOGW(TAG, "esp_ble_tx_power_set(ADV) fehlgeschlagen: %s", esp_err_to_name(pw));
     }
