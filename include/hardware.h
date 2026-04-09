@@ -111,7 +111,9 @@
 #define VOLTAGE_DIVIDER_RATIO  2.0   // Spannungsteiler-Verhältnis (2:1 = 2.0)
 
 // ADC-Korrekturfaktor (Skalierung)
-// 1.0 = keine Korrektur, typischer Kalibrierwert: Multimeter-Spannung / angezeigte Spannung
+// 1.0 = keine Korrektur (neutraler Default)
+// 0.0 wäre ungültig, da dadurch die berechnete Akku-Spannung immer 0 V würde.
+// Typischer Kalibrierwert: Multimeter-Spannung / angezeigte Spannung
 #define ADC_VOLTAGE_MULTIPLIER  1.00f
 
 // ADC-Konfiguration für ADC_ATTEN_DB_12
