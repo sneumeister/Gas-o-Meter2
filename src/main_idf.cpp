@@ -8,6 +8,9 @@
 #include "mdns.h"
 #include "esp_littlefs.h"
 #include "lwip/apps/sntp.h"
+#include "lwip/sockets.h"
+#include "lwip/inet.h"
+#include <string.h>
 #include "esp_vfs.h"
 #include "esp_timer.h"
 #include "esp_adc/adc_oneshot.h"
@@ -30,7 +33,10 @@
 #include "zigbee_config.h"
 #include "transfer_ble.h"
 #include "ble_config.h"
+#include "mqtt_config.h"
+#include "wifi_scan_config.h"
 #include "time_sync.h"
+#include <stdlib.h>
 
 // ArduinoJson (ESP-IDF-kompatibel)
 #include <ArduinoJson.h>
@@ -57,6 +63,137 @@ static const char *TAG = "gas-o-meter";
 extern "C" {
     extern const uint8_t ulp_main_bin_start[] asm("_binary_ulp_main_bin_start");
     extern const uint8_t ulp_main_bin_end[]   asm("_binary_ulp_main_bin_end");
+}
+
+// DNS Captive-Portal-Server (nur im AP-Modus aktiv)
+static TaskHandle_t dns_captive_task_handle = NULL;
+static volatile bool dns_captive_running = false;
+static int dns_captive_sock = -1;
+
+static void dns_captive_task(void *parameter) {
+    (void)parameter;
+
+    struct sockaddr_in server_addr = {};
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(53);
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    dns_captive_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (dns_captive_sock < 0) {
+        ESP_LOGE(TAG, "DNS Captive: Socket konnte nicht erstellt werden");
+        dns_captive_running = false;
+        dns_captive_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    int reuse = 1;
+    setsockopt(dns_captive_sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+    int recv_timeout_ms = 1000;
+    setsockopt(dns_captive_sock, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout_ms, sizeof(recv_timeout_ms));
+
+    if (bind(dns_captive_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        ESP_LOGE(TAG, "DNS Captive: Bind auf Port 53 fehlgeschlagen");
+        lwip_close(dns_captive_sock);
+        dns_captive_sock = -1;
+        dns_captive_running = false;
+        dns_captive_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "DNS Captive aktiv (alle Anfragen -> 10.0.0.1)");
+
+    uint8_t rx_buf[512];
+    uint8_t tx_buf[512];
+    const uint8_t captive_ip[4] = {AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4};
+
+    while (dns_captive_running) {
+        struct sockaddr_in client_addr = {};
+        socklen_t client_len = sizeof(client_addr);
+        int len = recvfrom(dns_captive_sock, rx_buf, sizeof(rx_buf), 0,
+                           (struct sockaddr *)&client_addr, &client_len);
+
+        if (len <= 0) {
+            continue;
+        }
+        if (len < 12) {
+            continue;
+        }
+
+        int qname_end = 12;
+        while (qname_end < len && rx_buf[qname_end] != 0) {
+            qname_end += (int)rx_buf[qname_end] + 1;
+        }
+        if (qname_end + 5 > len) {
+            continue;
+        }
+
+        int question_len = (qname_end + 5) - 12;
+        int resp_len = 12 + question_len + 16;
+        if (resp_len > (int)sizeof(tx_buf)) {
+            continue;
+        }
+
+        // Header
+        tx_buf[0] = rx_buf[0];
+        tx_buf[1] = rx_buf[1];
+        tx_buf[2] = 0x81;  // response + recursion available
+        tx_buf[3] = 0x80;  // no error
+        tx_buf[4] = 0x00; tx_buf[5] = 0x01;  // QDCOUNT=1
+        tx_buf[6] = 0x00; tx_buf[7] = 0x01;  // ANCOUNT=1
+        tx_buf[8] = 0x00; tx_buf[9] = 0x00;  // NSCOUNT=0
+        tx_buf[10] = 0x00; tx_buf[11] = 0x00; // ARCOUNT=0
+
+        memcpy(&tx_buf[12], &rx_buf[12], question_len);
+        int off = 12 + question_len;
+
+        // Answer
+        tx_buf[off + 0] = 0xC0; tx_buf[off + 1] = 0x0C; // name pointer to question
+        tx_buf[off + 2] = 0x00; tx_buf[off + 3] = 0x01; // TYPE A
+        tx_buf[off + 4] = 0x00; tx_buf[off + 5] = 0x01; // CLASS IN
+        tx_buf[off + 6] = 0x00; tx_buf[off + 7] = 0x00; // TTL
+        tx_buf[off + 8] = 0x00; tx_buf[off + 9] = 0x3C; // TTL 60s
+        tx_buf[off + 10] = 0x00; tx_buf[off + 11] = 0x04; // RDLENGTH
+        tx_buf[off + 12] = captive_ip[0];
+        tx_buf[off + 13] = captive_ip[1];
+        tx_buf[off + 14] = captive_ip[2];
+        tx_buf[off + 15] = captive_ip[3];
+
+        sendto(dns_captive_sock, tx_buf, resp_len, 0, (struct sockaddr *)&client_addr, client_len);
+    }
+
+    if (dns_captive_sock >= 0) {
+        lwip_close(dns_captive_sock);
+        dns_captive_sock = -1;
+    }
+    dns_captive_task_handle = NULL;
+    ESP_LOGI(TAG, "DNS Captive gestoppt");
+    vTaskDelete(NULL);
+}
+
+static bool start_dns_captive_server(void) {
+    if (dns_captive_running) {
+        return true;
+    }
+    dns_captive_running = true;
+    BaseType_t ok = xTaskCreate(dns_captive_task, "dns_captive", 4096, NULL, 5, &dns_captive_task_handle);
+    if (ok != pdPASS) {
+        dns_captive_running = false;
+        dns_captive_task_handle = NULL;
+        ESP_LOGE(TAG, "DNS Captive: Task-Start fehlgeschlagen");
+        return false;
+    }
+    return true;
+}
+
+static void stop_dns_captive_server(void) {
+    dns_captive_running = false;
+    if (dns_captive_sock >= 0) {
+        lwip_close(dns_captive_sock);
+        dns_captive_sock = -1;
+    }
 }
 
 
@@ -123,8 +260,14 @@ typedef struct {
     int8_t wifi_tx_power_dbm;     // WiFi TX Power in dBm (2..20 in UI-Stufen)
     int8_t ble_tx_power_dbm;      // BLE TX Power in dBm (3/6/9/12/15/18/20)
     int8_t zigbee_tx_power_dbm;   // ZigBee TX Power in dBm (-9/-6/-3/0/+3/+6/+10)
-    float adc_voltage_offset;  // ADC-Offset-Korrektur in Volt (aus config.json oder hardware.h)
+    float adc_voltage_multiplier;  // ADC-Skalierung (aus config.json oder hardware.h)
     char ntp_server[64];       // NTP-Server (aus config.json oder hardware.h)
+    char mqtt_host[MQTT_HOST_MAX_LEN + 1];
+    uint16_t mqtt_port;
+    char mqtt_username[MQTT_USERNAME_MAX_LEN + 1];
+    char mqtt_password[MQTT_PASSWORD_MAX_LEN + 1];
+    char mqtt_main_topic[MQTT_MAIN_TOPIC_MAX_LEN + 1];
+    bool mqtt_ha_autodiscovery;
     bool config_loaded;
 } config_rtc_t;
 
@@ -139,8 +282,14 @@ RTC_DATA_ATTR config_rtc_t config_rtc = {
     .wifi_tx_power_dbm = (int8_t)(WIFI_TX_POWER_DEFAULT / 4), // Default: 20 dBm
     .ble_tx_power_dbm = (int8_t)BLE_TX_POWER_DBM,               // Default: 9 dBm
     .zigbee_tx_power_dbm = (int8_t)ZIGBEE_TX_POWER_DEFAULT,     // Default: 0 dBm
-    .adc_voltage_offset = ADC_VOLTAGE_OFFSET,  // Default aus hardware.h
+    .adc_voltage_multiplier = ADC_VOLTAGE_MULTIPLIER,  // Default aus hardware.h
     .ntp_server = DEFAULT_NTP_SERVER,          // Default aus hardware.h
+    .mqtt_host = MQTT_DUMMY_HOST,
+    .mqtt_port = MQTT_DEFAULT_PORT,
+    .mqtt_username = "",
+    .mqtt_password = "",
+    .mqtt_main_topic = MQTT_DEFAULT_MAIN_TOPIC,
+    .mqtt_ha_autodiscovery = false,
     .config_loaded = false
 };
 RTC_DATA_ATTR int wakeupCount = 0;  // Zählt nur Deep-Sleep-Wake-ups (nicht ESP.restart())
@@ -159,6 +308,34 @@ int8_t transfer_ble_get_tx_power_dbm(void) {
 // TX Power-Zugriff für transfer_zigbee.cpp
 int8_t transfer_zigbee_get_tx_power_dbm(void) {
     return config_rtc.zigbee_tx_power_dbm;
+}
+
+const char* transfer_mqtt_get_host(void) {
+    return config_rtc.mqtt_host;
+}
+
+uint16_t transfer_mqtt_get_port(void) {
+    return config_rtc.mqtt_port;
+}
+
+const char* transfer_mqtt_get_username(void) {
+    return config_rtc.mqtt_username;
+}
+
+const char* transfer_mqtt_get_password(void) {
+    return config_rtc.mqtt_password;
+}
+
+const char* transfer_mqtt_get_main_topic(void) {
+    return config_rtc.mqtt_main_topic;
+}
+
+bool transfer_mqtt_get_ha_autodiscovery(void) {
+    return config_rtc.mqtt_ha_autodiscovery;
+}
+
+const char* transfer_mqtt_get_hostname(void) {
+    return config_rtc.hostname;
 }
 RTC_DATA_ATTR uint32_t ring_idx = RING_BUFFER_SIZE;  // Ring-Buffer-Index (im RTC-RAM, wird bei Power-On/ESP.restart() neu ermittelt)
 
@@ -850,7 +1027,11 @@ void shutdown_resources() {
         vTaskDelay(pdMS_TO_TICKS(100));  // Kurze Verzögerung für sauberes Schließen
     }
     
-    // 3. WiFi trennen und stoppen (STA und/oder AP)
+    // 3. DNS-Captive-Server stoppen (falls AP-Modus aktiv war)
+    stop_dns_captive_server();
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    // 4. WiFi trennen und stoppen (STA und/oder AP)
     if (wifi_initialized) {
         ESP_LOGI(TAG, "Trenne WiFi...");
         // WiFi trennen (falls im STA-Modus verbunden)
@@ -874,7 +1055,7 @@ void shutdown_resources() {
         // esp_wifi_deinit();  // Auskommentiert, da WiFi beim nächsten Wake-up wieder initialisiert wird
     }
     
-    // 4. LittleFS unmounten (sichert alle ausstehenden Schreibvorgänge)
+    // 5. LittleFS unmounten (sichert alle ausstehenden Schreibvorgänge)
     if (littlefs_mounted) {
         ESP_LOGI(TAG, "Unmounte LittleFS...");
         esp_err_t ret = esp_vfs_littlefs_unregister("storage");
@@ -1177,6 +1358,14 @@ bool load_config() {
             }
         }
 
+        // MQTT-Konfiguration plausibilisieren
+        if (config_rtc.mqtt_port == 0) {
+            rtc_valid = false;
+        }
+        if (strnlen(config_rtc.mqtt_main_topic, sizeof(config_rtc.mqtt_main_topic)) == 0) {
+            rtc_valid = false;
+        }
+
         // RTC-RAM Plausibilität (vor allem TX-Power, damit Brownout/seltene RAM-Korruption
         // nicht zu ungültigen Funktionsparametern führt)
         if (!(config_rtc.wifi_tx_power_dbm == 2 || config_rtc.wifi_tx_power_dbm == 5 ||
@@ -1304,11 +1493,18 @@ bool load_config() {
         }
     }
     
-    // ADC-Offset: aus config.json oder Default aus hardware.h
-    if (doc["adc_voltage_offset"].is<float>()) {
-        config_rtc.adc_voltage_offset = doc["adc_voltage_offset"].as<float>();
+    // ADC-Multiplikator: aus config.json oder Default aus hardware.h
+    if (doc["adc_voltage_multiplier"].is<float>()) {
+        config_rtc.adc_voltage_multiplier = doc["adc_voltage_multiplier"].as<float>();
+    } else if (doc["adc_voltage_offset"].is<float>()) {
+        // Legacy-Fallback: alte Offset-Config näherungsweise auf Multiplikator abbilden.
+        // Arbeitspunkt: 4.0 V Akkuspannung (typischer LiPo-Bereich).
+        const float legacy_offset = doc["adc_voltage_offset"].as<float>();
+        config_rtc.adc_voltage_multiplier = 1.0f + (legacy_offset / 4.0f);
+        ESP_LOGW(TAG, "Legacy-Feld adc_voltage_offset erkannt (%.3f V) -> adc_voltage_multiplier=%.4f (nahezu)",
+                 legacy_offset, config_rtc.adc_voltage_multiplier);
     } else {
-        config_rtc.adc_voltage_offset = ADC_VOLTAGE_OFFSET;
+        config_rtc.adc_voltage_multiplier = ADC_VOLTAGE_MULTIPLIER;
     }
     
     // NTP-Server: aus config.json oder Default aus hardware.h
@@ -1320,6 +1516,59 @@ bool load_config() {
         strncpy(config_rtc.ntp_server, DEFAULT_NTP_SERVER, sizeof(config_rtc.ntp_server) - 1);
         config_rtc.ntp_server[sizeof(config_rtc.ntp_server) - 1] = '\0';
     }
+
+    if (doc["mqtt_host"].is<const char*>()) {
+        const char* mqtt_host = doc["mqtt_host"] | "";
+        if (strlen(mqtt_host) > 0) {
+            strncpy(config_rtc.mqtt_host, mqtt_host, sizeof(config_rtc.mqtt_host) - 1);
+            config_rtc.mqtt_host[sizeof(config_rtc.mqtt_host) - 1] = '\0';
+        } else {
+            strncpy(config_rtc.mqtt_host, MQTT_DUMMY_HOST, sizeof(config_rtc.mqtt_host) - 1);
+            config_rtc.mqtt_host[sizeof(config_rtc.mqtt_host) - 1] = '\0';
+        }
+    } else {
+        strncpy(config_rtc.mqtt_host, MQTT_DUMMY_HOST, sizeof(config_rtc.mqtt_host) - 1);
+        config_rtc.mqtt_host[sizeof(config_rtc.mqtt_host) - 1] = '\0';
+    }
+
+    if (doc["mqtt_port"].is<uint16_t>()) {
+        uint16_t mqtt_port = doc["mqtt_port"].as<uint16_t>();
+        config_rtc.mqtt_port = (mqtt_port == 0) ? MQTT_DEFAULT_PORT : mqtt_port;
+    } else {
+        config_rtc.mqtt_port = MQTT_DEFAULT_PORT;
+    }
+
+    if (doc["mqtt_username"].is<const char*>()) {
+        const char* mqtt_username = doc["mqtt_username"] | "";
+        strncpy(config_rtc.mqtt_username, mqtt_username, sizeof(config_rtc.mqtt_username) - 1);
+        config_rtc.mqtt_username[sizeof(config_rtc.mqtt_username) - 1] = '\0';
+    } else {
+        config_rtc.mqtt_username[0] = '\0';
+    }
+
+    if (doc["mqtt_password"].is<const char*>()) {
+        const char* mqtt_password = doc["mqtt_password"] | "";
+        strncpy(config_rtc.mqtt_password, mqtt_password, sizeof(config_rtc.mqtt_password) - 1);
+        config_rtc.mqtt_password[sizeof(config_rtc.mqtt_password) - 1] = '\0';
+    } else {
+        config_rtc.mqtt_password[0] = '\0';
+    }
+
+    if (doc["mqtt_main_topic"].is<const char*>()) {
+        const char* mqtt_main_topic = doc["mqtt_main_topic"] | "";
+        if (strlen(mqtt_main_topic) > 0) {
+            strncpy(config_rtc.mqtt_main_topic, mqtt_main_topic, sizeof(config_rtc.mqtt_main_topic) - 1);
+            config_rtc.mqtt_main_topic[sizeof(config_rtc.mqtt_main_topic) - 1] = '\0';
+        } else {
+            strncpy(config_rtc.mqtt_main_topic, config_rtc.hostname, sizeof(config_rtc.mqtt_main_topic) - 1);
+            config_rtc.mqtt_main_topic[sizeof(config_rtc.mqtt_main_topic) - 1] = '\0';
+        }
+    } else {
+        strncpy(config_rtc.mqtt_main_topic, config_rtc.hostname, sizeof(config_rtc.mqtt_main_topic) - 1);
+        config_rtc.mqtt_main_topic[sizeof(config_rtc.mqtt_main_topic) - 1] = '\0';
+    }
+
+    config_rtc.mqtt_ha_autodiscovery = doc["mqtt_ha_autodiscovery"] | false;
     
     // Transfer-Mode: aus config.json oder Default "none"
     if (doc["transfer_mode"].is<const char*>()) {
@@ -1410,13 +1659,31 @@ bool load_config() {
     ESP_LOGI(TAG, "  hostname: %s", config_rtc.hostname);
     ESP_LOGI(TAG, "  adminpass: (Länge: %zu)", strlen(config_rtc.adminpass));
     ESP_LOGI(TAG, "  wakeup_minutes: %d", config_rtc.wakeup_minutes);
-    ESP_LOGI(TAG, "  transfer_minutes: %d", config_rtc.transfer_minutes);
+    // JSON-Feld transfer_minutes / transfer_interval_x = Multiplikator (x Wake-ups); RTC = effektive Minuten
+    if (config_rtc.transfer_minutes == 255) {
+        ESP_LOGI(TAG, "  transfer: nie (Multiplikator 0, intern 255)");
+    } else if (config_rtc.wakeup_minutes > 0) {
+        uint8_t mult = (uint8_t)(config_rtc.transfer_minutes / config_rtc.wakeup_minutes);
+        ESP_LOGI(TAG, "  transfer: Multiplikator %u × Wake-up %u Min. = %u Min. effektiv",
+                 (unsigned)mult, (unsigned)config_rtc.wakeup_minutes, (unsigned)config_rtc.transfer_minutes);
+    } else {
+        ESP_LOGI(TAG, "  transfer: %u Min. effektiv (Wake-up ungültig, Multiplikator nicht angezeigt)",
+                 (unsigned)config_rtc.transfer_minutes);
+    }
     ESP_LOGI(TAG, "  transfer_mode: %s", config_rtc.transfer_mode);
     ESP_LOGI(TAG, "  wifi_tx_power_dbm: %d", config_rtc.wifi_tx_power_dbm);
     ESP_LOGI(TAG, "  ble_tx_power_dbm: %d", config_rtc.ble_tx_power_dbm);
     ESP_LOGI(TAG, "  zigbee_tx_power_dbm: %d", config_rtc.zigbee_tx_power_dbm);
-    ESP_LOGI(TAG, "  adc_voltage_offset: %.3f V", config_rtc.adc_voltage_offset);
+    ESP_LOGI(TAG, "  adc_voltage_multiplier: %.4f", config_rtc.adc_voltage_multiplier);
     ESP_LOGI(TAG, "  ntp_server: %s", config_rtc.ntp_server);
+    ESP_LOGI(TAG, "  mqtt_host: %s", config_rtc.mqtt_host);
+    ESP_LOGI(TAG, "  mqtt_port: %u", (unsigned int)config_rtc.mqtt_port);
+    ESP_LOGI(TAG, "  mqtt_username: %s", config_rtc.mqtt_username);
+    ESP_LOGI(TAG, "  mqtt_password: %s (Länge: %zu)",
+             (strlen(config_rtc.mqtt_password) > 0 ? "***" : "(leer)"),
+             strlen(config_rtc.mqtt_password));
+    ESP_LOGI(TAG, "  mqtt_main_topic: %s", config_rtc.mqtt_main_topic);
+    ESP_LOGI(TAG, "  mqtt_ha_autodiscovery: %s", config_rtc.mqtt_ha_autodiscovery ? "true" : "false");
     ESP_LOGI(TAG, "  wifiCredentials: %d Set(s)", config_rtc.wifi_count);
     for (uint8_t i = 0; i < config_rtc.wifi_count && i < 2; i++) {
         ESP_LOGI(TAG, "    [%d] SSID: %s", i, config_rtc.wifi_credentials[i].ssid);
@@ -1602,18 +1869,23 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
         }
     }
     
-    if (doc["adc_voltage_offset"].is<float>()) {
-        float adc_voltage_offset = doc["adc_voltage_offset"].as<float>();
-        // Keine strenge Begrenzung, aber prüfe auf sinnvolle Werte (z.B. -10V bis +10V)
-        if (adc_voltage_offset >= -10.0f && adc_voltage_offset <= 10.0f) {
-            config_rtc.adc_voltage_offset = adc_voltage_offset;
+    if (doc["adc_voltage_multiplier"].is<float>()) {
+        float adc_voltage_multiplier = doc["adc_voltage_multiplier"].as<float>();
+        if (adc_voltage_multiplier >= 0.5f && adc_voltage_multiplier <= 2.0f) {
+            config_rtc.adc_voltage_multiplier = adc_voltage_multiplier;
         } else {
-            ESP_LOGE(TAG, "FEHLER: ADC Spannungs-Offset ungültig (%.2f, muss zwischen -10.0 und +10.0 sein)", adc_voltage_offset);
+            ESP_LOGE(TAG, "FEHLER: ADC Spannungs-Multiplikator ungültig (%.4f, muss zwischen 0.5 und 2.0 sein)", adc_voltage_multiplier);
             if (errorMessage != nullptr) {
-                strncpy(errorMessage, "Fehler: ADC Spannungs-Offset ungültig (muss zwischen -10.0 und +10.0 sein)", 255);
+                strncpy(errorMessage, "Fehler: ADC Spannungs-Multiplikator ungültig (muss zwischen 0.5 und 2.0 sein)", 255);
             }
             return false;
         }
+    } else if (doc["adc_voltage_offset"].is<float>()) {
+        // Legacy-Fallback für ältere Clients/Configs.
+        float legacy_offset = doc["adc_voltage_offset"].as<float>();
+        config_rtc.adc_voltage_multiplier = 1.0f + (legacy_offset / 4.0f);
+        ESP_LOGW(TAG, "Legacy-Feld adc_voltage_offset beim Speichern erkannt (%.3f V) -> adc_voltage_multiplier=%.4f",
+                 legacy_offset, config_rtc.adc_voltage_multiplier);
     }
     
     if (doc["ntp_server"].is<const char*>()) {
@@ -1627,6 +1899,91 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
                 strncpy(errorMessage, "Fehler: NTP-Server ungültig (leer oder zu lang)", 255);
             }
             return false;
+        }
+    }
+
+    if (doc["mqtt_host"].is<const char*>()) {
+        const char* mqtt_host = doc["mqtt_host"];
+        if (strlen(mqtt_host) < sizeof(config_rtc.mqtt_host)) {
+            if (strlen(mqtt_host) == 0) {
+                mqtt_host = MQTT_DUMMY_HOST;
+            }
+            strncpy(config_rtc.mqtt_host, mqtt_host, sizeof(config_rtc.mqtt_host) - 1);
+            config_rtc.mqtt_host[sizeof(config_rtc.mqtt_host) - 1] = '\0';
+        } else {
+            ESP_LOGE(TAG, "FEHLER: MQTT Host zu lang");
+            if (errorMessage != nullptr) {
+                strncpy(errorMessage, "Fehler: MQTT Host zu lang", 255);
+            }
+            return false;
+        }
+    }
+
+    if (doc["mqtt_port"].is<uint16_t>()) {
+        uint16_t mqtt_port = doc["mqtt_port"].as<uint16_t>();
+        if (mqtt_port >= 1) {
+            config_rtc.mqtt_port = mqtt_port;
+        } else {
+            ESP_LOGE(TAG, "FEHLER: MQTT Port ungültig");
+            if (errorMessage != nullptr) {
+                strncpy(errorMessage, "Fehler: MQTT Port ungültig", 255);
+            }
+            return false;
+        }
+    }
+
+    if (doc["mqtt_username"].is<const char*>()) {
+        const char* mqtt_username = doc["mqtt_username"];
+        if (strlen(mqtt_username) < sizeof(config_rtc.mqtt_username)) {
+            strncpy(config_rtc.mqtt_username, mqtt_username, sizeof(config_rtc.mqtt_username) - 1);
+            config_rtc.mqtt_username[sizeof(config_rtc.mqtt_username) - 1] = '\0';
+        } else {
+            ESP_LOGE(TAG, "FEHLER: MQTT Username zu lang");
+            if (errorMessage != nullptr) {
+                strncpy(errorMessage, "Fehler: MQTT Username zu lang", 255);
+            }
+            return false;
+        }
+    }
+
+    if (doc["mqtt_password"].is<const char*>()) {
+        const char* mqtt_password = doc["mqtt_password"];
+        if (strlen(mqtt_password) < sizeof(config_rtc.mqtt_password)) {
+            strncpy(config_rtc.mqtt_password, mqtt_password, sizeof(config_rtc.mqtt_password) - 1);
+            config_rtc.mqtt_password[sizeof(config_rtc.mqtt_password) - 1] = '\0';
+        } else {
+            ESP_LOGE(TAG, "FEHLER: MQTT Passwort zu lang");
+            if (errorMessage != nullptr) {
+                strncpy(errorMessage, "Fehler: MQTT Passwort zu lang", 255);
+            }
+            return false;
+        }
+    }
+
+    if (doc["mqtt_main_topic"].is<const char*>()) {
+        const char* mqtt_main_topic = doc["mqtt_main_topic"];
+        if (strlen(mqtt_main_topic) < sizeof(config_rtc.mqtt_main_topic)) {
+            strncpy(config_rtc.mqtt_main_topic, mqtt_main_topic, sizeof(config_rtc.mqtt_main_topic) - 1);
+            config_rtc.mqtt_main_topic[sizeof(config_rtc.mqtt_main_topic) - 1] = '\0';
+        } else {
+            ESP_LOGE(TAG, "FEHLER: MQTT Main Topic zu lang");
+            if (errorMessage != nullptr) {
+                strncpy(errorMessage, "Fehler: MQTT Main Topic zu lang", 255);
+            }
+            return false;
+        }
+    }
+
+    config_rtc.mqtt_ha_autodiscovery = doc["mqtt_ha_autodiscovery"] | false;
+
+    if (strcmp(config_rtc.transfer_mode, TRANSFER_MODE_MQTT) == 0) {
+        if (strlen(config_rtc.mqtt_host) == 0) {
+            strncpy(config_rtc.mqtt_host, MQTT_DUMMY_HOST, sizeof(config_rtc.mqtt_host) - 1);
+            config_rtc.mqtt_host[sizeof(config_rtc.mqtt_host) - 1] = '\0';
+        }
+        if (strlen(config_rtc.mqtt_main_topic) == 0) {
+            strncpy(config_rtc.mqtt_main_topic, config_rtc.hostname, sizeof(config_rtc.mqtt_main_topic) - 1);
+            config_rtc.mqtt_main_topic[sizeof(config_rtc.mqtt_main_topic) - 1] = '\0';
         }
     }
     
@@ -1711,8 +2068,14 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
     newDoc["wifi_tx_power_dbm"] = (int)config_rtc.wifi_tx_power_dbm;
     newDoc["ble_tx_power_dbm"] = (int)config_rtc.ble_tx_power_dbm;
     newDoc["zigbee_tx_power_dbm"] = (int)config_rtc.zigbee_tx_power_dbm;
-    newDoc["adc_voltage_offset"] = config_rtc.adc_voltage_offset;
+    newDoc["adc_voltage_multiplier"] = config_rtc.adc_voltage_multiplier;
     newDoc["ntp_server"] = config_rtc.ntp_server;
+    newDoc["mqtt_host"] = config_rtc.mqtt_host;
+    newDoc["mqtt_port"] = config_rtc.mqtt_port;
+    newDoc["mqtt_username"] = config_rtc.mqtt_username;
+    newDoc["mqtt_password"] = config_rtc.mqtt_password;
+    newDoc["mqtt_main_topic"] = config_rtc.mqtt_main_topic;
+    newDoc["mqtt_ha_autodiscovery"] = config_rtc.mqtt_ha_autodiscovery;
     
     // WiFi-Credentials als Array
     JsonArray wifiArray = newDoc["wifiCredentials"].to<JsonArray>();
@@ -1757,6 +2120,14 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
             ESP_LOGI(TAG, "WiFi-Credentials wurden geändert");
         }
     }
+
+    ESP_LOGI(TAG, "MQTT Config gespeichert: host=%s port=%u user=%s password=%s topic=%s ha_auto=%s",
+             config_rtc.mqtt_host,
+             (unsigned int)config_rtc.mqtt_port,
+             config_rtc.mqtt_username,
+             (strlen(config_rtc.mqtt_password) > 0 ? "***" : "(leer)"),
+             config_rtc.mqtt_main_topic,
+             config_rtc.mqtt_ha_autodiscovery ? "true" : "false");
     
     ESP_LOGI(TAG, "Config erfolgreich gespeichert (RTC-RAM und config.json)");
     return true;
@@ -1780,8 +2151,29 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             }
             case WIFI_EVENT_STA_DISCONNECTED:
                 wifi_connected = false;
-                ESP_LOGI(TAG, "WiFi getrennt");
+                if (event_data != NULL) {
+                    wifi_event_sta_disconnected_t* event = (wifi_event_sta_disconnected_t*)event_data;
+                    ESP_LOGI(TAG, "WiFi getrennt (reason=%d)", (int)event->reason);
+                } else {
+                    ESP_LOGI(TAG, "WiFi getrennt");
+                }
                 break;
+            case WIFI_EVENT_AP_STACONNECTED: {
+                wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*)event_data;
+                ESP_LOGI(TAG, "AP Client verbunden: %02X:%02X:%02X:%02X:%02X:%02X, AID=%d",
+                         event->mac[0], event->mac[1], event->mac[2],
+                         event->mac[3], event->mac[4], event->mac[5],
+                         event->aid);
+                break;
+            }
+            case WIFI_EVENT_AP_STADISCONNECTED: {
+                wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*)event_data;
+                ESP_LOGI(TAG, "AP Client getrennt: %02X:%02X:%02X:%02X:%02X:%02X, AID=%d",
+                         event->mac[0], event->mac[1], event->mac[2],
+                         event->mac[3], event->mac[4], event->mac[5],
+                         event->aid);
+                break;
+            }
             default:
                 break;
         }
@@ -1882,7 +2274,8 @@ bool connect_wifi() {
         return false;
     }
     
-    // WiFi-Modus auf Station setzen
+    // Sicherstellen: Captive-DNS läuft nicht im STA-Modus
+    stop_dns_captive_server();
     esp_wifi_set_mode(WIFI_MODE_STA);
     
     // WiFi starten (erforderlich für Scan)
@@ -1896,6 +2289,11 @@ bool connect_wifi() {
     wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
     
     vTaskDelay(pdMS_TO_TICKS(100));  // Kurze Verzögerung für WiFi-Initialisierung
+
+    ESP_LOGI(TAG, "WiFi-Credentials konfiguriert: %u", (unsigned int)config_rtc.wifi_count);
+    for (uint8_t i = 0; i < config_rtc.wifi_count && i < 2; i++) {
+        ESP_LOGI(TAG, "  Kandidat[%u]: SSID=%s", (unsigned int)i, config_rtc.wifi_credentials[i].ssid);
+    }
     
     // Hostname setzen (für DHCP-Server)
     esp_netif_t* sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
@@ -1911,84 +2309,116 @@ bool connect_wifi() {
         .channel = 0,
         .show_hidden = false,
     };
-    ret = esp_wifi_scan_start(&scan_config, true);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi-Scan fehlgeschlagen: %s", esp_err_to_name(ret));
-        return false;
-    }
-    
     uint16_t ap_count = 0;
-    esp_wifi_scan_get_ap_num(&ap_count);
+    const int scan_retries = 3;
+    for (int scan_try = 1; scan_try <= scan_retries; scan_try++) {
+        ret = esp_wifi_scan_start(&scan_config, true);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "WiFi-Scan fehlgeschlagen (Versuch %d/%d): %s",
+                     scan_try, scan_retries, esp_err_to_name(ret));
+            vTaskDelay(pdMS_TO_TICKS(300));
+            continue;
+        }
+        esp_wifi_scan_get_ap_num(&ap_count);
+        ESP_LOGI(TAG, "WiFi-Scan Versuch %d/%d: %u Netzwerke gefunden",
+                 scan_try, scan_retries, (unsigned int)ap_count);
+        if (ap_count > 0) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(300));
+    }
     if (ap_count == 0) {
         ESP_LOGE(TAG, "Keine Netzwerke gefunden");
         return false;
     }
-    
-    wifi_ap_record_t ap_records[ap_count];
-    esp_wifi_scan_get_ap_records(&ap_count, ap_records);
-    
-    // Bestes Netzwerk finden (höchste RSSI)
-    int best_rssi = -1000;
-    const char* best_ssid = NULL;
-    const char* best_password = NULL;
-    
-    for (uint8_t i = 0; i < config_rtc.wifi_count; i++) {
-        const char* ssid = config_rtc.wifi_credentials[i].ssid;
-        const char* password = config_rtc.wifi_credentials[i].password;
-        
-        for (uint16_t j = 0; j < ap_count; j++) {
-            // SSID vergleichen (C-String)
-            if (strcmp((const char*)ap_records[j].ssid, ssid) == 0) {
-                int rssi = ap_records[j].rssi;
-                if (rssi > best_rssi) {
-                    best_rssi = rssi;
-                    best_ssid = ssid;
-                    best_password = password;
-                    ap_info = ap_records[j];  // Für späteren Zugriff speichern
+
+    /* Kein VLA / kein großer Puffer: esp_wifi_scan_get_ap_record() liefert je einen
+     * Eintrag in RSSI-Reihenfolge und gibt dessen Speicher frei. Bei Abbruch vor
+     * leerer Liste: esp_wifi_clear_ap_list() (siehe ESP-IDF-Doku). */
+    typedef struct {
+        const char* ssid;
+        const char* password;
+        int rssi;
+        wifi_ap_record_t ap_rec;
+    } wifi_candidate_t;
+
+    wifi_candidate_t candidates[2];
+    uint8_t candidate_count = 0;
+
+    wifi_ap_record_t rec;
+    while (candidate_count < 2 && esp_wifi_scan_get_ap_record(&rec) == ESP_OK) {
+        for (uint8_t i = 0; i < config_rtc.wifi_count && i < 2; i++) {
+            if (strcmp((const char*)rec.ssid, config_rtc.wifi_credentials[i].ssid) != 0) {
+                continue;
+            }
+            bool already = false;
+            for (uint8_t c = 0; c < candidate_count; c++) {
+                if (strcmp(candidates[c].ssid, config_rtc.wifi_credentials[i].ssid) == 0) {
+                    already = true;
+                    break;
                 }
             }
+            if (already) {
+                break;
+            }
+            candidates[candidate_count].ssid = config_rtc.wifi_credentials[i].ssid;
+            candidates[candidate_count].password = config_rtc.wifi_credentials[i].password;
+            candidates[candidate_count].rssi = rec.rssi;
+            candidates[candidate_count].ap_rec = rec;
+            ESP_LOGI(TAG, "Bekannte SSID gefunden: %s (RSSI: %d dBm)",
+                     candidates[candidate_count].ssid, rec.rssi);
+            candidate_count++;
+            break;
         }
     }
-    
-    if (best_ssid == NULL) {
+    esp_wifi_clear_ap_list();
+
+    if (candidate_count == 0) {
         ESP_LOGE(TAG, "Kein bekanntes Netzwerk gefunden");
         return false;
     }
-    
-    // Verbindung herstellen
-    ESP_LOGI(TAG, "Verbinde mit: %s (RSSI: %d dBm)", best_ssid, best_rssi);
-    
-    wifi_config_t wifi_config = {};
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-    strncpy((char*)wifi_config.sta.ssid, best_ssid, sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char*)wifi_config.sta.password, best_password, sizeof(wifi_config.sta.password) - 1);
-    
-    esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-    esp_wifi_start();
-    
-    // WiFi TX Power setzen (nach esp_wifi_start)
-    // HINWEIS: TX Power wurde bereits beim ersten esp_wifi_start() für Scan gesetzt
-    // und bleibt erhalten, daher ist das zweite Setzen optional (aber harmlos)
-    wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
-    
-    esp_wifi_connect();
-    
-    // Warte auf Verbindung (über Event-Handler)
-    int attempts = 0;
-    while (!wifi_connected && attempts < 40) {  // 20 Sekunden (40 * 500ms)
-        vTaskDelay(pdMS_TO_TICKS(500));
-        attempts++;
+
+    // Verbindung herstellen (mit Fallback auf weitere bekannte SSIDs)
+    for (uint8_t c = 0; c < candidate_count; c++) {
+        const char* selected_ssid = candidates[c].ssid;
+        const char* selected_password = candidates[c].password;
+
+        ESP_LOGI(TAG, "Verbinde mit: %s (RSSI: %d dBm, Versuch %u/%u)",
+                 selected_ssid, candidates[c].rssi, (unsigned int)(c + 1), (unsigned int)candidate_count);
+
+        wifi_config_t wifi_config = {};
+        wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        strncpy((char*)wifi_config.sta.ssid, selected_ssid, sizeof(wifi_config.sta.ssid) - 1);
+        strncpy((char*)wifi_config.sta.password, selected_password, sizeof(wifi_config.sta.password) - 1);
+
+        esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+        esp_wifi_start();
+        wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
+        esp_wifi_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(100));
+        esp_wifi_connect();
+
+        // Warte auf Verbindung (über Event-Handler)
+        wifi_connected = false;
+        int attempts = 0;
+        while (!wifi_connected && attempts < 40) {  // 20 Sekunden (40 * 500ms)
+            vTaskDelay(pdMS_TO_TICKS(500));
+            attempts++;
+        }
+
+        if (wifi_connected) {
+            ap_info = candidates[c].ap_rec;
+            char ip_str[16];
+            snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&wifi_ip_info.ip));
+            ESP_LOGI(TAG, "WiFi verbunden! IP: %s", ip_str);
+            return true;
+        }
+
+        ESP_LOGW(TAG, "Verbindung zu %s fehlgeschlagen, versuche nächstes bekanntes Netz...", selected_ssid);
     }
-    
-    if (wifi_connected) {
-        char ip_str[16];
-        snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&wifi_ip_info.ip));
-        ESP_LOGI(TAG, "WiFi verbunden! IP: %s", ip_str);
-        return true;
-    } else {
-        ESP_LOGE(TAG, "WiFi-Verbindung fehlgeschlagen");
-        return false;
-    }
+
+    ESP_LOGE(TAG, "WiFi-Verbindung fehlgeschlagen");
+    return false;
 }
 
 // ============================================
@@ -2006,8 +2436,9 @@ bool start_access_point() {
     esp_wifi_stop();
     vTaskDelay(pdMS_TO_TICKS(200));
     
-    // WiFi-Modus auf AP setzen
-    esp_wifi_set_mode(WIFI_MODE_AP);
+    // AP+STA: STA-Interface bleibt frei für Umgebungs-Scan ohne Moduswechsel.
+    // STA wird unten „leer“ gesetzt, damit nach fehlgeschlagenem connect_wifi kein Hintergrund-Reconnect läuft.
+    esp_wifi_set_mode(WIFI_MODE_APSTA);
     
     // AP-Konfiguration
     // SSID kopieren (max. 32 Zeichen)
@@ -2017,22 +2448,39 @@ bool start_access_point() {
         ESP_LOGW(TAG, "SSID zu lang, gekürzt auf: %.*s", (int)ssid_len, config_rtc.hostname);
     }
     
-    wifi_config_t ap_config = {
-        .ap = {
-            .ssid_len = (uint8_t)ssid_len,  // Expliziter Cast zu uint8_t (max. 31 Zeichen)
-            .channel = 1,
-            .authmode = WIFI_AUTH_OPEN,
-            .max_connection = 4,
-        },
-    };
+    wifi_config_t ap_config = {};
+    ap_config.ap.ssid_len = (uint8_t)ssid_len;  // Expliziter Cast zu uint8_t (max. 31 Zeichen)
+    ap_config.ap.channel = 1;
+    ap_config.ap.max_connection = 4;
+    ap_config.ap.authmode = WIFI_AUTH_OPEN;
+    ap_config.ap.pmf_cfg.capable = true;
+    ap_config.ap.pmf_cfg.required = false;
     
     strncpy((char*)ap_config.ap.ssid, config_rtc.hostname, ssid_len);
     ap_config.ap.ssid[ssid_len] = '\0';
     ap_config.ap.ssid_len = (uint8_t)ssid_len;  // Expliziter Cast zu uint8_t
+
+    // AP bewusst offen halten:
+    // Fallback/Ersteinrichtung soll ohne Passwort direkt erreichbar sein.
+    ap_config.ap.password[0] = '\0';
+    ap_config.ap.authmode = WIFI_AUTH_OPEN;
     
     esp_err_t ret = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "AP-Konfiguration fehlgeschlagen: %s", esp_err_to_name(ret));
+        return false;
+    }
+
+    // STA-Interface: keine Verbindung (sonst Scan/Captive-Störungen durch Reconnect-Versuche)
+    wifi_config_t sta_clear = {};
+    sta_clear.sta.ssid[0] = '\0';
+    sta_clear.sta.password[0] = '\0';
+    // Leeres Passwort + WPA2-Threshold erzeugt Treiber-Warnung („kann OPEN nicht verbinden“).
+    // OPEN ist hier nur konsistent zur leeren STA-Config; Verbindung erfolgt ohnehin nicht (SSID leer).
+    sta_clear.sta.threshold.authmode = WIFI_AUTH_OPEN;
+    ret = esp_wifi_set_config(WIFI_IF_STA, &sta_clear);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "STA-Config (leer) fehlgeschlagen: %s", esp_err_to_name(ret));
         return false;
     }
     
@@ -2058,9 +2506,13 @@ bool start_access_point() {
     // WiFi TX Power setzen (nach esp_wifi_start)
     wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
     
-    ESP_LOGI(TAG, "Access Point gestartet: %s", config_rtc.hostname);
+    ESP_LOGI(TAG, "Access Point gestartet (Modus AP+STA, Captive nutzt nur AP): %s", config_rtc.hostname);
     ESP_LOGI(TAG, "AP IP: %d.%d.%d.%d", AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
     ESP_LOGI(TAG, "WLAN ist offen (kein Passwort)");
+
+    if (!start_dns_captive_server()) {
+        ESP_LOGW(TAG, "DNS Captive konnte nicht gestartet werden (HTTP-Captive-Redirect bleibt aktiv)");
+    }
     return true;
 }
 
@@ -2136,8 +2588,8 @@ const char* processor_get_value(const char* var) {
     if (strcmp(var, "adminpass") == 0) {
         return config_rtc.adminpass;
     }
-    if (strcmp(var, "adc_voltage_offset") == 0) {
-        snprintf(buffer, sizeof(buffer), "%.2f", config_rtc.adc_voltage_offset);
+    if (strcmp(var, "adc_voltage_multiplier") == 0) {
+        snprintf(buffer, sizeof(buffer), "%.4f", config_rtc.adc_voltage_multiplier);
         return buffer;
     }
     if (strcmp(var, "battery_percent") == 0) {
@@ -2178,6 +2630,39 @@ const char* processor_get_value(const char* var) {
     }
     if (strcmp(var, "ntp_server") == 0) {
         return config_rtc.ntp_server;
+    }
+    if (strcmp(var, "mqtt_host") == 0) {
+        return config_rtc.mqtt_host;
+    }
+    if (strcmp(var, "mqtt_port") == 0) {
+        snprintf(buffer, sizeof(buffer), "%u", (unsigned int)config_rtc.mqtt_port);
+        return buffer;
+    }
+    if (strcmp(var, "mqtt_username") == 0) {
+        return config_rtc.mqtt_username;
+    }
+    if (strcmp(var, "mqtt_password") == 0) {
+        return config_rtc.mqtt_password;
+    }
+    if (strcmp(var, "mqtt_main_topic") == 0) {
+        return config_rtc.mqtt_main_topic;
+    }
+    if (strcmp(var, "mqtt_dummy_host_default") == 0) {
+        return MQTT_DUMMY_HOST;
+    }
+    if (strcmp(var, "mqtt_default_port_value") == 0) {
+        snprintf(buffer, sizeof(buffer), "%u", (unsigned int)MQTT_DEFAULT_PORT);
+        return buffer;
+    }
+    if (strcmp(var, "mqtt_default_main_topic_value") == 0) {
+        /* UI-Vorschlag = Hostname (ZigBee/BLE-Limit 26 ≤ MQTT_TOPIC 63; typ. a-z0-9- → MQTT-Level ok). */
+        if (config_rtc.hostname[0] != '\0') {
+            return config_rtc.hostname;
+        }
+        return MQTT_DEFAULT_MAIN_TOPIC;
+    }
+    if (strcmp(var, "mqtt_ha_autodiscovery_checked") == 0) {
+        return config_rtc.mqtt_ha_autodiscovery ? "checked" : "";
     }
     if (strcmp(var, "wifi_tx_power_dbm") == 0) {
         snprintf(buffer, sizeof(buffer), "%d", config_rtc.wifi_tx_power_dbm);
@@ -2647,7 +3132,7 @@ static esp_err_t index_handler(httpd_req_t *req) {
     
     // ADC-Werte bei jedem Seitenaufruf neu messen (für Auto-Refresh)
     battery_adc_mv = read_adc_median_mv();
-    battery_voltage = (float)battery_adc_mv / 1000.0f * VOLTAGE_DIVIDER_RATIO + config_rtc.adc_voltage_offset;
+    battery_voltage = (float)battery_adc_mv / 1000.0f * VOLTAGE_DIVIDER_RATIO * config_rtc.adc_voltage_multiplier;
     battery_percent = VOLTAGE_TO_PERCENT(battery_voltage);
     
     // Template-Datei verarbeiten
@@ -2982,8 +3467,11 @@ static esp_err_t config_save_handler(httpd_req_t *req) {
     if (doc["transfer_mode"].is<const char*>()) {
         ESP_LOGI(TAG, "  transfer_mode: %s", doc["transfer_mode"].as<const char*>());
     }
+    if (doc["adc_voltage_multiplier"].is<float>()) {
+        ESP_LOGI(TAG, "  adc_voltage_multiplier: %.4f", doc["adc_voltage_multiplier"].as<float>());
+    }
     if (doc["adc_voltage_offset"].is<float>()) {
-        ESP_LOGI(TAG, "  adc_voltage_offset: %.3f V", doc["adc_voltage_offset"].as<float>());
+        ESP_LOGI(TAG, "  adc_voltage_offset (legacy): %.3f V", doc["adc_voltage_offset"].as<float>());
     }
     if (doc["ntp_server"].is<const char*>()) {
         ESP_LOGI(TAG, "  ntp_server: %s", doc["ntp_server"].as<const char*>());
@@ -3523,6 +4011,10 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
     }
     
     last_web_activity_us = esp_timer_get_time();
+
+    wifi_mode_t mode_before = WIFI_MODE_STA;
+    (void)esp_wifi_get_mode(&mode_before);
+    const bool scan_in_ap_mode = (mode_before == WIFI_MODE_AP || mode_before == WIFI_MODE_APSTA);
     
     // WiFi-Scan durchführen
     if (!init_wifi()) {
@@ -3531,22 +4023,46 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
         httpd_resp_send(req, "{\"error\":\"WiFi-Scan fehlgeschlagen\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_OK;
     }
-    
-    esp_wifi_set_mode(WIFI_MODE_STA);
-    
-    // WiFi starten (erforderlich für Scan)
-    esp_err_t ret = esp_wifi_start();
-    if (ret != ESP_OK) {
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req, "{\"error\":\"WiFi-Start fehlgeschlagen\"}", HTTPD_RESP_USE_STRLEN);
-        return ESP_OK;
+
+    esp_err_t ret = ESP_OK;
+    if (scan_in_ap_mode) {
+        // Konfig-AP läuft als AP+STA: kein Moduswechsel nötig. Legacy: nur-AP → kurz APSTA.
+        if (mode_before == WIFI_MODE_AP) {
+            ret = esp_wifi_set_mode(WIFI_MODE_APSTA);
+            if (ret != ESP_OK) {
+                httpd_resp_set_status(req, "500 Internal Server Error");
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_send(req, "{\"error\":\"WiFi-Modus APSTA fehlgeschlagen\"}", HTTPD_RESP_USE_STRLEN);
+                return ESP_OK;
+            }
+        }
+    } else {
+        // Nur STA: Scan nutzt 802.11, kein DNS. HTTP-Antwort läuft über TCP:80 — unabhängig vom DNS-Captive (UDP:53).
+        ret = esp_wifi_set_mode(WIFI_MODE_STA);
+        if (ret != ESP_OK) {
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, "{\"error\":\"WiFi-Modus STA fehlgeschlagen\"}", HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        }
     }
     
-    // WiFi TX Power setzen (nach esp_wifi_start)
-    wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
+    if (!scan_in_ap_mode) {
+        ret = esp_wifi_start();
+        if (ret != ESP_OK) {
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, "{\"error\":\"WiFi-Start fehlgeschlagen\"}", HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        }
+    }
     
-    vTaskDelay(pdMS_TO_TICKS(100));  // Kurze Verzögerung für WiFi-Initialisierung
+    wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    if (scan_in_ap_mode) {
+        esp_wifi_disconnect();
+    }
     
     wifi_scan_config_t scan_config = {
         .ssid = NULL,
@@ -3563,43 +4079,30 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
         return ESP_OK;
     }
     
-    uint16_t ap_count = 0;
-    esp_wifi_scan_get_ap_num(&ap_count);
-    if (ap_count == 0) {
+    uint16_t ap_total = 0;
+    esp_wifi_scan_get_ap_num(&ap_total);
+    if (ap_total == 0) {
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, "[]", HTTPD_RESP_USE_STRLEN);
         return ESP_OK;
     }
-    
-    wifi_ap_record_t ap_records[ap_count];
-    esp_wifi_scan_get_ap_records(&ap_count, ap_records);
-    
-    // Nach RSSI sortieren (Bubble Sort)
-    for (int i = 0; i < ap_count - 1; i++) {
-        for (int j = 0; j < ap_count - i - 1; j++) {
-            if (ap_records[j].rssi < ap_records[j + 1].rssi) {
-                wifi_ap_record_t temp = ap_records[j];
-                ap_records[j] = ap_records[j + 1];
-                ap_records[j + 1] = temp;
-            }
-        }
-    }
-    
-    // JSON erstellen (max. 10 stärkste Netzwerke)
+
     JsonDocument doc;
     JsonArray networksArray = doc.to<JsonArray>();
-    int maxNetworks = (ap_count > 10) ? 10 : ap_count;
-    
-    for (int i = 0; i < maxNetworks; i++) {
+    wifi_ap_record_t rec;
+    int n = 0;
+    while (n < WIFI_SCAN_MAX_AP && esp_wifi_scan_get_ap_record(&rec) == ESP_OK) {
         JsonObject network = networksArray.add<JsonObject>();
-        network["ssid"] = (const char*)ap_records[i].ssid;
-        network["rssi"] = ap_records[i].rssi;
-        network["encrypted"] = (ap_records[i].authmode != WIFI_AUTH_OPEN);
+        network["ssid"] = (const char*)rec.ssid;
+        network["rssi"] = rec.rssi;
+        network["encrypted"] = (rec.authmode != WIFI_AUTH_OPEN);
+        n++;
     }
-    
+    esp_wifi_clear_ap_list();
+
     char json_response[1024];
     serializeJson(doc, json_response, sizeof(json_response));
-    
+
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, json_response, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
@@ -3613,20 +4116,65 @@ static esp_err_t root_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// Captive-Landing: absolute URL auf die AP-IP (hardware.h), damit der Client eindeutig
+// dieselbe Origin nutzt wie DNS-Captive (10.0.0.1) — relative Pfade in index.html bleiben gültig.
+static esp_err_t captive_portal_redirect_handler(httpd_req_t *req) {
+    last_web_activity_us = esp_timer_get_time();
+    char location[56];
+    snprintf(location, sizeof(location), "http://%d.%d.%d.%d/index.html",
+             AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", location);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
+    httpd_resp_set_hdr(req, "Pragma", "no-cache");
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_send(req, "Redirecting to captive portal", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
 // Handler für 404 (Not Found)
 static esp_err_t not_found_handler(httpd_req_t *req) {
+    // Unbekannte URLs nur im AP-Modus auf Landingpage umleiten (Captive-Portal-Verhalten)
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    if (esp_wifi_get_mode(&mode) == ESP_OK && (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA)) {
+        return captive_portal_redirect_handler(req);
+    }
     httpd_resp_set_status(req, "404 Not Found");
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_send(req, "Not Found", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
+/** Nur Pfad ohne ?query und #fragment (LittleFS-Dateinamen, Content-Type, Captive-Checks). */
+static void uri_copy_path_only(char *dst, size_t dst_len, const char *uri) {
+    if (!dst || dst_len == 0) {
+        return;
+    }
+    dst[0] = '\0';
+    if (!uri) {
+        return;
+    }
+    size_t i = 0;
+    for (; uri[i] && uri[i] != '?' && uri[i] != '#' && i + 1 < dst_len; ++i) {
+        dst[i] = uri[i];
+    }
+    dst[i] = '\0';
+}
+
+static esp_err_t httpd_404_err_handler(httpd_req_t *req, httpd_err_code_t err) {
+    (void)err;
+    return not_found_handler(req);
+}
+
 // Handler für Static Files
 static esp_err_t static_file_handler(httpd_req_t *req) {
     last_web_activity_us = esp_timer_get_time();
+
+    char uri_path[128];
+    uri_copy_path_only(uri_path, sizeof(uri_path), req->uri);
     
     // Blockiere config.json
-    if (strcmp(req->uri, "/config.json") == 0) {
+    if (strcmp(uri_path, "/config.json") == 0) {
         httpd_resp_set_status(req, "403 Forbidden");
         httpd_resp_set_type(req, "text/plain");
         httpd_resp_send(req, "Forbidden: config.json is protected", HTTPD_RESP_USE_STRLEN);
@@ -3634,15 +4182,21 @@ static esp_err_t static_file_handler(httpd_req_t *req) {
     }
     
     // Dateipfad konstruieren
-    char filepath[64];
-    if (strcmp(req->uri, "/") == 0) {
+    char filepath[160];
+    if (strcmp(uri_path, "/") == 0) {
         strcpy(filepath, "/littlefs/index.html");
     } else {
-        snprintf(filepath, sizeof(filepath), "/littlefs%s", req->uri);
+        snprintf(filepath, sizeof(filepath), "/littlefs%s", uri_path);
     }
     
     FILE* file = fopen(filepath, "r");
     if (!file) {
+        // AP: jede nicht vorhandene Datei (z. B. /generate_204, /hotspot-detect.html) → Landingpage.
+        // Damit entfallen eigene Captive-Probe-Handler; DNS liefert ohnehin 10.0.0.1.
+        wifi_mode_t mode = WIFI_MODE_NULL;
+        if (esp_wifi_get_mode(&mode) == ESP_OK && (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA)) {
+            return captive_portal_redirect_handler(req);
+        }
         httpd_resp_set_status(req, "404 Not Found");
         httpd_resp_set_type(req, "text/plain");
         httpd_resp_send(req, "File not found", HTTPD_RESP_USE_STRLEN);
@@ -3650,28 +4204,28 @@ static esp_err_t static_file_handler(httpd_req_t *req) {
     }
     
     // Content-Type bestimmen
-    if (strstr(req->uri, ".css")) {
+    if (strstr(uri_path, ".css")) {
         httpd_resp_set_type(req, "text/css");
-    } else if (strstr(req->uri, ".js")) {
+    } else if (strstr(uri_path, ".js")) {
         httpd_resp_set_type(req, "application/javascript");
-    } else if (strstr(req->uri, ".gz")) {
+    } else if (strstr(uri_path, ".gz")) {
         httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
         // Content-Type basierend auf Dateiname ohne .gz
-        if (strstr(req->uri, ".css.gz")) {
+        if (strstr(uri_path, ".css.gz")) {
             httpd_resp_set_type(req, "text/css");
-        } else if (strstr(req->uri, ".js.gz")) {
+        } else if (strstr(uri_path, ".js.gz")) {
             httpd_resp_set_type(req, "application/javascript");
         }
-    } else if (strstr(req->uri, ".html")) {
+    } else if (strstr(uri_path, ".html")) {
         httpd_resp_set_type(req, "text/html");
-    } else if (strstr(req->uri, ".png")) {
+    } else if (strstr(uri_path, ".png")) {
         httpd_resp_set_type(req, "image/png");
-    } else if (strstr(req->uri, ".ico")) {
+    } else if (strstr(uri_path, ".ico")) {
         httpd_resp_set_type(req, "image/x-icon");
     }
     
     // Cache-Header für bootstrap.min.css
-    if (strstr(req->uri, "bootstrap.min.css")) {
+    if (strstr(uri_path, "bootstrap.min.css")) {
         httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=31536000");
     }
     
@@ -3734,7 +4288,8 @@ void setupWebServer() {
     
     // HTTP-Server konfigurieren
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 20;
+    // API + Static-Wildcard; keine separaten Captive-Probe-URIs nötig (AP: fehlende Datei → Redirect)
+    config.max_uri_handlers = 28;
     config.max_resp_headers = 8;
     config.lru_purge_enable = true;
     config.uri_match_fn = httpd_uri_match_wildcard;  // Wildcard-Matching für statische Dateien aktivieren
@@ -3747,6 +4302,13 @@ void setupWebServer() {
         ESP_LOGE(TAG, "Web-Server konnte nicht gestartet werden");
         return;
     }
+
+    {
+        esp_err_t eh = httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, httpd_404_err_handler);
+        if (eh != ESP_OK) {
+            ESP_LOGW(TAG, "HTTP-404-Error-Handler konnte nicht registriert werden: %s", esp_err_to_name(eh));
+        }
+    }
     
     // URI-Handler registrieren
     httpd_uri_t root_uri = {
@@ -3756,7 +4318,7 @@ void setupWebServer() {
         .user_ctx  = NULL
     };
     httpd_register_uri_handler(server, &root_uri);
-    
+
     httpd_uri_t index_uri = {
         .uri       = "/index.html",
         .method    = HTTP_GET,
@@ -3917,6 +4479,8 @@ extern "C" void app_main(void) {
     // Logging initialisieren (automatisch in ESP-IDF)
     esp_log_level_set("*", ESP_LOG_INFO);
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
+    // Captive/Browser brechen viele HTTP-Verbindungen ab → harmlose WARN-Spam unterdrücken
+    esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
     // WiFi-Debug-Nachrichten reduzieren (muss ganz am Anfang stehen)
     SET_WIFI_LOG_LEVEL();
     
@@ -3962,10 +4526,10 @@ extern "C" void app_main(void) {
         battery_percent = 0;
     } else {
         // Akku-Messung durchführen
-        // HINWEIS: config_rtc.adc_voltage_offset ist IMMER gesetzt (entweder durch Initialisierung mit ADC_VOLTAGE_OFFSET
+        // HINWEIS: config_rtc.adc_voltage_multiplier ist IMMER gesetzt (entweder durch Initialisierung mit ADC_VOLTAGE_MULTIPLIER
         //          oder durch load_config() aus config.json). Daher können wir es direkt verwenden.
         battery_adc_mv = read_adc_median_mv();
-        battery_voltage = (float)battery_adc_mv / 1000.0f * VOLTAGE_DIVIDER_RATIO + config_rtc.adc_voltage_offset;
+        battery_voltage = (float)battery_adc_mv / 1000.0f * VOLTAGE_DIVIDER_RATIO * config_rtc.adc_voltage_multiplier;
         battery_percent = VOLTAGE_TO_PERCENT(battery_voltage);
         
         ESP_LOGI(TAG, "ADC-Messung: %d mV → Spannung: %.2f V, Prozent: %d%%", 
@@ -4097,12 +4661,12 @@ extern "C" void app_main(void) {
         // WICHTIG: Muss vor allen Aktionen geladen sein, da beide Stränge (Timer/Power-On/GPIO) Config benötigen
         bool config_available = load_config();
         
-        // 2.1 Battery-Spannung neu berechnen (mit korrektem adc_voltage_offset aus Config)
+        // 2.1 Battery-Spannung neu berechnen (mit korrektem adc_voltage_multiplier aus Config)
         // WICHTIG: Bei Power-On wurde battery_voltage VOR load_config() mit dem DEFAULT-Offset berechnet.
         //          Jetzt ist der korrekte Offset aus config.json geladen → Neuberechnung nötig!
         //          Bei Deep-Sleep-Wake-Up ist der RTC-Wert bereits korrekt, aber Neuberechnung schadet nicht.
         if (config_available && battery_adc_mv > 0) {
-            battery_voltage = (float)battery_adc_mv / 1000.0f * VOLTAGE_DIVIDER_RATIO + config_rtc.adc_voltage_offset;
+            battery_voltage = (float)battery_adc_mv / 1000.0f * VOLTAGE_DIVIDER_RATIO * config_rtc.adc_voltage_multiplier;
             battery_percent = VOLTAGE_TO_PERCENT(battery_voltage);
             ESP_LOGD(TAG, "Battery-Spannung neu berechnet (mit Config-Offset): %.2f V, %d%%", battery_voltage, battery_percent);
         }

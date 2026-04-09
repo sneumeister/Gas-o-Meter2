@@ -115,7 +115,8 @@ Einmaliger Setup-Prozess, um Node-RED mit dem Gas-O-Meter2 zu verbinden. Es hand
 2. `gas-o-meter2-ble-flow.json` auswählen
 3. **Generic BLE Config** öffnen → BLE Scanning aktivieren → Gas-O-Meter2 wählen → Apply
 4. MQTT-Broker konfigurieren (falls verwendet)
-5. Deploy
+5. **Optional:** Im Flow den Node **„Set flow: MQTT & HA Presets“** öffnen und oben im Code das Objekt **`PRESETS`** anpassen (`mqtt_main_topic`, `ha_device_prefix`, Gerätename/Hersteller/Modell). Beim Deploy setzt der Inject **„MQTT/HA Presets anwenden (einmal)“** die Werte in `flow.*` (inkl. `mqtt_topic_slug` für HA-Topic-Pfade). So entspricht die BLE-Route der gleichen Topic-/Discovery-Struktur wie **MQTT via WiFi** in der Firmware (`transfer_mqtt.cpp` / `mqtt_config.h`).
+6. Deploy
 
 Alle BLE-Nodes („BLE Notify (0xFFF1)“, „BLE Read (0x2A26)“, „BLE Zeit schreiben (0x2A2B)“) verwenden **dieselbe** Generic-BLE-Config (gleiche MAC).
 
@@ -133,6 +134,12 @@ Alle BLE-Nodes („BLE Notify (0xFFF1)“, „BLE Read (0x2A26)“, „BLE Zeit 
 2. **Alle 2 s:** „BLE Notify Trigger“ schickt je nach Status entweder **Connect** oder **Subscribe 0xFFF1** an „BLE Notify (0xFFF1)“ (siehe BLE-Status-Handling).
 3. **Bei Notify:** „BLE Notify“ liefert die Messdaten → **On Notify (0xFFF1)** speichert die Nachricht und löst einen Read 0x2A26 aus → **BLE Read (0x2A26)** führt den Read aus → **On Read Result (0x2A26)** hängt die Firmware an und schickt an Parse BLE Data, Raw BLE und CTS Write.
 4. **Parse BLE Data** erzeugt das einheitliche Payload (gas, battery, …) → MQTT, Dashboard, optional HA Discovery.
+
+### MQTT-Topics und „Node-RED-Konvention“
+
+Es gibt **keine** offizielle Node-RED-Vorschrift für MQTT-Topic-Namen. Die frühere feste Verdrahtung (`gas-o-meter2/data`, `gas_o_meter2_*` in HA-Discovery) stammte aus diesem Projektbeispiel und gängigen HA-Discovery-Mustern (`homeassistant/<component>/<object_id>/config`). Die Firmware trennt bewusst: **Haupt-Topic** (oft mit Bindestrich, DNS-artig) für MQTT-State-Topics versus **Präfix + Slug** (`MQTT_HA_DEVICE_TOPIC_PREFIX` + aus dem Haupt-Topic abgeleiteter Slug mit Unterstrichen) für die **Discovery-Object-IDs**. Der BLE-Flow folgt jetzt derselben Logik wie WiFi-MQTT; anpassbar über **`PRESETS`** bzw. `flow.mqtt_main_topic` / `flow.ha_device_prefix`.
+
+**Hinweis BLE:** Über den ESP kommen echte Werte für RSSI und NTP-Status nur im WiFi-Pfad. Im BLE-Flow publizieren die Einzeltopics **`…/rssi`** und **`…/ntp_status`** Platzhalter (`0` / `-1`), damit HA-Discovery und Topic-Liste mit der Firmware übereinstimmen.
 
 ### BLE-Status-Handling (weniger Debug-Meldungen)
 
@@ -158,10 +165,10 @@ So erscheint in den geparsten Daten und in MQTT die echte Firmware-Version statt
 ### Home Assistant Auto-Discovery
 
 - **HA Discovery AN / AUS:** Zwei Inject-Nodes schalten die Discovery ein oder aus (Payload `true` / `false`).
-- **HA Discovery Config:** Baut die MQTT-Config-Nachrichten für die Entities (Gas, Battery, Spannung, Battery Low, Firmware) und publiziert sie (AN) bzw. löscht sie (AUS) per leerem Payload.
-- **HA Discovery** (MQTT out): Sendet die Nachrichten an den konfigurierten MQTT-Broker; Topic z. B. `homeassistant/sensor/gas_o_meter2_gas/config` usw.
+- **HA Discovery Config:** Baut die MQTT-Config-Nachrichten wie die Firmware: sieben Entities (Gas, Battery, Spannung, Battery Low mit ON/OFF-Template, Firmware, RSSI, NTP-Status). Discovery-Topics haben die Form `homeassistant/<component>/<ha_device_prefix>_<slug>_<tail>/config`; `unique_id` und `state_topic` nutzen **`flow.mqtt_main_topic`** (Slug für Pfade kommt aus den Presets). Nach **Presets ändern** zuerst **„MQTT/HA Presets anwenden“** triggern (oder neu deployen), dann **HA Discovery AN**.
+- **HA Discovery** (MQTT out): Sendet die Nachrichten an den konfigurierten MQTT-Broker.
 
-Nach „HA Discovery AN“ erscheinen die Entities in Home Assistant, sofern der MQTT-Broker mit HA verbunden ist. Die Daten kommen über das gleiche Topic wie die normalen MQTT-Daten (`gas-o-meter2/data`).
+Nach „HA Discovery AN“ erscheinen die Entities in Home Assistant, sofern der MQTT-Broker mit HA verbunden ist. Aggregiertes JSON geht an `<mqtt_main_topic>/data`; RSSI/NTP nutzen im BLE-Fall die separaten Topics mit Platzhalter-Payloads (siehe oben).
 
 ---
 

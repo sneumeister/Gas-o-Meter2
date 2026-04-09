@@ -1,0 +1,370 @@
+#include "transfer_mqtt.h"
+
+#ifndef ARDUINO
+
+#include "mqtt_config.h"
+#include "time_sync.h"
+#include "hardware.h"
+
+#include "esp_log.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "mqtt_client.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include <cstdio>
+#include <ctime>
+#include <string.h>
+
+static const char* TAG = "transfer_mqtt";
+
+extern bool connect_wifi(void);
+extern bool sync_ntp_time(void);
+extern wifi_ap_record_t ap_info;
+
+extern const char* transfer_mqtt_get_host(void);
+extern uint16_t transfer_mqtt_get_port(void);
+extern const char* transfer_mqtt_get_username(void);
+extern const char* transfer_mqtt_get_password(void);
+extern const char* transfer_mqtt_get_main_topic(void);
+extern bool transfer_mqtt_get_ha_autodiscovery(void);
+extern const char* transfer_mqtt_get_hostname(void);
+
+static bool mqtt_initialized = false;
+static volatile bool mqtt_connected = false;
+
+static void build_topic(char* out, size_t out_size, const char* main_topic, const char* suffix) {
+    snprintf(out, out_size, "%s/%s", main_topic, suffix);
+}
+
+static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_t event_id, void* event_data) {
+    (void)handler_args;
+    (void)base;
+    esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
+    switch ((esp_mqtt_event_id_t)event_id) {
+        case MQTT_EVENT_CONNECTED:
+            mqtt_connected = true;
+            break;
+        case MQTT_EVENT_DISCONNECTED:
+            mqtt_connected = false;
+            break;
+        default:
+            break;
+    }
+}
+
+static bool mqtt_publish_with_retry(esp_mqtt_client_handle_t client, const char* topic, const char* payload) {
+    for (int attempt = 0; attempt < MQTT_MAX_PUBLISH_ATTEMPTS; ++attempt) {
+        int msg_id = esp_mqtt_client_publish(client, topic, payload, 0, MQTT_QOS, MQTT_RETAIN);
+        if (msg_id >= 0) {
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(MQTT_PUBLISH_RETRY_DELAY_MS));
+    }
+    return false;
+}
+
+/** Slug für HA-Discovery-Topics: `/` → `_`, Leerzeichen entfernen (laut Projekt-Doku). */
+static void mqtt_ha_main_topic_slug(char* out, size_t cap, const char* main_topic) {
+    size_t j = 0;
+    if (main_topic == nullptr) {
+        out[0] = '\0';
+        return;
+    }
+    for (size_t i = 0; main_topic[i] != '\0' && j + 1 < cap; ++i) {
+        if (main_topic[i] == '/') {
+            out[j++] = '_';
+        } else if (main_topic[i] != ' ') {
+            out[j++] = main_topic[i];
+        }
+    }
+    out[j] = '\0';
+    if (j == 0) {
+        strncpy(out, "device", cap - 1);
+        out[cap - 1] = '\0';
+    }
+}
+
+/* ~1,9 kB Puffer nicht auf dem Main-Task-Stack (sonst Stack protection fault mit connect_wifi/send_data). */
+static char s_ha_slug[MQTT_MAIN_TOPIC_MAX_LEN + 1];
+static char s_ha_state_data[MQTT_MAIN_TOPIC_MAX_LEN + 32];
+static char s_ha_state_rssi[MQTT_MAIN_TOPIC_MAX_LEN + 32];
+static char s_ha_state_ntp[MQTT_MAIN_TOPIC_MAX_LEN + 32];
+static char s_ha_ident[MQTT_MAIN_TOPIC_MAX_LEN + 48];
+static char s_ha_device_tail[96];
+static char s_ha_device_json[320];
+static char s_ha_topic[160];
+static char s_ha_payload[1024];
+
+/**
+ * Home Assistant MQTT Discovery (retain, QoS aus mqtt_config.h).
+ * enable=true: JSON-Config pro Entity; false: leerer Payload zum Entfernen retained Config.
+ */
+static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, const char* main_topic,
+                                               const char* hostname, bool enable, const char* fw_version) {
+    mqtt_ha_main_topic_slug(s_ha_slug, sizeof(s_ha_slug), main_topic);
+
+    const char* dev_name = (hostname != nullptr && hostname[0] != '\0') ? hostname : MQTT_HA_MODEL;
+
+    build_topic(s_ha_state_data, sizeof(s_ha_state_data), main_topic, MQTT_TOPIC_SUFFIX_DATA);
+    build_topic(s_ha_state_rssi, sizeof(s_ha_state_rssi), main_topic, MQTT_TOPIC_SUFFIX_RSSI);
+    build_topic(s_ha_state_ntp, sizeof(s_ha_state_ntp), main_topic, MQTT_TOPIC_SUFFIX_NTP_STATUS);
+
+    snprintf(s_ha_ident, sizeof(s_ha_ident), "%s_%s", MQTT_HA_DEVICE_TOPIC_PREFIX, s_ha_slug);
+
+    s_ha_device_tail[0] = '\0';
+    if (fw_version != nullptr && fw_version[0] != '\0') {
+        snprintf(s_ha_device_tail, sizeof(s_ha_device_tail), ",\"sw_version\":\"%s\"", fw_version);
+    }
+
+    snprintf(s_ha_device_json, sizeof(s_ha_device_json),
+             "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\",\"manufacturer\":\"%s\",\"model\":\"%s\"%s}",
+             s_ha_ident, dev_name, MQTT_HA_MANUFACTURER, MQTT_HA_MODEL, s_ha_device_tail);
+
+    char* const slug = s_ha_slug;
+    char* const state_topic_data = s_ha_state_data;
+    char* const state_topic_rssi = s_ha_state_rssi;
+    char* const state_topic_ntp = s_ha_state_ntp;
+    char* const device_json = s_ha_device_json;
+
+    struct {
+        const char* component;
+        const char* object_id_tail;
+        const char* json_body;
+    } entries[] = {
+        {"sensor",
+         "gas",
+         "{\"name\":\"Gas Counter\",\"unique_id\":\"%s_gas\",\"state_topic\":\"%s\","
+         "\"value_template\":\"{{ value_json.gas }}\",\"unit_of_measurement\":\"m\\u00b3\","
+         "\"device_class\":\"gas\",\"state_class\":\"total_increasing\",\"icon\":\"mdi:meter-gas\",%s}"},
+        {"sensor",
+         "battery",
+         "{\"name\":\"Battery\",\"unique_id\":\"%s_battery\",\"state_topic\":\"%s\","
+         "\"value_template\":\"{{ value_json.battery }}\",\"unit_of_measurement\":\"%%\","
+         "\"device_class\":\"battery\",\"state_class\":\"measurement\",\"icon\":\"mdi:battery\",%s}"},
+        {"sensor",
+         "voltage",
+         "{\"name\":\"Battery Voltage\",\"unique_id\":\"%s_battery_voltage\",\"state_topic\":\"%s\","
+         "\"value_template\":\"{{ value_json.battery_voltage }}\",\"unit_of_measurement\":\"mV\","
+         "\"device_class\":\"voltage\",\"state_class\":\"measurement\",\"icon\":\"mdi:flash\",%s}"},
+        {"binary_sensor",
+         "battery_low",
+         "{\"name\":\"Battery Low\",\"unique_id\":\"%s_battery_low\",\"state_topic\":\"%s\","
+         "\"value_template\":\"{%% if value_json.battery_low %%}ON{%% else %%}OFF{%% endif %%}\","
+         "\"payload_on\":\"ON\",\"payload_off\":\"OFF\",\"device_class\":\"battery\","
+         "\"icon\":\"mdi:battery-alert\",%s}"},
+        {"sensor",
+         "firmware",
+         "{\"name\":\"Firmware\",\"unique_id\":\"%s_firmware_version\",\"state_topic\":\"%s\","
+         "\"value_template\":\"{{ value_json.firmware_version }}\",\"icon\":\"mdi:information\","
+         "\"entity_category\":\"diagnostic\",%s}"},
+        {"sensor",
+         "rssi",
+         "{\"name\":\"RSSI\",\"unique_id\":\"%s_rssi\",\"state_topic\":\"%s\","
+         "\"value_template\":\"{{ value | int }}\",\"unit_of_measurement\":\"dBm\","
+         "\"device_class\":\"signal_strength\",\"state_class\":\"measurement\",%s}"},
+        {"sensor",
+         "ntp_status",
+         "{\"name\":\"NTP Status\",\"unique_id\":\"%s_ntp_status\",\"state_topic\":\"%s\","
+         "\"value_template\":\"{{ value | int }}\",\"unit_of_measurement\":\"epoch_s\","
+         "\"entity_category\":\"diagnostic\",%s}"},
+    };
+
+    const char* state_topics[] = {
+        state_topic_data,
+        state_topic_data,
+        state_topic_data,
+        state_topic_data,
+        state_topic_data,
+        state_topic_rssi,
+        state_topic_ntp,
+    };
+
+    const size_t n_entries = sizeof(entries) / sizeof(entries[0]);
+
+    if (!enable) {
+        unsigned cleared = 0;
+        for (size_t i = 0; i < n_entries; ++i) {
+            snprintf(s_ha_topic, sizeof(s_ha_topic), "homeassistant/%s/%s_%s_%s/config", entries[i].component,
+                     MQTT_HA_DEVICE_TOPIC_PREFIX, slug, entries[i].object_id_tail);
+            if (mqtt_publish_with_retry(client, s_ha_topic, "")) {
+                ++cleared;
+            } else {
+                ESP_LOGW(TAG, "MQTT HA Auto-Discovery löschen fehlgeschlagen: %s", s_ha_topic);
+            }
+        }
+        ESP_LOGI(TAG, "MQTT HA Auto-Discovery aus: %u/%u Discovery-Topics mit leerem retain entfernt", cleared,
+                 (unsigned)n_entries);
+        return;
+    }
+
+    for (size_t i = 0; i < n_entries; ++i) {
+        snprintf(s_ha_topic, sizeof(s_ha_topic), "homeassistant/%s/%s_%s_%s/config", entries[i].component,
+                 MQTT_HA_DEVICE_TOPIC_PREFIX, slug, entries[i].object_id_tail);
+
+        snprintf(s_ha_payload, sizeof(s_ha_payload), entries[i].json_body, main_topic, state_topics[i],
+                 device_json);
+
+        if (mqtt_publish_with_retry(client, s_ha_topic, s_ha_payload)) {
+            ESP_LOGI(TAG, "MQTT HA Auto-Discovery gesendet: %s", s_ha_topic);
+        } else {
+            ESP_LOGW(TAG, "MQTT HA Auto-Discovery fehlgeschlagen: %s", s_ha_topic);
+        }
+    }
+}
+
+bool transfer_mqtt_init(void) {
+    mqtt_initialized = true;
+    return true;
+}
+
+transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
+    if (!mqtt_initialized && !transfer_mqtt_init()) {
+        return TRANSFER_STATUS_INIT_FAILED;
+    }
+    if (data == nullptr) {
+        return TRANSFER_STATUS_UNKNOWN_ERROR;
+    }
+
+    const char* mqtt_host = transfer_mqtt_get_host();
+    const char* mqtt_username = transfer_mqtt_get_username();
+    const char* mqtt_password = transfer_mqtt_get_password();
+    const char* mqtt_main_topic = transfer_mqtt_get_main_topic();
+    uint16_t mqtt_port = transfer_mqtt_get_port();
+
+    if (mqtt_host == nullptr || mqtt_host[0] == '\0' || mqtt_main_topic == nullptr || mqtt_main_topic[0] == '\0') {
+        ESP_LOGE(TAG, "MQTT-Konfiguration unvollständig");
+        return TRANSFER_STATUS_NOT_CONFIGURED;
+    }
+    if (strcmp(mqtt_host, MQTT_DUMMY_HOST) == 0) {
+        ESP_LOGW(TAG, "MQTT Host ist Dummy, Übertragung übersprungen");
+        return TRANSFER_STATUS_NOT_CONFIGURED;
+    }
+
+    if (!connect_wifi()) {
+        ESP_LOGE(TAG, "WiFi-Verbindung für MQTT fehlgeschlagen");
+        return TRANSFER_STATUS_CONNECTION_FAILED;
+    }
+
+    bool ntp_ok = sync_ntp_time();
+    int64_t ntp_status = ntp_ok ? (int64_t)time_sync_last_epoch : -1;
+
+    char timestamp_iso[40] = "";
+    if (ntp_ok) {
+        time_t now = time(NULL);
+        struct tm tm_utc;
+        if (gmtime_r(&now, &tm_utc) != nullptr) {
+            strftime(timestamp_iso, sizeof(timestamp_iso), "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
+        }
+    }
+
+    char uri[128];
+    snprintf(uri, sizeof(uri), "mqtt://%s:%u", mqtt_host, (unsigned int)mqtt_port);
+
+    esp_mqtt_client_config_t mqtt_cfg = {};
+    mqtt_cfg.broker.address.uri = uri;
+    mqtt_cfg.session.keepalive = 30;
+    mqtt_cfg.network.timeout_ms = MQTT_CONNECT_TIMEOUT_MS;
+    mqtt_cfg.credentials.username = mqtt_username;
+    mqtt_cfg.credentials.authentication.password = mqtt_password;
+
+    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    if (client == nullptr) {
+        ESP_LOGE(TAG, "MQTT Client Init fehlgeschlagen");
+        return TRANSFER_STATUS_INIT_FAILED;
+    }
+
+    mqtt_connected = false;
+    esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, mqtt_event_handler, nullptr);
+    if (esp_mqtt_client_start(client) != ESP_OK) {
+        esp_mqtt_client_destroy(client);
+        ESP_LOGE(TAG, "MQTT Client Start fehlgeschlagen");
+        return TRANSFER_STATUS_CONNECTION_FAILED;
+    }
+
+    uint32_t waited_ms = 0;
+    while (!mqtt_connected && waited_ms < MQTT_CONNECT_TIMEOUT_MS) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        waited_ms += 100;
+    }
+    if (!mqtt_connected) {
+        ESP_LOGE(TAG, "MQTT Connect Timeout");
+        esp_mqtt_client_stop(client);
+        esp_mqtt_client_destroy(client);
+        return TRANSFER_STATUS_CONNECTION_FAILED;
+    }
+
+    /* HA Discovery vor Telemetrie (retain), damit Entities existieren bevor State ankommt. */
+    transfer_mqtt_publish_ha_discovery(client, mqtt_main_topic, transfer_mqtt_get_hostname(),
+                                       transfer_mqtt_get_ha_autodiscovery(), data->firmware_version);
+
+    char payload_gas[32];
+    char payload_battery[16];
+    char payload_battery_voltage[16];
+    char payload_battery_low[8];
+    char payload_firmware_version[32];
+    char payload_timestamp[40];
+    char payload_rssi[16];
+    char payload_ntp_status[24];
+    char payload_data[256];
+
+    snprintf(payload_gas, sizeof(payload_gas), "%.2f", data->pulse_counter / 100.0f);
+    snprintf(payload_battery, sizeof(payload_battery), "%d", (int)data->battery_percent);
+    snprintf(payload_battery_voltage, sizeof(payload_battery_voltage), "%u", (uint16_t)(data->battery_voltage * 1000.0f));
+    snprintf(payload_battery_low, sizeof(payload_battery_low), "%s", (data->battery_voltage < 3.57f) ? "true" : "false");
+    snprintf(payload_firmware_version, sizeof(payload_firmware_version), "%s",
+             data->firmware_version ? data->firmware_version : "");
+    snprintf(payload_timestamp, sizeof(payload_timestamp), "%s", timestamp_iso);
+    snprintf(payload_rssi, sizeof(payload_rssi), "%d", (int)ap_info.rssi);
+    snprintf(payload_ntp_status, sizeof(payload_ntp_status), "%lld", (long long)ntp_status);
+
+    snprintf(payload_data, sizeof(payload_data),
+             "{\"gas\":%s,\"battery\":%s,\"battery_voltage\":%s,\"battery_low\":%s,"
+             "\"firmware_version\":\"%s\",\"timestamp\":\"%s\"}",
+             payload_gas, payload_battery, payload_battery_voltage, payload_battery_low,
+             payload_firmware_version, payload_timestamp);
+
+    char topic[128];
+    bool ok = true;
+
+    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_DATA);
+    ok &= mqtt_publish_with_retry(client, topic, payload_data);
+
+    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_RSSI);
+    ok &= mqtt_publish_with_retry(client, topic, payload_rssi);
+
+    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_NTP_STATUS);
+    ok &= mqtt_publish_with_retry(client, topic, payload_ntp_status);
+
+    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_GAS);
+    ok &= mqtt_publish_with_retry(client, topic, payload_gas);
+
+    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_BATTERY);
+    ok &= mqtt_publish_with_retry(client, topic, payload_battery);
+
+    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_BATTERY_VOLTAGE);
+    ok &= mqtt_publish_with_retry(client, topic, payload_battery_voltage);
+
+    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_BATTERY_LOW);
+    ok &= mqtt_publish_with_retry(client, topic, payload_battery_low);
+
+    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_FIRMWARE_VERSION);
+    ok &= mqtt_publish_with_retry(client, topic, payload_firmware_version);
+
+    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_TIMESTAMP);
+    ok &= mqtt_publish_with_retry(client, topic, payload_timestamp);
+
+    vTaskDelay(pdMS_TO_TICKS(MQTT_PUBLISH_TIMEOUT_MS));
+    esp_mqtt_client_stop(client);
+    vTaskDelay(pdMS_TO_TICKS(MQTT_DISCONNECT_TIMEOUT_MS));
+    esp_mqtt_client_destroy(client);
+
+    return ok ? TRANSFER_STATUS_OK : TRANSFER_STATUS_SEND_FAILED;
+}
+
+void transfer_mqtt_deinit(void) {
+    mqtt_initialized = false;
+}
+
+#endif

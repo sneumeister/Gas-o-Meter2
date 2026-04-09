@@ -315,6 +315,9 @@ function loadWifiNetworks() {
         });
         
         tableHTML += '</tbody></table>';
+        if (networks.length >= 10) {
+            tableHTML += '<p class="small text-muted mt-2 mb-0">Liste begrenzt auf 10 Einträge — bei vielen WLANs in der Nähe fehlen eventuell schwächere Netze.</p>';
+        }
         listDiv.innerHTML = tableHTML;
     })
     .catch(error => {
@@ -532,8 +535,32 @@ function saveConfig() {
     const wakeupMinutesStr = document.getElementById('wakeup_minutes').value.trim();
     const transferMode = document.getElementById('transfer_mode').value.trim();
     const transferMinutesStr = document.getElementById('transfer_minutes').value.trim();
-    const adcOffsetStr = document.getElementById('adc_voltage_offset').value.trim();
+    const adcMultiplierStr = document.getElementById('adc_voltage_multiplier').value.trim();
     const ntpServer = document.getElementById('ntp_server').value.trim();
+    const mqttHostInput = document.getElementById('mqtt_host');
+    const mqttPortInput = document.getElementById('mqtt_port');
+    const mqttUsernameInput = document.getElementById('mqtt_username');
+    const mqttPasswordInput = document.getElementById('mqtt_password');
+    const mqttMainTopicInput = document.getElementById('mqtt_main_topic');
+    const mqttHaCheckbox = document.getElementById('mqtt_ha_autodiscovery');
+    const mqttDummyHostDefaultInput = document.getElementById('mqtt_dummy_host_default');
+    const mqttDefaultPortInput = document.getElementById('mqtt_default_port_value');
+    const mqttDefaultMainTopicInput = document.getElementById('mqtt_default_main_topic_value');
+    const mqttHost = mqttHostInput ? mqttHostInput.value.trim() : '';
+    const mqttPortStr = mqttPortInput ? mqttPortInput.value.trim() : '';
+    const mqttUsername = mqttUsernameInput ? mqttUsernameInput.value.trim() : '';
+    const mqttPassword = mqttPasswordInput ? mqttPasswordInput.value.trim() : '';
+    const mqttMainTopic = mqttMainTopicInput ? mqttMainTopicInput.value.trim() : '';
+    const mqttHaAutodiscovery = mqttHaCheckbox ? !!mqttHaCheckbox.checked : false;
+    const mqttDummyHostDefault = (mqttDummyHostDefaultInput && mqttDummyHostDefaultInput.value.trim().length > 0)
+        ? mqttDummyHostDefaultInput.value.trim()
+        : 'dummy_mqtt_host';
+    const mqttDefaultPort = (mqttDefaultPortInput && mqttDefaultPortInput.value.trim().length > 0)
+        ? parseInt(mqttDefaultPortInput.value.trim(), 10)
+        : 1883;
+    const mqttDefaultMainTopic = (mqttDefaultMainTopicInput && mqttDefaultMainTopicInput.value.trim().length > 0)
+        ? mqttDefaultMainTopicInput.value.trim()
+        : hostname;
 
     const wifiTxPowerDbm = parseInt(document.getElementById('wifi_tx_power_dbm').value);
     const bleTxPowerDbm = parseInt(document.getElementById('ble_tx_power_dbm').value);
@@ -580,11 +607,11 @@ function saveConfig() {
         }
     }
     
-    // Validierung: ADC Spannungs-Offset
-    const adc_voltage_offset = parseFloat(adcOffsetStr);
-    if (isNaN(adc_voltage_offset)) {
-        alert("Bitte geben Sie einen gültigen ADC Spannungs-Offset ein.");
-        document.getElementById('adc_voltage_offset').focus();
+    // Validierung: ADC Spannungs-Multiplikator
+    const adc_voltage_multiplier = parseFloat(adcMultiplierStr);
+    if (isNaN(adc_voltage_multiplier) || adc_voltage_multiplier < 0.5 || adc_voltage_multiplier > 2.0) {
+        alert("Bitte geben Sie einen gültigen ADC Spannungs-Multiplikator zwischen 0.5 und 2.0 ein.");
+        document.getElementById('adc_voltage_multiplier').focus();
         return;
     }
 
@@ -622,6 +649,22 @@ function saveConfig() {
         alert("Bitte geben Sie ein Admin-Passwort an.");
         return;
     }
+
+    // MQTT-spezifische Validierung
+    let mqttPort = mqttDefaultPort;
+    let mqttHostForSave = mqttHost;
+    if (transferMode === 'mqtt') {
+        if (mqttHost.length === 0) {
+            mqttHostForSave = mqttDummyHostDefault;
+        }
+
+        mqttPort = (mqttPortStr.length === 0) ? mqttDefaultPort : parseInt(mqttPortStr, 10);
+        if (isNaN(mqttPort) || mqttPort < 1 || mqttPort > 65535) {
+            alert("Bitte geben Sie einen gültigen MQTT Port zwischen 1 und 65535 an.");
+            document.getElementById('mqtt_port').focus();
+            return;
+        }
+    }
     
     const formData = {
         hostname: hostname,
@@ -629,8 +672,14 @@ function saveConfig() {
         wakeup_minutes: wakeup_minutes,
         transfer_mode: transferMode,
         transfer_minutes: transfer_minutes,
-        adc_voltage_offset: adc_voltage_offset,
+        adc_voltage_multiplier: adc_voltage_multiplier,
         ntp_server: ntpServer,
+        mqtt_host: mqttHostForSave,
+        mqtt_port: mqttPort,
+        mqtt_username: mqttUsername,
+        mqtt_password: mqttPassword,
+        mqtt_main_topic: mqttMainTopic.length > 0 ? mqttMainTopic : mqttDefaultMainTopic,
+        mqtt_ha_autodiscovery: mqttHaAutodiscovery,
         wifi_tx_power_dbm: wifiTxPowerDbm,
         ble_tx_power_dbm: bleTxPowerDbm,
         zigbee_tx_power_dbm: zigbeeTxPowerDbm,
@@ -1197,6 +1246,7 @@ function toggleTransferConfig() {
     const transferMode = document.getElementById('transfer_mode').value;
     const zigbeeSection = document.getElementById('zigbeeConfigSection');
     const bleSection = document.getElementById('bleConfigSection');
+    const mqttSection = document.getElementById('mqttConfigSection');
 
     function hideZigbee() {
         if (zigbeeSection) zigbeeSection.style.display = 'none';
@@ -1208,31 +1258,84 @@ function toggleTransferConfig() {
         const collapse = document.getElementById('bleConfigCollapse');
         if (collapse) collapse.style.display = 'none';
     }
+    function hideMqtt() {
+        if (mqttSection) mqttSection.style.display = 'none';
+        const collapse = document.getElementById('mqttConfigCollapse');
+        if (collapse) collapse.style.display = 'none';
+        const toggleBtn = document.getElementById('mqttConfigToggle');
+        if (toggleBtn) toggleBtn.textContent = '📶 MQTT-Einstellungen...';
+    }
+
+    function ensureMqttDefaults() {
+        const hostnameInput = document.getElementById('hostname');
+        const mainTopicInput = document.getElementById('mqtt_main_topic');
+        const portInput = document.getElementById('mqtt_port');
+        const defaultPortInput = document.getElementById('mqtt_default_port_value');
+        const defaultMainTopicInput = document.getElementById('mqtt_default_main_topic_value');
+        const defaultMainTopic = (defaultMainTopicInput && defaultMainTopicInput.value.trim().length > 0)
+            ? defaultMainTopicInput.value.trim()
+            : (hostnameInput ? hostnameInput.value.trim() : '');
+        const defaultPort = (defaultPortInput && defaultPortInput.value.trim().length > 0)
+            ? defaultPortInput.value.trim()
+            : '1883';
+        if (mainTopicInput && mainTopicInput.value.trim().length === 0 && hostnameInput) {
+            mainTopicInput.value = defaultMainTopic;
+        }
+        if (portInput && portInput.value.trim().length === 0) {
+            portInput.value = defaultPort;
+        }
+    }
 
     if (configJustSaved) {
         hideZigbee();
         hideBle();
+        hideMqtt();
         return;
     }
     if (transferMode === savedTransferMode) {
         if (transferMode === 'zigbee') {
             zigbeeSection.style.display = 'block';
             hideBle();
+            hideMqtt();
         } else if (transferMode === 'ble' && bleSection) {
             bleSection.style.display = 'block';
             hideZigbee();
+            hideMqtt();
+        } else if (transferMode === 'mqtt' && mqttSection) {
+            mqttSection.style.display = 'block';
+            hideZigbee();
+            hideBle();
+            ensureMqttDefaults();
         } else {
             hideZigbee();
             hideBle();
+            hideMqtt();
         }
     } else {
         hideZigbee();
         hideBle();
+        hideMqtt();
     }
 }
 
 // Rückwärtskompatibilität
 function toggleZigbeeConfig() { toggleTransferConfig(); }
+
+// MQTT-Konfiguration: Klappt das Panel auf/zu
+function toggleMqttConfigPanel() {
+    const collapse = document.getElementById('mqttConfigCollapse');
+    const toggleBtn = document.getElementById('mqttConfigToggle');
+
+    if (!collapse || !toggleBtn) return;
+
+    if (collapse.style.display === 'none') {
+        collapse.style.display = 'block';
+        toggleBtn.textContent = '📶 MQTT-Einstellungen... (ausblenden)';
+    } else {
+        collapse.style.display = 'none';
+        toggleBtn.textContent = '📶 MQTT-Einstellungen...';
+    }
+}
 
 // ZigBee-Konfiguration: Klappt das Panel auf/zu
 function toggleZigbeeConfigPanel() {

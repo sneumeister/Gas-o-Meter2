@@ -9,7 +9,7 @@
 
 #define HARDWARE_PCB_ID 20251022
 const char PROJECT_NAME[] = "Gas-O-Meter2";
-const char PROJECT_VERSION[] = "0.9.0";
+const char PROJECT_VERSION[] = "1.0.0";
 const char SKETCHCOMPILE[] =
 {
    // YYYY- year

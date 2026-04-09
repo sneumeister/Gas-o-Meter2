@@ -1,6 +1,7 @@
 #include "transfer.h"
 #include "transfer_zigbee.h"
 #include "transfer_ble.h"
+#include "transfer_mqtt.h"
 #include "hardware.h"
 #include <string.h>  // Für strcmp
 
@@ -81,6 +82,15 @@ transfer_status_t transfer_data(const transfer_data_t* data) {
         return transfer_ble_send_data(data);
     }
 
+    // MQTT-Implementierung
+    if (strcmp(current_transfer_mode, TRANSFER_MODE_MQTT) == 0) {
+        if (!transfer_mqtt_init()) {
+            ESP_LOGE(TAG, "transfer_data: MQTT-Initialisierung fehlgeschlagen");
+            return TRANSFER_STATUS_INIT_FAILED;
+        }
+        return transfer_mqtt_send_data(data);
+    }
+
     ESP_LOGW(TAG, "transfer_data: Transfer-Modus '%s' noch nicht implementiert", current_transfer_mode);
     return TRANSFER_STATUS_NOT_CONFIGURED;
 }
@@ -96,6 +106,9 @@ void transfer_deinit(void) {
     }
     if (strcmp(current_transfer_mode, TRANSFER_MODE_BLE) == 0) {
         transfer_ble_deinit();
+    }
+    if (strcmp(current_transfer_mode, TRANSFER_MODE_MQTT) == 0) {
+        transfer_mqtt_deinit();
     }
     
     ESP_LOGI(TAG, "transfer_deinit: Transfer-Modus deinitialisiert (Mode: %s)", current_transfer_mode);

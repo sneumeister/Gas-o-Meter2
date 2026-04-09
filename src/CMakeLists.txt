@@ -14,6 +14,7 @@ idf_component_register(
           "transfer.cpp"
           "transfer_zigbee.cpp"
           "transfer_ble.cpp"
+          "transfer_mqtt.cpp"
           "time_sync.cpp"
     INCLUDE_DIRS "${INCLUDE_DIR}"
     REQUIRES 
@@ -29,6 +30,7 @@ idf_component_register(
         freertos
         ulp                     # ULP-Header für ulp_lp_core.h APIs
         bt                      # Bluetooth (NimBLE) für BLE
+        mqtt                    # ESP-IDF MQTT Client (IDF built-in)
         espressif__esp-zboss-lib    # ESP-Zigbee-SDK: ZBOSS Stack (über idf_component.yml)
         espressif__esp-zigbee-lib   # ESP-Zigbee-SDK: Espressif APIs (über idf_component.yml)
 )

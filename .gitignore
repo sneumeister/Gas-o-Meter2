@@ -3,6 +3,7 @@
 build/
 data/bootstrap.min.css
 *.backup
+compile_commands.json
 
 # IDE
 .vscode/.browse.c_cpp.db*

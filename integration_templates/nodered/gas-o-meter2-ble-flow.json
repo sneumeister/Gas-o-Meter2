@@ -4,8 +4,47 @@
         "type": "tab",
         "label": "Gas-O-Meter2 BLE",
         "disabled": false,
-        "info": "BLE Flow für Gas-O-Meter2 (node-red-contrib-generic-ble, BlueZ D-Bus).\n\n**Datenempfang:** Beim Deploy startet einmal „BLE Scanning starten“ (scanStart) → Scanning läuft. Inject alle 2 s triggert Connect + Subscribe nur wenn Gerät sichtbar (Status ≠ missing), sonst keine „Not yet connected“-Logs.\n\n**Zeitsync:** Bei jedem Notify wird die aktuelle UTC-Zeit per Write auf 0x2A2B (Current Time) an den ESP32 gesendet.\n\n**Ersteinrichtung (Pairing):**\n1. ESP32C6: config.html → 'BLE Pairing starten'\n2. Node-RED: Generic BLE Config → BLE Scanning → Gas-O-Meter2 wählen → Apply → Done → Deploy\n3. MAC gespeichert – danach automatische Verbindung bei jedem Wake-up\n\n**Voraussetzungen:** node-red-contrib-generic-ble, bluetoothd, Node-RED-User in Gruppe bluetooth.\n\nSiehe integration_templates/nodered/README.md.",
+        "info": "BLE Flow für Gas-O-Meter2 (node-red-contrib-generic-ble, BlueZ D-Bus).\n\n**MQTT/HA Presets:** Beim Deploy setzt „MQTT/HA Presets anwenden“ `flow`-Kontext (`mqtt_main_topic`, `ha_device_prefix`, …). Werte im Node **Set flow: MQTT & HA Presets** anpassen (wie ESP `mqtt_config.h` / MQTT-via-WiFi).\n\n**Datenempfang:** Beim Deploy startet einmal „BLE Scanning starten“ (scanStart) → Scanning läuft. Inject alle 2 s triggert Connect + Subscribe nur wenn Gerät sichtbar (Status ≠ missing), sonst keine „Not yet connected“-Logs.\n\n**Zeitsync:** Bei jedem Notify wird die aktuelle UTC-Zeit per Write auf 0x2A2B (Current Time) an den ESP32 gesendet.\n\n**Ersteinrichtung (Pairing):**\n1. ESP32C6: config.html → 'BLE Pairing starten'\n2. Node-RED: Generic BLE Config → BLE Scanning → Gas-O-Meter2 wählen → Apply → Done → Deploy\n3. MAC gespeichert – danach automatische Verbindung bei jedem Wake-up\n\n**Voraussetzungen:** node-red-contrib-generic-ble, bluetoothd, Node-RED-User in Gruppe bluetooth.\n\nSiehe integration_templates/nodered/README.md.",
         "env": []
+    },
+    {
+        "id": "a1mqttpresetinj01",
+        "type": "inject",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "MQTT/HA Presets anwenden (einmal)",
+        "props": [
+            {
+                "p": "payload",
+                "v": "1",
+                "vt": "num"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.2,
+        "topic": "",
+        "x": 200,
+        "y": 0,
+        "wires": [
+            [
+                "a1mqttpresetfn01"
+            ]
+        ]
+    },
+    {
+        "id": "a1mqttpresetfn01",
+        "type": "function",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "Set flow: MQTT & HA Presets",
+        "func": "// ============================================\n// PRESETS – hier anpassen (analog ESP: mqtt_main_topic + MQTT_HA_DEVICE_TOPIC_PREFIX)\n// ============================================\nconst PRESETS = {\n    mqtt_main_topic: 'gas-o-meter2',\n    ha_device_prefix: 'gas_o_meter2',\n    ha_device_name: 'Gas-O-Meter2',\n    ha_manufacturer: 'Custom',\n    ha_model: 'Gas-O-Meter2 BLE'\n};\n\nfunction mqttTopicSlug(mainTopic) {\n    let s = String(mainTopic || '').replace(/\\//g, '_').replace(/ /g, '');\n    return s.length ? s : 'device';\n}\n\nflow.set('mqtt_main_topic', PRESETS.mqtt_main_topic);\nflow.set('ha_device_prefix', PRESETS.ha_device_prefix);\nflow.set('ha_device_name', PRESETS.ha_device_name);\nflow.set('ha_manufacturer', PRESETS.ha_manufacturer);\nflow.set('ha_model', PRESETS.ha_model);\nflow.set('mqtt_topic_slug', mqttTopicSlug(PRESETS.mqtt_main_topic));\n\nnode.status({ fill: 'green', shape: 'dot', text: PRESETS.mqtt_main_topic });\nreturn null;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 460,
+        "y": 0,
+        "wires": [
+            []
+        ]
     },
     {
         "id": "a0b0c0d0e0f00001",
@@ -276,7 +315,7 @@
         "wires": [
             [
                 "e73e0b81c7963fdb",
-                "d6218f2f244a3a20",
+                "a1mqttdatatopic01",
                 "a3caebcd970d92c8",
                 "585f25ae91980517",
                 "2a7ad3ae739f1578",
@@ -289,12 +328,18 @@
         "type": "function",
         "z": "e1ad6b94a5c9cb11",
         "name": "Einzeltopics für MQTT",
-        "func": "// Pro Feld eine eigene Ausgabe → MQTT Out wird 6x einzeln aufgerufen (vermeidet \"nur 1 Topic\"-Problem)\nconst base = 'gas-o-meter2';\nconst p = msg.payload;\nif (typeof p !== 'object' || p === null) return null;\nconst str = (v) => (typeof v === 'object' ? JSON.stringify(v) : String(v));\nnode.send([\n  [{ topic: base + '/gas', payload: str(p.gas) }],\n  [{ topic: base + '/battery', payload: str(p.battery) }],\n  [{ topic: base + '/battery_voltage', payload: str(p.battery_voltage) }],\n  [{ topic: base + '/battery_low', payload: str(p.battery_low) }],\n  [{ topic: base + '/firmware_version', payload: str(p.firmware_version) }],\n  [{ topic: base + '/timestamp', payload: str(p.timestamp) }]\n]);\nreturn null;",
-        "outputs": 6,
+        "func": "// Pro Feld eigene Ausgabe + rssi/ntp Platzhalter (wie ESP transfer_mqtt; BLE: keine echten RSSI/NTP)\nconst base = flow.get('mqtt_main_topic') || 'gas-o-meter2';\nconst p = msg.payload;\nif (typeof p !== 'object' || p === null) return null;\nconst str = (v) => (typeof v === 'object' ? JSON.stringify(v) : String(v));\nnode.send([\n  [{ topic: base + '/gas', payload: str(p.gas) }],\n  [{ topic: base + '/battery', payload: str(p.battery) }],\n  [{ topic: base + '/battery_voltage', payload: str(p.battery_voltage) }],\n  [{ topic: base + '/battery_low', payload: str(p.battery_low) }],\n  [{ topic: base + '/firmware_version', payload: str(p.firmware_version) }],\n  [{ topic: base + '/timestamp', payload: str(p.timestamp) }],\n  [{ topic: base + '/rssi', payload: '0' }],\n  [{ topic: base + '/ntp_status', payload: '-1' }]\n]);\nreturn null;",
+        "outputs": 8,
         "noerr": 0,
         "x": 1060,
         "y": 380,
         "wires": [
+            [
+                "a9e15c007a820242"
+            ],
+            [
+                "a9e15c007a820242"
+            ],
             [
                 "a9e15c007a820242"
             ],
@@ -351,11 +396,27 @@
         "wires": []
     },
     {
+        "id": "a1mqttdatatopic01",
+        "type": "function",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "Topic: <main>/data",
+        "func": "const base = flow.get('mqtt_main_topic') || 'gas-o-meter2';\nmsg.topic = base + '/data';\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 1120,
+        "y": 300,
+        "wires": [
+            [
+                "d6218f2f244a3a20"
+            ]
+        ]
+    },
+    {
         "id": "d6218f2f244a3a20",
         "type": "mqtt out",
         "z": "e1ad6b94a5c9cb11",
         "name": "MQTT Publisher",
-        "topic": "gas-o-meter2/data",
+        "topic": "",
         "qos": "1",
         "retain": "true",
         "respTopic": "",
@@ -541,7 +602,7 @@
         "type": "function",
         "z": "e1ad6b94a5c9cb11",
         "name": "HA Discovery Config",
-        "func": "var enable = msg.payload;\nvar stateTopic = 'gas-o-meter2/data';\nvar device = {\n    identifiers: ['gas_o_meter2'],\n    name: 'Gas-O-Meter2',\n    manufacturer: 'Custom',\n    model: 'Gas-O-Meter2 BLE'\n};\n\nvar configs = [\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_gas/config',\n        payload: {\n            name: 'Gas Counter',\n            unique_id: 'gas_o_meter2_gas',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.gas }}',\n            unit_of_measurement: 'm\\u00b3',\n            device_class: 'gas',\n            state_class: 'total_increasing',\n            icon: 'mdi:meter-gas',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_battery/config',\n        payload: {\n            name: 'Battery',\n            unique_id: 'gas_o_meter2_battery',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.battery }}',\n            unit_of_measurement: '%',\n            device_class: 'battery',\n            state_class: 'measurement',\n            icon: 'mdi:battery',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_voltage/config',\n        payload: {\n            name: 'Battery Voltage',\n            unique_id: 'gas_o_meter2_voltage',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.battery_voltage }}',\n            unit_of_measurement: 'mV',\n            device_class: 'voltage',\n            state_class: 'measurement',\n            icon: 'mdi:flash',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/binary_sensor/gas_o_meter2_battery_low/config',\n        payload: {\n            name: 'Battery Low',\n            unique_id: 'gas_o_meter2_battery_low',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.battery_low }}',\n            payload_on: true,\n            payload_off: false,\n            device_class: 'battery',\n            icon: 'mdi:battery-alert',\n            device: device\n        }\n    },\n    {\n        topic: 'homeassistant/sensor/gas_o_meter2_firmware/config',\n        payload: {\n            name: 'Firmware',\n            unique_id: 'gas_o_meter2_firmware',\n            state_topic: stateTopic,\n            value_template: '{{ value_json.firmware_version }}',\n            icon: 'mdi:information',\n            entity_category: 'diagnostic',\n            device: device\n        }\n    }\n];\n\nvar messages = [];\nfor (var i = 0; i < configs.length; i++) {\n    messages.push({\n        topic: configs[i].topic,\n        payload: enable ? JSON.stringify(configs[i].payload) : '',\n        retain: true\n    });\n}\nnode.status({text: enable ? 'AN (' + configs.length + ' Entities)' : 'AUS (entfernt)'});\nreturn [messages];",
+        "func": "var enable = msg.payload === true;\nvar main = flow.get('mqtt_main_topic') || 'gas-o-meter2';\nvar haPrefix = flow.get('ha_device_prefix') || 'gas_o_meter2';\nvar slug = flow.get('mqtt_topic_slug');\nif (!slug) {\n    slug = String(main).split('/').join('_').split(' ').join('');\n    if (!slug.length) { slug = 'device'; }\n}\nvar stateData = main + '/data';\nvar stateRssi = main + '/rssi';\nvar stateNtp = main + '/ntp_status';\nvar devId = haPrefix + '_' + slug;\nvar device = {\n    identifiers: [devId],\n    name: flow.get('ha_device_name') || 'Gas-O-Meter2',\n    manufacturer: flow.get('ha_manufacturer') || 'Custom',\n    model: flow.get('ha_model') || 'Gas-O-Meter2 BLE'\n};\nfunction haPath(comp, tail) {\n    return 'homeassistant/' + comp + '/' + haPrefix + '_' + slug + '_' + tail + '/config';\n}\nvar configs = [\n    { topic: haPath('sensor', 'gas'), payload: { name: 'Gas Counter', unique_id: main + '_gas', state_topic: stateData, value_template: '{{ value_json.gas }}', unit_of_measurement: 'm\\u00b3', device_class: 'gas', state_class: 'total_increasing', icon: 'mdi:meter-gas', device: device } },\n    { topic: haPath('sensor', 'battery'), payload: { name: 'Battery', unique_id: main + '_battery', state_topic: stateData, value_template: '{{ value_json.battery }}', unit_of_measurement: '%', device_class: 'battery', state_class: 'measurement', icon: 'mdi:battery', device: device } },\n    { topic: haPath('sensor', 'voltage'), payload: { name: 'Battery Voltage', unique_id: main + '_battery_voltage', state_topic: stateData, value_template: '{{ value_json.battery_voltage }}', unit_of_measurement: 'mV', device_class: 'voltage', state_class: 'measurement', icon: 'mdi:flash', device: device } },\n    { topic: haPath('binary_sensor', 'battery_low'), payload: { name: 'Battery Low', unique_id: main + '_battery_low', state_topic: stateData, value_template: '{% if value_json.battery_low %}ON{% else %}OFF{% endif %}', payload_on: 'ON', payload_off: 'OFF', device_class: 'battery', icon: 'mdi:battery-alert', device: device } },\n    { topic: haPath('sensor', 'firmware'), payload: { name: 'Firmware', unique_id: main + '_firmware_version', state_topic: stateData, value_template: '{{ value_json.firmware_version }}', icon: 'mdi:information', entity_category: 'diagnostic', device: device } },\n    { topic: haPath('sensor', 'rssi'), payload: { name: 'RSSI', unique_id: main + '_rssi', state_topic: stateRssi, value_template: '{{ value | int }}', unit_of_measurement: 'dBm', device_class: 'signal_strength', state_class: 'measurement', device: device } },\n    { topic: haPath('sensor', 'ntp_status'), payload: { name: 'NTP Status', unique_id: main + '_ntp_status', state_topic: stateNtp, value_template: '{{ value | int }}', unit_of_measurement: 'epoch_s', entity_category: 'diagnostic', device: device } }\n];\nvar messages = [];\nfor (var i = 0; i < configs.length; i++) {\n    messages.push({ topic: configs[i].topic, payload: enable ? JSON.stringify(configs[i].payload) : '', retain: true });\n}\nnode.status({ text: enable ? ('AN (' + configs.length + ')') : 'AUS' });\nreturn [messages];",
         "outputs": 1,
         "noerr": 0,
         "x": 420,

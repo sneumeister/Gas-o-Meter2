@@ -127,6 +127,7 @@
                     </button>
                     <div class="collapse mt-2" id="wifiScanCollapse" style="display: none;">
                         <div class="card card-body">
+                            <p class="small text-muted mb-2">Hinweis: Es werden höchstens die <strong>10 stärksten</strong> Netzwerke angezeigt (nach Signalstärke / RSSI sortiert). Schwächere WLANs erscheinen nicht in der Liste.</p>
                             <div id="wifiScanStatus" class="text-muted">Klicken Sie auf den Button, um verfügbare Netzwerke zu laden.</div>
                             <div id="wifiNetworksList"></div>
                         </div>
@@ -168,7 +169,7 @@
                         <option value="none" `transfer_mode_none`>Keine Übertragung</option>
                         <option value="zigbee" `transfer_mode_zigbee`>ZigBee</option>
                         <option value="ble" `transfer_mode_ble`>BLE</option>
-                        <option value="mqtt" `transfer_mode_mqtt`>MQTT via WiFi (geplant)</option>
+                        <option value="mqtt" `transfer_mode_mqtt`>MQTT via WiFi</option>
                     </select>
                 </div>
             </div>
@@ -279,6 +280,48 @@
                     </div>
                 </div>
             </div>
+
+            <!-- MQTT-Konfiguration (nur sichtbar wenn transfer_mode=mqtt) -->
+            <div class="mb-3" id="mqttConfigSection" style="display: none;">
+                <button class="btn btn-outline-primary btn-sm" type="button" id="mqttConfigToggle" onclick="toggleMqttConfigPanel()">
+                    📶 MQTT-Einstellungen...
+                </button>
+                <div class="collapse mt-2" id="mqttConfigCollapse" style="display: none;">
+                    <div class="card card-body">
+                        <input type="hidden" id="mqtt_dummy_host_default" value="`mqtt_dummy_host_default`">
+                        <input type="hidden" id="mqtt_default_port_value" value="`mqtt_default_port_value`">
+                        <input type="hidden" id="mqtt_default_main_topic_value" value="`mqtt_default_main_topic_value`">
+                        <h5 class="mb-3">MQTT-Einstellungen</h5>
+                        <div class="mb-3">
+                            <label for="mqtt_host" class="form-label">MQTT Host</label>
+                            <input type="text" class="form-control" id="mqtt_host" name="mqtt_host" value="`mqtt_host`" maxlength="63">
+                        </div>
+                        <div class="mb-3">
+                            <label for="mqtt_port" class="form-label">MQTT Port</label>
+                            <input type="number" class="form-control" id="mqtt_port" name="mqtt_port" value="`mqtt_port`" min="1" max="65535">
+                        </div>
+                        <div class="mb-3">
+                            <label for="mqtt_username" class="form-label">MQTT Username (optional)</label>
+                            <input type="text" class="form-control" id="mqtt_username" name="mqtt_username" value="`mqtt_username`" maxlength="63">
+                        </div>
+                        <div class="mb-3">
+                            <label for="mqtt_password" class="form-label">MQTT Passwort (optional)</label>
+                            <input type="password" class="form-control" id="mqtt_password" name="mqtt_password" value="`mqtt_password`" maxlength="63">
+                        </div>
+                        <div class="mb-3">
+                            <label for="mqtt_main_topic" class="form-label">MQTT Main Topic</label>
+                            <input type="text" class="form-control" id="mqtt_main_topic" name="mqtt_main_topic" value="`mqtt_main_topic`" maxlength="63">
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="mqtt_ha_autodiscovery" name="mqtt_ha_autodiscovery" `mqtt_ha_autodiscovery_checked`>
+                            <label class="form-check-label" for="mqtt_ha_autodiscovery">
+                                HomeAssistant Auto-Discovery
+                            </label>
+                        </div>
+                        <small class="text-muted">Hinweis: Ohne echten MQTT Host wird der Dummy-Host gespeichert und MQTT-Transfer übersprungen.</small>
+                    </div>
+                </div>
+            </div>
             
             <div class="mb-3">
                 <label for="transfer_minutes" class="form-label">Transfer Intervall (alle x Wake-up Intervall)</label>
@@ -287,8 +330,9 @@
             </div>
             
             <div class="mb-3">
-                <label for="adc_voltage_offset" class="form-label">ADC Spannungs-Offset (V)</label>
-                <input type="number" class="form-control" id="adc_voltage_offset" name="adc_voltage_offset" value="`adc_voltage_offset`" step="0.01" required>
+                <label for="adc_voltage_multiplier" class="form-label">ADC Spannungs-Multiplikator</label>
+                <input type="number" class="form-control" id="adc_voltage_multiplier" name="adc_voltage_multiplier" value="`adc_voltage_multiplier`" step="0.0001" min="0.5" max="2.0" required>
+                <small class="form-text text-muted">Kalibrierung: Multimeter-Spannung / angezeigte Spannung (z. B. 4.19 / 4.06 = 1.0320)</small>
             </div>
             
             <div class="mb-3">

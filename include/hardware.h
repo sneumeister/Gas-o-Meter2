@@ -110,10 +110,9 @@
 // Spannungsteiler-Konfiguration
 #define VOLTAGE_DIVIDER_RATIO  2.0   // Spannungsteiler-Verhältnis (2:1 = 2.0)
 
-// ADC-Korrekturfaktor (Offset-Korrektur)
-// Gemessen: 3.3V Eingang → 3.25V angezeigt → Offset: +0.05V
-//#define ADC_VOLTAGE_OFFSET     0.00f  // Offset-Korrektur in Volt (empirisch bestimmt)
-#define ADC_VOLTAGE_OFFSET     -0.05f  
+// ADC-Korrekturfaktor (Skalierung)
+// 1.0 = keine Korrektur, typischer Kalibrierwert: Multimeter-Spannung / angezeigte Spannung
+#define ADC_VOLTAGE_MULTIPLIER  1.00f
 
 // ADC-Konfiguration für ADC_ATTEN_DB_12
 // Gemessen: 3.3V Eingang → 1.65V am ADC → ADC-Wert 1595
