@@ -1,6 +1,7 @@
 // ESP-IDF Headers
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_mac.h"
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
@@ -2775,6 +2776,16 @@ const char* processor_get_value(const char* var) {
     }
     if (strcmp(var, "ble_status") == 0) {
         return "Nicht aktiv";
+    }
+    if (strcmp(var, "ble_mac") == 0) {
+        uint8_t mac[6] = {0};
+        if (esp_read_mac(mac, ESP_MAC_BT) == ESP_OK) {
+            snprintf(buffer, sizeof(buffer), "%02X:%02X:%02X:%02X:%02X:%02X",
+                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        } else {
+            snprintf(buffer, sizeof(buffer), "-");
+        }
+        return buffer;
     }
     if (strcmp(var, "transfer_interval_x") == 0) {
         // Wenn transfer_minutes == 255, dann ist Multiplikator = 0 (nie)

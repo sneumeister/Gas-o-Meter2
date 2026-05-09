@@ -5,7 +5,7 @@
 
 // ==========================================================
 // Projektname und Version mit automatischer Build-Date/Time
-// ===========================================================
+// ==========================================================
 
 #define HARDWARE_PCB_ID 20251022
 const char PROJECT_NAME[] = "Gas-O-Meter2";

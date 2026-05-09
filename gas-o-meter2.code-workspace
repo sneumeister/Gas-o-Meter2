@@ -5,9 +5,5 @@
 		}
 	],
 	"settings": {
-		"clangd.arguments": [
-			"--compile-commands-dir=d:\\Projekte\\gas-o-meter2",
-			"--query-driver=D:\\.platformio\\packages\\toolchain-*\\bin\\*,D:\\.platformio\\packages\\tool-*\\bin\\*"
-		]
 	}
 }
