@@ -120,19 +120,56 @@ const definition = {
     // Configure-Funktion: Wird nach dem Pairing/Join ausgeführt
     // Bind + Configure Reporting. Das Device setzt nur die Cluster-Werte; der Zigbee-Stack
     // sendet Attribute Reports automatisch bei Wertänderung (sobald Reporting konfiguriert ist).
-    configure: async (device, coordinatorEndpoint) => {
+    //
+    // Branch zigbee_reporting_fix: Fehler nicht mehr stillschweigend mit .catch(() => {}) schlucken.
+    // Stattdessen pro Attribut try/catch + Logger, damit Configure-Reporting-Probleme im Z2M-Log sichtbar werden.
+    configure: async (device, coordinatorEndpoint, logger) => {
         const endpoint = device.getEndpoint(1);
-        await reporting.bind(endpoint, coordinatorEndpoint, ['seMetering', 'genPowerCfg']);
-        // Configure Reporting – Stack sendet bei Änderung automatisch
-        await reporting.report(endpoint, 'seMetering', 'currentSummDelivered', {min: 300, max: 3600, change: 0}).catch(() => {});
-        await reporting.batteryPercentageRemaining(endpoint).catch(() => {});
-        await reporting.batteryVoltage(endpoint).catch(() => {});
-        await reporting.report(endpoint, 'genPowerCfg', 'batteryAlarmState', {min: 3600, max: 86400, change: 0}).catch(() => {});
+
+        // Bind pro Cluster (mit Pause dazwischen): Ein kombinierter Bind fuer mehrere
+        // Cluster kann bei Sleepy-EDs zu bindRsp-Timeouts fuehren (Z2M: "after 10000ms"),
+        // wenn das Geraet zwischendurch wenig Luft fuer ZDO hat oder schon wieder schlaeft.
+        // Reihenfolge: zuerst genPowerCfg (kleiner / oft schneller), dann seMetering.
+        const bindOne = async (clusters, label) => {
+            try {
+                await reporting.bind(endpoint, coordinatorEndpoint, clusters);
+                if (logger && logger.info) logger.info(`configure bind OK: ${label}`);
+            } catch (e) {
+                if (logger && logger.warn) logger.warn(`configure bind FAIL: ${label}: ${e.message}`);
+            }
+        };
+        await bindOne(['genPowerCfg'], 'genPowerCfg');
+        await new Promise((r) => setTimeout(r, 750));
+        await bindOne(['seMetering'], 'seMetering');
+
+        const tries = [
+            ['seMetering/currentSummDelivered', () =>
+                reporting.report(endpoint, 'seMetering', 'currentSummDelivered',
+                    {min: 300, max: 3600, change: 0})],
+            ['genPowerCfg/batteryPercentageRemaining', () =>
+                reporting.batteryPercentageRemaining(endpoint)],
+            ['genPowerCfg/batteryVoltage', () =>
+                reporting.batteryVoltage(endpoint)],
+            ['genPowerCfg/batteryAlarmState', () =>
+                reporting.report(endpoint, 'genPowerCfg', 'batteryAlarmState',
+                    {min: 3600, max: 86400, change: 0})],
+        ];
+        for (const [name, fn] of tries) {
+            try {
+                await fn();
+                if (logger && logger.info) logger.info(`configure reporting OK: ${name}`);
+            } catch (e) {
+                if (logger && logger.warn) logger.warn(`configure reporting FAIL: ${name}: ${e.message}`);
+            }
+        }
     },
-    
+
     meta: {
         battery: {type: 'battery'},  // Sagt Z2M: "Dieses Device ist batteriebetrieben" → zeigt Batterie-Icon statt "?"
-        configureKey: 1,  // Stellt sicher, dass die Konfiguration bei jedem Join/Reboot versucht wird
+        // configureKey von 1 → 2 erhoehen (Branch zigbee_reporting_fix):
+        // Z2M ruft die configure()-Funktion fuer bereits gepairte Devices erneut auf,
+        // sobald sich der Key aendert. Dadurch greift der neue Reporting-Setup ohne Re-Pair.
+        configureKey: 3,
     },
 };
 
