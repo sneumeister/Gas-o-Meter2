@@ -122,9 +122,16 @@ const definition = {
     // sendet Attribute Reports automatisch bei Wertänderung (sobald Reporting konfiguriert ist).
     //
     // Branch zigbee_reporting_fix: Fehler nicht mehr stillschweigend mit .catch(() => {}) schlucken.
-    // Stattdessen pro Attribut try/catch + Logger, damit Configure-Reporting-Probleme im Z2M-Log sichtbar werden.
-    configure: async (device, coordinatorEndpoint, logger) => {
+    // Pro Attribut try/catch + Ausgabe auf stdout/stderr (sichtbar in Z2M-Container-/Prozesslogs).
+    //
+    // Zigbee2MQTT 2.10.1 (lib/extension/configure.ts): configure(device.zh, coordinatorEndpoint, device.definition).
+    // Das dritte Argument ist die Converter-Definition, kein Logger — ein Parameter "logger" waere falsch.
+    configure: async (device, coordinatorEndpoint) => {
         const endpoint = device.getEndpoint(1);
+        const cfgLog = {
+            info: (msg) => console.log(`[gas-o-meter2 configure] ${msg}`),
+            warn: (msg) => console.warn(`[gas-o-meter2 configure] ${msg}`),
+        };
 
         // Bind pro Cluster (mit Pause dazwischen): Ein kombinierter Bind fuer mehrere
         // Cluster kann bei Sleepy-EDs zu bindRsp-Timeouts fuehren (Z2M: "after 10000ms"),
@@ -133,9 +140,9 @@ const definition = {
         const bindOne = async (clusters, label) => {
             try {
                 await reporting.bind(endpoint, coordinatorEndpoint, clusters);
-                if (logger && logger.info) logger.info(`configure bind OK: ${label}`);
+                cfgLog.info(`configure bind OK: ${label}`);
             } catch (e) {
-                if (logger && logger.warn) logger.warn(`configure bind FAIL: ${label}: ${e.message}`);
+                cfgLog.warn(`configure bind FAIL: ${label}: ${e.message}`);
             }
         };
         await bindOne(['genPowerCfg'], 'genPowerCfg');
@@ -157,19 +164,17 @@ const definition = {
         for (const [name, fn] of tries) {
             try {
                 await fn();
-                if (logger && logger.info) logger.info(`configure reporting OK: ${name}`);
+                cfgLog.info(`configure reporting OK: ${name}`);
             } catch (e) {
-                if (logger && logger.warn) logger.warn(`configure reporting FAIL: ${name}: ${e.message}`);
+                cfgLog.warn(`configure reporting FAIL: ${name}: ${e.message}`);
             }
         }
     },
 
     meta: {
         battery: {type: 'battery'},  // Sagt Z2M: "Dieses Device ist batteriebetrieben" → zeigt Batterie-Icon statt "?"
-        // configureKey von 1 → 2 erhoehen (Branch zigbee_reporting_fix):
-        // Z2M ruft die configure()-Funktion fuer bereits gepairte Devices erneut auf,
-        // sobald sich der Key aendert. Dadurch greift der neue Reporting-Setup ohne Re-Pair.
-        configureKey: 3,
+        // configureKey erhoehen: Z2M ruft configure() erneut auf, sobald sich der Key aendert (ohne Re-Pair).
+        configureKey: 4,
     },
 };
 
