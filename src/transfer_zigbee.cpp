@@ -2112,8 +2112,9 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
             ZIGBEE_ATTR_BATTERY_PERCENT, &battery_percentage_remaining, false);
         // Branch zigbee_reporting_fix: nach jedem Set explizit reporten (Belt-and-Braces)
         bool rep_pct = send_attribute_report(ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_PERCENT);
-        bool rep_v = true;
-        bool rep_alarm = true;
+        // Nur bei Spannung > 0 werden Voltage/Alarm gesetzt und reportet; sonst kein Report-Versuch.
+        bool rep_v = false;
+        bool rep_alarm = false;
         if (data->battery_voltage > 0.0f) {
             esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
                 ZIGBEE_ATTR_BATTERY_VOLTAGE, &battery_voltage_zigbee, false);
