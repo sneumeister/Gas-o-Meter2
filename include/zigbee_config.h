@@ -76,7 +76,13 @@
 #define ZIGBEE_STEERING_RETRY_COUNT   5       // Anzahl Retry-Versuche bei Network Steering FAIL (erhöht von 3 auf 5 für schwaches Netz)
 #define ZIGBEE_STEERING_RETRY_TIMER_MS 5000   // Wartezeit zwischen Retry-Versuchen (erhöht von 3s auf 5s für mehr Zeit bei schwachem Netz)
 #define ZIGBEE_INTERVIEW_WAIT_MS      90000   // 90 Sekunden Wartezeit nach erstem Pairing für Interview (Zigbee2MQTT benötigt Zeit für Active Endpoints, Simple Descriptor, etc.)
-#define ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS  30000  // 30 Sekunden Wartezeit für automatischen Rejoin durch Stack (nach esp_zb_start() mit gespeicherten Netzwerk-Informationen)
+#define ZIGBEE_AUTO_REJOIN_PASSIVE_WAIT_MS   15000  // Passive Warte nach Wake (rtc.joined, Stack noch nicht joined) → danach Steering
+#define ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS  45000  // Poll-Timeout nach DEVICE_REBOOT / in Steering-Warte (nicht passive Phase)
+#define ZIGBEE_AUTO_REJOIN_POLL_INTERVAL_MS 200    // Schnelleres Poll nur in der Auto-Rejoin-Phase (pro Wake begrenzt)
+#define ZIGBEE_EXPLICIT_BATTERY_REPORT_ON_REJOIN  0  // 1 = Battery-Reports auch nach Rejoin explizit senden (mehr MQTT)
+#define ZIGBEE_DEVICE_ANNCE_MIN_INTERVAL_MS 15000  // Mindestabstand zwischen DEVICE_ANNCE (Z2M-Debounce)
+#define ZIGBEE_ADDR_STABILIZE_RETRY_MS      100    // Wartezeit pro Adress-Stabilisierungs-Versuch
+#define ZIGBEE_ADDR_STABILIZE_RETRY_COUNT   3      // Versuche bis Short Address mit RTC uebereinstimmt
 
 // Timing-Konfiguration für Association Request nach Network Steering
 // WICHTIG: Nach erfolgreichem Network Steering benötigt der Stack Zeit, um:
@@ -151,7 +157,9 @@
 #define ZIGBEE_MAIN_TASK_PRIORITY     5              // Task Priority (0-25, höher = wichtiger)
 #define ZIGBEE_MAIN_TASK_DELAY_MS     100            // Delay zwischen Main Loop Iterationen (ms)
 #define ZIGBEE_DEINIT_DELAY_MS        500            // Delay beim Deinitialisieren (ms)
-#define ZIGBEE_TIME_SYNC_WAIT_MS      3000           // Wartezeit nach Time-Cluster-Request auf Response (ms, typ. 1–3 s)
+#define ZIGBEE_TIME_SYNC_WAIT_MS      5000           // Max. Wartezeit nach Time-Cluster-Request auf Response (ms)
+#define ZIGBEE_TIME_SYNC_POLL_INTERVAL_MS 100        // Poll-Intervall bis Response oder Timeout
+#define ZIGBEE_STACK_ANNCE_WAIT_MS    800            // Warte auf Stack-Auto-Announce vor explizitem ZDO-Request (Rejoin)
 
 // NVS Konfiguration
 #define ZIGBEE_NVS_NAMESPACE          "zigbee_config"
