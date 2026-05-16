@@ -769,15 +769,20 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     // ZCL String-Format: Pascal-Format = Längenbyte (1 Byte) + String-Zeichen (ohne Null-Terminator)
     // Beispiel: "Custom" (6 Zeichen) → {0x06, 'C', 'u', 's', 't', 'o', 'm'}
     // WICHTIG: Das SDK erwartet ein Byte-Array, NICHT einen C-String!
-    
+    // static: Stack registriert Pointer – keine Stack-Locals (dangling nach Return)
+    static uint8_t manufacturer_name[32] = {};
+    static uint8_t model_id[32] = {};
+    static uint8_t sw_build_id[16] = {};
+    static uint8_t app_version = 0;
+
     // Manufacturer Name im ZCL Pascal-Format vorbereiten
     const char* manufacturer_name_str = ZIGBEE_MANUFACTURER_NAME;
     uint8_t manufacturer_name_len = strlen(manufacturer_name_str);
     if (manufacturer_name_len > 31) {
         manufacturer_name_len = 31;  // Max 31 Zeichen (32 Bytes total mit Längenbyte)
     }
-    uint8_t manufacturer_name[32] = {manufacturer_name_len};  // Erstes Byte = Länge
-    memcpy(&manufacturer_name[1], manufacturer_name_str, manufacturer_name_len);  // String kopieren
+    manufacturer_name[0] = manufacturer_name_len;
+    memcpy(&manufacturer_name[1], manufacturer_name_str, manufacturer_name_len);
     
     // Manufacturer Name hinzufügen (Attribute ID: 0x0004)
     esp_zb_basic_cluster_add_attr(basic_cluster, 
@@ -791,8 +796,8 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     if (model_id_len > 31) {
         model_id_len = 31;  // Max 31 Zeichen (32 Bytes total mit Längenbyte)
     }
-    uint8_t model_id[32] = {model_id_len};  // Erstes Byte = Länge
-    memcpy(&model_id[1], model_id_str, model_id_len);  // String kopieren
+    model_id[0] = model_id_len;
+    memcpy(&model_id[1], model_id_str, model_id_len);
     
     // Model ID hinzufügen (Attribute ID: 0x0005)
     esp_zb_basic_cluster_add_attr(basic_cluster, 
@@ -803,7 +808,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     // Application Version (Firmware-Version) hinzufügen (Attribute ID: 0x0001)
     // WICHTIG: appVersion ist uint8_t (0-255), nicht ein String
     // Wir verwenden die Hauptversion aus PROJECT_VERSION (z.B. "0.6.1" → 0)
-    uint8_t app_version = 0;  // Default: 0
+    app_version = 0;
     if (strlen(PROJECT_VERSION) > 0) {
         // Erste Ziffer der Version extrahieren (z.B. "0.6.1" → 0, "1.2.3" → 1)
         char first_char = PROJECT_VERSION[0];
@@ -824,8 +829,8 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     if (sw_build_id_len > 15) {
         sw_build_id_len = 15;  // Max 15 Zeichen (16 Bytes total mit Längenbyte) für swBuildId
     }
-    uint8_t sw_build_id[16] = {sw_build_id_len};  // Erstes Byte = Länge
-    memcpy(&sw_build_id[1], sw_build_id_str, sw_build_id_len);  // String kopieren
+    sw_build_id[0] = sw_build_id_len;
+    memcpy(&sw_build_id[1], sw_build_id_str, sw_build_id_len);
     
     esp_zb_basic_cluster_add_attr(basic_cluster, 
                                    ESP_ZB_ZCL_ATTR_BASIC_SW_BUILD_ID, 
