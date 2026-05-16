@@ -74,8 +74,9 @@
 #define ZIGBEE_DATA_RETRY_COUNT       3       // Anzahl Daten-Übertragungs-Versuche
 #define ZIGBEE_DATA_TIMEOUT_MS        5000    // 5 Sekunden pro Paket
 #define ZIGBEE_NETWORK_DISCOVERY_MS   45000   // 45 Sekunden für Network Discovery (erhöht von 30s für schwaches Netz)
-#define ZIGBEE_PAIRING_TIMEOUT_MS     180000  // 3 Minuten (180 Sekunden) für Pairing-Timeout (Standard nach ZigBee-Spezifikation und Best Practice)
-#define ZIGBEE_CYCLE_TIMEOUT_MS       300000  // 5 Minuten (300 Sekunden) Gesamt-Timeout für gesamten ZigBee-Zyklus (Pairing + Rejoin + Datenübertragung)
+#define ZIGBEE_PAIRING_TIMEOUT_MS     60000   // 60s pro Steering-Versuch (Espressif-Beispiele: 60–120s)
+#define ZIGBEE_CYCLE_TIMEOUT_MS       180000  // 3 min Gesamt (Pairing/Rejoin + Daten); harter Akku-Deckel
+// Hinweis: 5× STEERING_RETRY + 4× RETRY_TIMER kann theoretisch > CYCLE_TIMEOUT sein – Cycle bricht frueher ab
 #define ZIGBEE_INIT_TIMEOUT_MS        5000    // 5 Sekunden Timeout für Stack-Initialisierung
 #define ZIGBEE_INIT_POLL_INTERVAL_MS  100     // Poll-Intervall für Stack-Initialisierung
 #define ZIGBEE_STEERING_POLL_INTERVAL_MS 500  // Poll-Intervall für Network Steering (500ms = weniger CPU-Last, aber immer noch responsiv)
