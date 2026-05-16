@@ -81,7 +81,10 @@
 #define ZIGBEE_STEERING_POLL_INTERVAL_MS 500  // Poll-Intervall für Network Steering (500ms = weniger CPU-Last, aber immer noch responsiv)
 #define ZIGBEE_STEERING_RETRY_COUNT   5       // Anzahl Retry-Versuche bei Network Steering FAIL (erhöht von 3 auf 5 für schwaches Netz)
 #define ZIGBEE_STEERING_RETRY_TIMER_MS 5000   // Wartezeit zwischen Retry-Versuchen (erhöht von 3s auf 5s für mehr Zeit bei schwachem Netz)
-#define ZIGBEE_INTERVIEW_WAIT_MS      90000   // 90 Sekunden Wartezeit nach erstem Pairing für Interview (Zigbee2MQTT benötigt Zeit für Active Endpoints, Simple Descriptor, etc.)
+// Erstes Pairing: warten auf ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE (max), danach kurzes Post-Announce-Fenster fuer Z2M-Interview
+#define ZIGBEE_INTERVIEW_ANNCE_WAIT_MAX_MS  60000   // Max. Warte auf DEVICE_ANNCE (Fallback ohne Signal)
+#define ZIGBEE_INTERVIEW_POST_ANNCE_MS      30000   // Nach DEVICE_ANNCE: Z2M Interview + Configure Reporting
+#define ZIGBEE_INTERVIEW_POLL_INTERVAL_MS   200     // Poll-Intervall waehrend Interview-Warte
 #define ZIGBEE_AUTO_REJOIN_PASSIVE_WAIT_MS   2000   // Kurze Poll-Warte ob Stack joined (typ. ohne Erfolg) → danach Steering
 #define ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS  45000  // Poll-Timeout nach DEVICE_REBOOT / in Steering-Warte (nicht passive Phase)
 #define ZIGBEE_AUTO_REJOIN_POLL_INTERVAL_MS 200    // Schnelleres Poll nur in der Auto-Rejoin-Phase (pro Wake begrenzt)

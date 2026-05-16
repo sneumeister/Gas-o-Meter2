@@ -71,6 +71,7 @@ static bool zigbee_try_handle_reboot_in_steering_wait(bool for_pairing);
 static void zigbee_update_rtc_from_stack(void);
 static void zigbee_push_cluster_vals_to_stack_if_joined(void);
 static void zigbee_wait_for_time_sync_response(void);
+static void zigbee_wait_for_first_pairing_interview(void);
 #endif
 
 // RTC-RAM Variable für ZigBee-Config (Definition)
@@ -1442,6 +1443,39 @@ static void zigbee_wait_for_time_sync_response(void) {
     }
 }
 
+/** Nach erstem Pairing: DEVICE_ANNCE abwarten (oder Timeout), dann Post-Announce-Fenster fuer Z2M. */
+static void zigbee_wait_for_first_pairing_interview(void) {
+    const uint32_t poll_ms = ZIGBEE_INTERVIEW_POLL_INTERVAL_MS;
+    uint32_t waited_ms = 0;
+
+    if (zigbee_stack_device_annce_received) {
+        ESP_LOGI(TAG, "  [3.5/4] DEVICE_ANNCE bereits empfangen → Post-Announce-Fenster (%lu s)",
+                 (unsigned long)(ZIGBEE_INTERVIEW_POST_ANNCE_MS / 1000));
+    } else {
+        ESP_LOGI(TAG, "  [3.5/4] Warte auf DEVICE_ANNCE (max %lu s)...",
+                 (unsigned long)(ZIGBEE_INTERVIEW_ANNCE_WAIT_MAX_MS / 1000));
+        while (waited_ms < ZIGBEE_INTERVIEW_ANNCE_WAIT_MAX_MS && !zigbee_stack_device_annce_received) {
+            vTaskDelay(pdMS_TO_TICKS(poll_ms));
+            waited_ms += poll_ms;
+        }
+        if (zigbee_stack_device_annce_received) {
+            ESP_LOGI(TAG, "        → DEVICE_ANNCE nach %lu ms", (unsigned long)waited_ms);
+        } else {
+            ESP_LOGW(TAG, "        → DEVICE_ANNCE Timeout nach %lu ms → Post-Announce-Fenster trotzdem",
+                     (unsigned long)waited_ms);
+        }
+    }
+
+    ESP_LOGI(TAG, "        → Post-Announce: Z2M Interview/Configure (%lu s)",
+             (unsigned long)(ZIGBEE_INTERVIEW_POST_ANNCE_MS / 1000));
+    waited_ms = 0;
+    while (waited_ms < ZIGBEE_INTERVIEW_POST_ANNCE_MS) {
+        vTaskDelay(pdMS_TO_TICKS(poll_ms));
+        waited_ms += poll_ms;
+    }
+    ESP_LOGI(TAG, "        → Interview-Wartezeit abgeschlossen");
+}
+
 static void zigbee_update_rtc_from_stack(void) {
     zigbee_rtc.joined = true;
     zigbee_rtc.network_addr = esp_zb_get_short_address();
@@ -2263,17 +2297,9 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
                  (explicit_battery && data->battery_voltage > 0.0f) ? (rep_alarm ? "ok" : "fail") : "skip");
     }
     
-    // [3.5/4] Wartezeit nach erstem Pairing für Interview + Configure Reporting
-    // WICHTIG: Nach dem ersten Pairing muss das Device wach bleiben, damit Zigbee2MQTT
-    // das Interview abschließen und Configure Reporting (Bind + Report-Konfiguration) durchführen kann.
-    // Das Interview und Configure dauern normalerweise 30-90 Sekunden.
+    // [3.5/4] Erstes Pairing: DEVICE_ANNCE + Post-Announce-Fenster (statt fix 90 s)
     if (first_pairing_after_join) {
-        ESP_LOGI(TAG, "  [3.5/4] Warte auf Interview + Configure Reporting (erstes Pairing)...");
-        ESP_LOGI(TAG, "        → Device bleibt %d Sekunden wach für Zigbee2MQTT (Interview + Configure)", ZIGBEE_INTERVIEW_WAIT_MS / 1000);
-        
-        vTaskDelay(pdMS_TO_TICKS(ZIGBEE_INTERVIEW_WAIT_MS));
-        ESP_LOGI(TAG, "        → Interview-Wartezeit abgeschlossen");
-        
+        zigbee_wait_for_first_pairing_interview();
         first_pairing_after_join = false;
     }
     
