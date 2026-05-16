@@ -13,6 +13,16 @@
 // ============================================
 
 /**
+ * @brief Schreibt Gas/Battery in persistente Cluster-RAM-Variablen (vor esp_zb_device_register).
+ *
+ * Attribute zeigen auf diese Variablen – muss vor transfer_zigbee_init() aufgerufen werden,
+ * damit create_gas_meter_endpoint() und Z2M-Reads nach Join keine Defaults (0 / 4,0 V) sehen.
+ *
+ * @param data Messwerte (pulse_counter, battery_percent, battery_voltage); NULL = keine Aenderung
+ */
+void transfer_zigbee_prepare_cluster_attrs(const transfer_data_t* data);
+
+/**
  * @brief Initialisiert den ZigBee-Stack
  * 
  * @return true bei Erfolg, false bei Fehler

@@ -1109,6 +1109,40 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     return ep_list;
 }
 
+void transfer_zigbee_prepare_cluster_attrs(const transfer_data_t* data) {
+    if (data == nullptr) {
+        return;
+    }
+    current_summation_delivered.low = data->pulse_counter;
+    current_summation_delivered.high = 0;
+
+    uint8_t bp = (uint8_t)(data->battery_percent * 2.0f);
+    if (bp > 200) {
+        bp = 200;
+    }
+    battery_percentage_remaining = bp;
+
+    if (data->battery_voltage > 0.0f) {
+        uint8_t bv = (uint8_t)(data->battery_voltage * 10.0f + 0.5f);
+        if (bv > 255) {
+            bv = 255;
+        }
+        battery_voltage_zigbee = bv;
+        battery_alarm_state = (data->battery_voltage < BATTERY_VOLTAGE_30)
+            ? (battery_alarm_state | 0x00000001)
+            : (battery_alarm_state & 0xFFFFFFFE);
+    }
+
+    ESP_LOGI(TAG,
+             "Cluster-RAM fuer Endpoint: summ=%lu (low=%lu), batt=%u (%.1f%%), battV=%u (%.2fV)",
+             (unsigned long)data->pulse_counter,
+             (unsigned long)current_summation_delivered.low,
+             (unsigned)battery_percentage_remaining,
+             data->battery_percent,
+             (unsigned)battery_voltage_zigbee,
+             data->battery_voltage);
+}
+
 bool transfer_zigbee_init(void) {
     if (zigbee_initialized) {
         ESP_LOGW(TAG, "transfer_zigbee_init: Bereits initialisiert");
@@ -1339,13 +1373,21 @@ static bool zigbee_network_addr_stable_for_annce(void) {
     return true;
 }
 
+/** Elapsed ms from then_ms to now_ms; safe across uint32 wrap (~49.7 d esp_timer). */
+static uint32_t zigbee_elapsed_ms(uint32_t now_ms, uint32_t then_ms) {
+    if (now_ms >= then_ms) {
+        return now_ms - then_ms;
+    }
+    return (UINT32_MAX - then_ms) + now_ms + 1u;
+}
+
 static void zigbee_send_device_annce_if_needed(const char* reason) {
     if (!zigbee_network_addr_stable_for_annce()) {
         return;
     }
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     if (last_device_annce_sent_ms != 0 &&
-        (now_ms - last_device_annce_sent_ms) < ZIGBEE_DEVICE_ANNCE_MIN_INTERVAL_MS) {
+        zigbee_elapsed_ms(now_ms, last_device_annce_sent_ms) < ZIGBEE_DEVICE_ANNCE_MIN_INTERVAL_MS) {
         ESP_LOGI(TAG, "        → DEVICE_ANNCE uebersprungen (Debounce %lu ms, reason=%s)",
                  (unsigned long)ZIGBEE_DEVICE_ANNCE_MIN_INTERVAL_MS, reason);
         return;
@@ -1494,20 +1536,11 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
         const uint32_t passive_wait_ms = ZIGBEE_AUTO_REJOIN_PASSIVE_WAIT_MS;
         const uint32_t poll_interval_ms = ZIGBEE_AUTO_REJOIN_POLL_INTERVAL_MS;
         uint32_t elapsed_ms = 0;
-        bool steering_hint_logged = false;
-        
+
         while (!is_joined && elapsed_ms < passive_wait_ms) {
             vTaskDelay(pdMS_TO_TICKS(poll_interval_ms));
             elapsed_ms += poll_interval_ms;
             is_joined = esp_zb_bdb_dev_joined();
-            if (!steering_hint_logged && elapsed_ms >= 10000 && !is_joined) {
-                ESP_LOGI(TAG, "        → Stack-Rejoin verzoegert → Network Steering folgt nach %d ms",
-                         passive_wait_ms);
-                steering_hint_logged = true;
-            }
-            if (elapsed_ms % 5000 == 0 && elapsed_ms > 0) {
-                ESP_LOGI(TAG, "        → Warte auf passiven Auto-Rejoin... (%d ms / %d ms)", elapsed_ms, passive_wait_ms);
-            }
         }
         
         if (is_joined) {
@@ -2113,30 +2146,9 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
         ESP_LOGI(TAG, "  [1/4] ZigBee-Stack bereits initialisiert");
     }
     
-    // WICHTIG: CurrentSummationDelivered VOR Rejoin initialisieren!
-    // Dies stellt sicher, dass automatische Attribute Reports nach Rejoin bereits den korrekten Wert haben
-    // Reihenfolge: 1) currentSummationDelivered setzen (aus data->pulse_counter, der bereits aus RTC/Ringbuffer geladen wurde)
-    //              2) Rejoin → 3) Automatischer Report mit korrektem Wert (nicht 0!)
-    ESP_LOGI(TAG, "  [1.5/4] Initialisiere CurrentSummationDelivered VOR Rejoin...");
-    current_summation_delivered.low = data->pulse_counter;  // uint32_t: untere 32 Bit (Wert bereits aus RTC-RAM oder Ringbuffer)
-    current_summation_delivered.high = 0;                    // uint16_t: obere 16 Bit (0, da pulse_counter < 2^32)
-    ESP_LOGI(TAG, "        → CurrentSummationDelivered vor Rejoin initialisiert: %lu (low: %lu, high: %u)", 
-             data->pulse_counter, current_summation_delivered.low, current_summation_delivered.high);
-    
-    {
-        uint8_t bp = (uint8_t)(data->battery_percent * 2.0f);
-        if (bp > 200) bp = 200;
-        battery_percentage_remaining = bp;
-        if (data->battery_voltage > 0.0f) {
-            uint8_t bv = (uint8_t)(data->battery_voltage * 10.0f + 0.5f);
-            if (bv > 255) bv = 255;
-            battery_voltage_zigbee = bv;
-            battery_alarm_state = (data->battery_voltage < BATTERY_VOLTAGE_30)
-                ? (battery_alarm_state | 0x00000001)
-                : (battery_alarm_state & 0xFFFFFFFE);
-        }
-    }
-    
+    // Cluster-RAM wurde vor transfer_zigbee_init() gesetzt; hier erneut (idempotent) falls Init ohne prepare
+    transfer_zigbee_prepare_cluster_attrs(data);
+
     // Cluster-Werte nur setzen wenn Stack bereits joined (nach Sleep selten) – vermeidet Phantom-Reports waehrend Rejoin
     if (zigbee_initialized && esp_zb_bdb_dev_joined()) {
         esp_zb_zcl_status_t attr_status = esp_zb_zcl_set_attribute_val(
@@ -2147,24 +2159,16 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
             &current_summation_delivered,
             false);
         if (attr_status == ESP_ZB_ZCL_STATUS_SUCCESS) {
-            ESP_LOGI(TAG, "        → CurrentSummationDelivered via esp_zb_zcl_set_attribute_val() (bereits joined vor ensure_joined)");
+            ESP_LOGI(TAG, "        → Metering/Battery via set_attribute_val (bereits joined vor ensure_joined)");
         }
-        uint8_t bp = (uint8_t)(data->battery_percent * 2.0f);
-        if (bp > 200) bp = 200;
-        battery_percentage_remaining = bp;
+        esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+            ZIGBEE_ATTR_BATTERY_PERCENT, &battery_percentage_remaining, false);
         if (data->battery_voltage > 0.0f) {
-            uint8_t bv = (uint8_t)(data->battery_voltage * 10.0f + 0.5f);
-            if (bv > 255) bv = 255;
-            battery_voltage_zigbee = bv;
-            battery_alarm_state = (data->battery_voltage < BATTERY_VOLTAGE_30) ? (battery_alarm_state | 1) : (battery_alarm_state & 0xFFFFFFFE);
             esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
                 ZIGBEE_ATTR_BATTERY_VOLTAGE, &battery_voltage_zigbee, false);
             esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
                 ZIGBEE_ATTR_BATTERY_ALARM_STATE, &battery_alarm_state, false);
         }
-        esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-            ZIGBEE_ATTR_BATTERY_PERCENT, &battery_percentage_remaining, false);
-        ESP_LOGI(TAG, "        → Battery/Metering vor ensure_joined gesetzt (Stack bereits joined)");
     }
     
     // [2/4] Stelle sicher, dass Device mit Netzwerk verbunden ist (Pairing/Rejoin)
@@ -2196,23 +2200,9 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
         ESP_LOGI(TAG, "        → Normale Verbindung → Stack sendet Reports automatisch");
     }
     
-    // [2.5/4] Battery-Cluster-Werte setzen
-    // Zigbee2MQTT kann nach device_announce Read Attribute senden – dann liefert der Stack bereits
-    // die echten Werte. Bei Configure Reporting durch Z2M sendet der Stack Reports automatisch bei Änderung.
+    // [2.5/4] Battery in Stack schreiben (RAM bereits vor esp_zb_device_register gesetzt)
     {
-        uint8_t battery_percent_zigbee = (uint8_t)(data->battery_percent * 2.0f);
-        if (battery_percent_zigbee > 200) battery_percent_zigbee = 200;
-        battery_percentage_remaining = battery_percent_zigbee;
-        
-        if (data->battery_voltage > 0.0f) {
-            uint8_t battery_voltage_zigbee_new = (uint8_t)(data->battery_voltage * 10.0f + 0.5f);
-            if (battery_voltage_zigbee_new > 255) battery_voltage_zigbee_new = 255;
-            battery_voltage_zigbee = battery_voltage_zigbee_new;
-            battery_alarm_state = (data->battery_voltage < BATTERY_VOLTAGE_30)
-                ? (battery_alarm_state | 0x00000001)
-                : (battery_alarm_state & 0xFFFFFFFE);
-        }
-        
+        transfer_zigbee_prepare_cluster_attrs(data);
         esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
             ZIGBEE_ATTR_BATTERY_PERCENT, &battery_percentage_remaining, false);
         const bool explicit_battery_reports = first_pairing_after_join
@@ -2252,12 +2242,10 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     ESP_LOGI(TAG, "        → battery_voltage: %.2fV", data->battery_voltage);
     ESP_LOGI(TAG, "        → firmware_version: %s", data->firmware_version ? data->firmware_version : "N/A");
     
-    // CurrentSummationDelivered wurde bereits VOR Rejoin initialisiert (siehe oben)
-    // Hier nur nochmal bestätigen, dass der Wert korrekt ist und ggf. via esp_zb_zcl_set_attribute_val() setzen
-    ESP_LOGI(TAG, "        → CurrentSummationDelivered (bereits vor Rejoin initialisiert): %lu (low: %lu, high: %u)", 
+    ESP_LOGI(TAG, "        → CurrentSummationDelivered (Cluster-RAM vor Endpoint): %lu (low: %lu, high: %u)",
              data->pulse_counter, current_summation_delivered.low, current_summation_delivered.high);
-    
-    // Optional: Versuche auch esp_zb_zcl_set_attribute_val() NACH Rejoin (falls vorher fehlgeschlagen)
+
+    // esp_zb_zcl_set_attribute_val() nach Join (falls Stack-Register von Defaults abweicht)
     // Dies stellt sicher, dass der Wert auch im Stack gesetzt ist
     esp_zb_zcl_status_t attr_status = esp_zb_zcl_set_attribute_val(
         ZIGBEE_ENDPOINT_ID,

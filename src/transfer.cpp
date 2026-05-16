@@ -63,7 +63,7 @@ transfer_status_t transfer_data(const transfer_data_t* data) {
     
     // ZigBee-Implementierung
     if (strcmp(current_transfer_mode, TRANSFER_MODE_ZIGBEE) == 0) {
-        // ZigBee-Stack initialisieren (falls noch nicht geschehen)
+        transfer_zigbee_prepare_cluster_attrs(data);
         if (!transfer_zigbee_init()) {
             ESP_LOGE(TAG, "transfer_data: ZigBee-Initialisierung fehlgeschlagen");
             return TRANSFER_STATUS_INIT_FAILED;
