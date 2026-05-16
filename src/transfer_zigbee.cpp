@@ -931,8 +931,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     static uint8_t device_status = 0x00;  // Status (8-bit Bitmap, 0 = keine Fehler)
     static uint64_t device_extended_status = 0x00;  // Extended Status (64-bit Bitmap)
     static uint8_t unit_of_measure = ZIGBEE_METERING_UNIT_OF_MEASURE;  // m³ (aus zigbee_config.h)
-    // summation_formatting wird automatisch aus Multiplier/Divisor berechnet (0 = Standard)
-    static uint8_t summation_formatting = 0;  // Format: wird automatisch berechnet
+    static uint8_t summation_formatting = ZIGBEE_METERING_SUMMATION_FORMATTING;
     static uint8_t metering_device_type = ZIGBEE_METERING_DEVICE_TYPE;  // Gas Meter (aus zigbee_config.h)
     static uint8_t demand_formatting = 0;  // Demand Formatting (nicht verwendet, da kein InstantaneousDemand)
     

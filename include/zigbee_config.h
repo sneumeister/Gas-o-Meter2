@@ -47,6 +47,12 @@
 #endif
 #define ZIGBEE_METERING_DIVISOR           PULSE_COUNTER_DIVISOR  // Divisor: Integer-Wert wird durch PULSE_COUNTER_DIVISOR geteilt
 // Beispiel: pulse_counter = 12345 → CurrentSummationDelivered = 123.45 m³ (bei PULSE_COUNTER_DIVISOR = 100)
+// SummationFormatting (0x0303): Bits 0-2 = Nachkommastellen, Bits 3-6 = Vorkommastellen, Bit 7 = Leading-Zero-Suppress
+#if (PULSE_COUNTER_DIVISOR == 100)
+#define ZIGBEE_METERING_SUMMATION_FORMATTING  0x2Au  // 5 links, 2 rechts (wie UI %05lu.%02lu), kein Suppress
+#else
+#define ZIGBEE_METERING_SUMMATION_FORMATTING  0x02u  // Fallback: 2 Nachkommastellen (Divisor 10^n anpassen)
+#endif
 
 // Reporting-Intervalle (in Sekunden)
 // HINWEIS: Diese Werte sind Defaults/Vorschläge für Zigbee2MQTT configureReporting()
