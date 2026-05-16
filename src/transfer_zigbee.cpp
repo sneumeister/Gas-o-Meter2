@@ -1551,6 +1551,19 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
         
         if (is_joined) {
             ESP_LOGI(TAG, "        → Passiver Auto-Rejoin erfolgreich (nach %d ms)", elapsed_ms);
+            uint16_t prev_addr = zigbee_rtc.network_addr;
+            uint16_t prev_pan = zigbee_rtc.pan_id;
+            uint8_t prev_ch = zigbee_rtc.channel;
+            zigbee_update_rtc_from_stack();
+            if (zigbee_rtc.network_addr != prev_addr || zigbee_rtc.pan_id != prev_pan
+                    || zigbee_rtc.channel != prev_ch) {
+                ESP_LOGI(TAG, "        → Netzwerk geaendert (Addr 0x%04X -> 0x%04X, PAN 0x%04X, Ch %u)",
+                         prev_addr, zigbee_rtc.network_addr, zigbee_rtc.pan_id,
+                         (unsigned)zigbee_rtc.channel);
+                if (zigbee_config_save_to_nvs()) {
+                    ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (passiver Rejoin)");
+                }
+            }
             return TRANSFER_STATUS_OK;
         } else {
             ESP_LOGW(TAG, "        → Passiver Auto-Rejoin nicht erfolgreich (nach %d ms) → Starte Network Steering",
