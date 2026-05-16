@@ -1131,6 +1131,8 @@ void transfer_zigbee_prepare_cluster_attrs(const transfer_data_t* data) {
         battery_alarm_state = (data->battery_voltage < BATTERY_VOLTAGE_30)
             ? (battery_alarm_state | 0x00000001)
             : (battery_alarm_state & 0xFFFFFFFE);
+    } else {
+        battery_alarm_state &= 0xFFFFFFFE;
     }
 
     ESP_LOGI(TAG,
