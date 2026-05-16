@@ -2725,7 +2725,7 @@ const char* processor_get_value(const char* var) {
             return buffer;
         }
         struct tm timeinfo;
-        time_t last_epoch = (time_t)time_sync_last_epoch;
+        time_t last_epoch = time_sync_last_epoch;
         if (gmtime_r(&last_epoch, &timeinfo)) {
             char time_buf[48];
             const char *src = (time_sync_last_source[0] != '\0') ? time_sync_last_source : "?";

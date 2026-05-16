@@ -4,7 +4,7 @@
  *
  * Gemeinsame Sub-Routine für "harte" Zeitkorrektur (settimeofday).
  * time_sync_last_epoch speichert die UNIX-Epoch der letzten erfolgreichen
- * Synchronisation (64-bit für ESP-IDF 5.x).
+ * Synchronisation (time_t ist auf ESP-IDF 5.x / ESP32-C6 bereits 64-bit).
  */
 
 #ifndef TIME_SYNC_H
@@ -19,10 +19,10 @@ extern "C" {
 #endif
 
 /**
- * RTC-Variable: 0 = nie synchronisiert, sonst UNIX-Epoch (64-bit) der letzten Sync.
+ * RTC-Variable: 0 = nie synchronisiert, sonst UNIX-Epoch der letzten Sync.
  * Ermöglicht: Sekunden seit letztem Sync = time(NULL) - time_sync_last_epoch
  */
-extern uint64_t time_sync_last_epoch;
+extern time_t time_sync_last_epoch;
 extern char time_sync_last_source[12];  /* "NTP", "ZigBee", "BLE", etc. */
 
 /**

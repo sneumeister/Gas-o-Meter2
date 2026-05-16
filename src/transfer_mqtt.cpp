@@ -248,7 +248,7 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
     }
 
     bool ntp_ok = sync_ntp_time();
-    int64_t ntp_status = ntp_ok ? (int64_t)time_sync_last_epoch : -1;
+    int64_t ntp_status = ntp_ok ? time_sync_last_epoch : -1;
 
     char timestamp_iso[40] = "";
     if (ntp_ok) {
