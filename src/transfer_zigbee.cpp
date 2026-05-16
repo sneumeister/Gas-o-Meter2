@@ -2505,14 +2505,14 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode) {
     return true;
 }
 
-esp_err_t transfer_zigbee_start_pairing(void) {
+transfer_status_t transfer_zigbee_start_pairing(void) {
     #ifndef ARDUINO
     // Prüfe, ob ZigBee-Stack initialisiert ist
     if (!zigbee_initialized) {
         // Stack initialisieren (falls noch nicht geschehen)
         if (!transfer_zigbee_init()) {
             ESP_LOGE(TAG, "transfer_zigbee_start_pairing: ZigBee-Initialisierung fehlgeschlagen");
-            return ESP_ERR_INVALID_STATE;
+            return TRANSFER_STATUS_INIT_FAILED;
         }
     }
     
@@ -2520,14 +2520,14 @@ esp_err_t transfer_zigbee_start_pairing(void) {
     esp_err_t comm_err = esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
     if (comm_err == ESP_OK) {
         ESP_LOGI(TAG, "transfer_zigbee_start_pairing: Network Steering gestartet");
-    } else {
-        ESP_LOGE(TAG, "transfer_zigbee_start_pairing: Fehler beim Starten von Network Steering: %s", esp_err_to_name(comm_err));
+        return TRANSFER_STATUS_OK;
     }
-    
-    return comm_err;
+    ESP_LOGE(TAG, "transfer_zigbee_start_pairing: Fehler beim Starten von Network Steering: %s",
+             esp_err_to_name(comm_err));
+    return TRANSFER_STATUS_CONNECTION_FAILED;
     #else
     ESP_LOGE(TAG, "transfer_zigbee_start_pairing: Nur für ESP-IDF verfügbar");
-    return ESP_ERR_NOT_SUPPORTED;
+    return TRANSFER_STATUS_NOT_CONFIGURED;
     #endif
 }
 

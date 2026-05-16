@@ -4,10 +4,6 @@
 
 #include "transfer.h"
 
-#ifndef ARDUINO
-    #include "esp_err.h"  // Für esp_err_t
-#endif
-
 // ============================================
 // ZigBee-spezifische Funktionen
 // ============================================
@@ -69,9 +65,9 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode);
 /**
  * @brief Startet ZigBee-Pairing (Network Steering)
  * 
- * @return esp_err_t ESP_OK bei Erfolg, Fehlercode bei Fehler
+ * @return transfer_status_t TRANSFER_STATUS_OK wenn Steering gestartet wurde
  */
-esp_err_t transfer_zigbee_start_pairing(void);
+transfer_status_t transfer_zigbee_start_pairing(void);
 
 /**
  * @brief Prüft, ob ein Factory-Reset gerade läuft

@@ -3946,15 +3946,17 @@ static esp_err_t zigbee_action_handler(httpd_req_t *req) {
     } else if (strcmp(cmd, "start-pairing") == 0) {
         // Start Pairing über Wrapper-Funktion
         #ifndef ARDUINO
-        esp_err_t comm_err = transfer_zigbee_start_pairing();
-        if (comm_err == ESP_OK) {
+        transfer_status_t pairing_status = transfer_zigbee_start_pairing();
+        if (pairing_status == TRANSFER_STATUS_OK) {
             httpd_resp_set_type(req, "application/json");
             httpd_resp_send(req, "{\"status\":\"success\",\"message\":\"Pairing gestartet. Warten auf Coordinator...\"}", HTTPD_RESP_USE_STRLEN);
         } else {
             httpd_resp_set_status(req, "500 Internal Server Error");
             httpd_resp_set_type(req, "application/json");
             char error_json[256];
-            snprintf(error_json, sizeof(error_json), "{\"status\":\"error\",\"message\":\"Fehler beim Starten des Pairings: %s\"}", esp_err_to_name(comm_err));
+            snprintf(error_json, sizeof(error_json),
+                     "{\"status\":\"error\",\"message\":\"Fehler beim Starten des Pairings: %s\"}",
+                     transfer_status_to_string(pairing_status));
             httpd_resp_send(req, error_json, HTTPD_RESP_USE_STRLEN);
         }
         #else
