@@ -3,6 +3,7 @@
 #define TRANSFER_ZIGBEE_H
 
 #include "transfer.h"
+#include <stddef.h>
 
 // ============================================
 // ZigBee-spezifische Funktionen

@@ -20,6 +20,7 @@
     #include "zcl/esp_zigbee_zcl_basic.h"  // Für esp_zb_basic_cluster_add_attr(), ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID, etc.
     #include "zcl/esp_zigbee_zcl_power_config.h"  // Für Power Config Cluster (esp_zb_power_config_cluster_cfg_t, esp_zb_power_config_cluster_add_attr, etc.)
     #include "zcl/esp_zigbee_zcl_metering.h"  // Für Metering Cluster (ESP_ZB_ZCL_METERING_UNIT_M3_M3H_BINARY, etc.)
+    #include "zcl/esp_zigbee_zcl_diagnostics.h"  // Last LQI/RSSI für Z2M-Geräteübersicht
     #include "esp_zigbee_attribute.h"  // Für esp_zb_zcl_set_attribute_val()
     #include "zcl/esp_zigbee_zcl_command.h"  // Für esp_zb_zcl_read_attr_cmd_req() (Time Cluster)
     #include "zcl/esp_zigbee_zcl_core.h"  // Für esp_zb_core_action_handler_register, ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID
@@ -72,6 +73,7 @@ static void zigbee_update_rtc_from_stack(void);
 static void zigbee_push_cluster_vals_to_stack_if_joined(void);
 static void zigbee_wait_for_time_sync_response(void);
 static void zigbee_wait_for_first_pairing_interview(void);
+static bool zigbee_refresh_parent_link_diagnostics(bool verbose_log);
 #endif
 
 // RTC-RAM Variable für ZigBee-Config (Definition)
@@ -114,6 +116,10 @@ static esp_zb_uint48_t current_summation_delivered = {.low = 0, .high = 0};
 // Initialwerte: Multiplier=1, Divisor=100 (aus zigbee_config.h)
 static uint16_t metering_multiplier = ZIGBEE_METERING_MULTIPLIER;  // 1
 static uint16_t metering_divisor = ZIGBEE_METERING_DIVISOR;        // 100
+
+// Diagnostics Cluster (0x0B05): Parent-Link LQI/RSSI für Zigbee2MQTT
+static uint8_t diag_last_lqi = 0;
+static int8_t diag_last_rssi = 0;
 
 // ============================================
 // NVS-Funktionen für ZigBee-Config
@@ -457,52 +463,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 uint16_t network_addr = esp_zb_get_short_address();
                 ESP_LOGI(TAG, "        → Device erfolgreich joined (Network Address: 0x%04X)", network_addr);
                 
-                // Parent-Informationen aus Neighbor Table lesen und loggen
-                // WICHTIG: Hilft bei Debugging von LQI=0 Problemen - zeigt, ob Device direkt mit Coordinator
-                // oder über Router verbunden ist
                 ESP_LOGI(TAG, "        → Lese Parent-Informationen aus Neighbor Table...");
-                esp_zb_nwk_info_iterator_t iter = ESP_ZB_NWK_INFO_ITERATOR_INIT;
-                esp_zb_nwk_neighbor_info_s nbr_info;
-                bool parent_found = false;
-                
-                while (esp_zb_nwk_get_next_neighbor(&iter, &nbr_info) == ESP_OK) {
-                    if (nbr_info.relationship == ESP_ZB_NWK_RELATIONSHIP_PARENT) {
-                        parent_found = true;
-                        uint16_t parent_short_addr = nbr_info.short_addr;
-                        // IEEE Address konvertieren
-                        uint64_t parent_ieee_addr = 0;
-                        for (int i = 0; i < 8; i++) {
-                            parent_ieee_addr |= ((uint64_t)nbr_info.ieee_addr[i]) << (i * 8);
-                        }
-                        
-                        // Parent-Typ bestimmen (Coordinator = 0x0000, Router = andere Adresse)
-                        const char* parent_type = (parent_short_addr == 0x0000) ? "Coordinator" : "Router";
-                        
-                        ESP_LOGI(TAG, "        → Parent gefunden:");
-                        ESP_LOGI(TAG, "           → Typ: %s", parent_type);
-                        ESP_LOGI(TAG, "           → Network Address: 0x%04X", parent_short_addr);
-                        ESP_LOGI(TAG, "           → Extended Address: 0x%016llX", (unsigned long long)parent_ieee_addr);
-                        
-                        // LQI/RSSI-Informationen loggen (falls verfügbar)
-                        // HINWEIS: LQI/RSSI sind möglicherweise nicht direkt in nbr_info verfügbar,
-                        // aber wir loggen die verfügbaren Informationen
-                        ESP_LOGI(TAG, "           → Relationship: Parent (0x%02X)", nbr_info.relationship);
-                        
-                        // Coordinator-Adresse aktualisieren (für späteren Gebrauch)
-                        if (parent_short_addr == 0x0000) {
-                            zigbee_rtc.coord_addr = 0x0000;  // Direkt mit Coordinator verbunden
-                        } else {
-                            // Über Router verbunden - Coordinator ist normalerweise 0x0000, aber Parent ist Router
-                            zigbee_rtc.coord_addr = 0x0000;  // Coordinator bleibt 0x0000
-                            ESP_LOGI(TAG, "           → HINWEIS: Device ist über Router verbunden (nicht direkt mit Coordinator)");
-                        }
-                        break;
-                    }
-                }
-                
-                if (!parent_found) {
-                    ESP_LOGW(TAG, "        → WARNUNG: Kein Parent in Neighbor Table gefunden (möglicherweise noch nicht aktualisiert)");
-                }
+                zigbee_refresh_parent_link_diagnostics(true);
                 
                 // Prüfe, ob es ein Pairing (factory-new) oder Rejoin war
                 // HINWEIS: Wenn wir hier sind, ist das Device bereits joined, also sollte
@@ -1097,6 +1059,44 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     ESP_LOGI(TAG, "  → CurrentSummationDelivered ist als REPORTABLE markiert (Zigbee2MQTT kann Reporting konfigurieren)");
     ESP_LOGI(TAG, "  → Externer Converter (gas-o-meter2.js) liest divisor/multiplier für Skalierung");
     ESP_LOGI(TAG, "  → Device sendet Daten bei jeder Datenübertragung (transfer_zigbee_send_data())");
+
+    // Diagnostics Cluster: Last LQI/RSSI (Z2M liest 0x011C/0x011D bei Interview)
+    ESP_LOGI(TAG, "  → Erstelle Diagnostics Cluster (Last LQI/RSSI)...");
+    esp_zb_attribute_list_t *diagnostics_cluster =
+        esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_DIAGNOSTICS);
+    if (diagnostics_cluster == NULL) {
+        ESP_LOGE(TAG, "Fehler beim Erstellen des Diagnostics Clusters");
+        return NULL;
+    }
+    err = esp_zb_cluster_add_attr(
+        diagnostics_cluster,
+        ESP_ZB_ZCL_CLUSTER_ID_DIAGNOSTICS,
+        ESP_ZB_ZCL_ATTR_DIAGNOSTICS_LAST_LQI_ID,
+        ESP_ZB_ZCL_ATTR_TYPE_U8,
+        ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
+        &diag_last_lqi);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Diagnostics Last LQI konnte nicht hinzugefuegt werden: %s", esp_err_to_name(err));
+        return NULL;
+    }
+    err = esp_zb_cluster_add_attr(
+        diagnostics_cluster,
+        ESP_ZB_ZCL_CLUSTER_ID_DIAGNOSTICS,
+        ESP_ZB_ZCL_ATTR_DIAGNOSTICS_LAST_RSSI_ID,
+        ESP_ZB_ZCL_ATTR_TYPE_S8,
+        ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING,
+        &diag_last_rssi);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Diagnostics Last RSSI konnte nicht hinzugefuegt werden: %s", esp_err_to_name(err));
+        return NULL;
+    }
+    err = esp_zb_cluster_list_add_diagnostics_cluster(cluster_list, diagnostics_cluster,
+                                                      ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Fehler beim Hinzufuegen des Diagnostics Clusters: %s", esp_err_to_name(err));
+        return NULL;
+    }
+    ESP_LOGI(TAG, "  → Diagnostics Cluster hinzugefuegt (Last LQI/RSSI fuer Z2M)");
     
     // Time Cluster hinzufügen (Client-Rolle für Zeit-Synchronisation)
     // WICHTIG: Time Cluster wird als CLIENT hinzugefügt, damit wir die Zeit vom Coordinator lesen können
@@ -1415,6 +1415,47 @@ static void zigbee_maybe_send_device_annce_on_rejoin(const char* reason) {
     ESP_LOGI(TAG, "        → DEVICE_ANNCE uebersprungen (Rejoin, Stack-ZDO-Announce)");
 }
 
+/** Parent aus Neighbor Table: LQI/RSSI in Diagnostics-Cluster + coord_addr. */
+static bool zigbee_refresh_parent_link_diagnostics(bool verbose_log) {
+    if (!esp_zb_bdb_dev_joined()) {
+        return false;
+    }
+    esp_zb_nwk_info_iterator_t iter = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+    esp_zb_nwk_neighbor_info_s nbr_info;
+    while (esp_zb_nwk_get_next_neighbor(&iter, &nbr_info) == ESP_OK) {
+        if (nbr_info.relationship != ESP_ZB_NWK_RELATIONSHIP_PARENT) {
+            continue;
+        }
+        diag_last_lqi = nbr_info.lqi;
+        diag_last_rssi = nbr_info.rssi;
+        uint16_t parent_short_addr = nbr_info.short_addr;
+        uint64_t parent_ieee_addr = 0;
+        for (int i = 0; i < 8; i++) {
+            parent_ieee_addr |= ((uint64_t)nbr_info.ieee_addr[i]) << (i * 8);
+        }
+        zigbee_rtc.coord_addr = 0x0000;
+        if (!verbose_log) {
+            ESP_LOGD(TAG, "        → Diagnostics Parent LQI=%u RSSI=%d",
+                     (unsigned)diag_last_lqi, (int)diag_last_rssi);
+            return true;
+        }
+        const char* parent_type = (parent_short_addr == 0x0000) ? "Coordinator" : "Router";
+        ESP_LOGI(TAG, "        → Parent gefunden:");
+        ESP_LOGI(TAG, "           → Typ: %s", parent_type);
+        ESP_LOGI(TAG, "           → Network Address: 0x%04X", parent_short_addr);
+        ESP_LOGI(TAG, "           → Extended Address: 0x%016llX", (unsigned long long)parent_ieee_addr);
+        ESP_LOGI(TAG, "           → LQI=%u, RSSI=%d dBm", (unsigned)diag_last_lqi, (int)diag_last_rssi);
+        if (parent_short_addr != 0x0000) {
+            ESP_LOGI(TAG, "           → HINWEIS: Device ist ueber Router verbunden (nicht direkt mit Coordinator)");
+        }
+        return true;
+    }
+    if (verbose_log) {
+        ESP_LOGW(TAG, "        → WARNUNG: Kein Parent in Neighbor Table gefunden (moeglicherweise noch nicht aktualisiert)");
+    }
+    return false;
+}
+
 /** Battery/Metering: no-op nach Join – Stack liest Werte lazy aus gebundenen Variablen. */
 static void zigbee_push_cluster_vals_to_stack_if_joined(void) {
     // no-op: Stack haelt Pointer auf current_summation_delivered, battery_percentage_remaining,
@@ -1488,6 +1529,7 @@ static void zigbee_update_rtc_from_stack(void) {
         current_extended_addr |= ((uint64_t)ieee_addr[i]) << (i * 8);
     }
     zigbee_rtc.extended_addr = current_extended_addr;
+    zigbee_refresh_parent_link_diagnostics(false);
 }
 
 static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairing) {
@@ -2229,7 +2271,8 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
         return join_status;
     }
     ESP_LOGI(TAG, "        → Device ist mit ZigBee-Netzwerk verbunden");
-    
+    zigbee_refresh_parent_link_diagnostics(false);
+
     // Logging: Art der Verbindung (für Diagnose)
     bool rejoin_just_happened = was_already_joined_in_rtc && !was_joined_in_stack_before && esp_zb_bdb_dev_joined();
     if (rejoin_just_happened) {
