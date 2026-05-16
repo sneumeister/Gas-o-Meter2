@@ -61,6 +61,7 @@ static volatile bool steering_successful = false;  // Flag: Network Steering erf
 static uint32_t last_device_annce_sent_ms = 0;  // Debounce fuer esp_zb_zdo_device_announcement_req()
 static volatile bool zigbee_time_sync_response_received = false;
 static volatile bool zigbee_stack_device_annce_received = false;
+static volatile bool zigbee_nvs_save_pending = false;  // NVS-Schreiben aus Signal-Handler deferren
 
 #ifndef ARDUINO
 static void zigbee_send_device_annce_if_needed(const char* reason);
@@ -533,15 +534,9 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                                  (unsigned long long)zigbee_rtc.extended_addr, (unsigned long long)current_extended_addr);
                         zigbee_rtc.extended_addr = current_extended_addr;
                     }
-                    // In NVS speichern (WICHTIG: Muss vor Deep-Sleep erfolgen!)
-                    if (zigbee_config_save_to_nvs()) {
-                        ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert");
-                        // WICHTIG: Zusätzliches Delay nach zigbee_config_save_to_nvs() (bereits 100ms in Funktion)
-                        // Gesamt: 100ms (in zigbee_config_save_to_nvs) + 500ms (hier) = 600ms für Flash-Schreibvorgang
-                        vTaskDelay(pdMS_TO_TICKS(500));  // 500ms zusätzliches Delay für Flash-Schreibvorgang
-                    } else {
-                        ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config konnte nicht in NVS gespeichert werden!");
-                    }
+                    // NVS-Schreiben deferren (kein vTaskDelay/NVS im Signal-Handler – blockiert Zigbee-Stack)
+                    zigbee_nvs_save_pending = true;
+                    ESP_LOGI(TAG, "        → ZigBee-Config NVS-Speichern angefordert (Pairing, Main-Loop)");
                 } else {
                     // Device war bereits joined -> Rejoin
                     ESP_LOGI(TAG, "        → Rejoin erfolgreich abgeschlossen");
@@ -550,15 +545,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                     zigbee_rtc.network_addr = network_addr;
                     zigbee_rtc.pan_id = esp_zb_get_pan_id();
                     zigbee_rtc.channel = esp_zb_get_current_channel();
-                    // In NVS speichern (auch bei Rejoin, falls sich Netzwerk-Parameter geändert haben)
-                    if (zigbee_config_save_to_nvs()) {
-                        ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (Rejoin)");
-                        // WICHTIG: Zusätzliches Delay nach zigbee_config_save_to_nvs() (bereits 100ms in Funktion)
-                        // Gesamt: 100ms (in zigbee_config_save_to_nvs) + 500ms (hier) = 600ms für Flash-Schreibvorgang
-                        vTaskDelay(pdMS_TO_TICKS(500));  // 500ms zusätzliches Delay für Flash-Schreibvorgang
-                    } else {
-                        ESP_LOGW(TAG, "        → Warnung: ZigBee-Config konnte nicht in NVS gespeichert werden (Rejoin)");
-                    }
+                    zigbee_nvs_save_pending = true;
+                    ESP_LOGI(TAG, "        → ZigBee-Config NVS-Speichern angefordert (Rejoin, Main-Loop)");
                 }
             } else {
                 ESP_LOGW(TAG, "        → DEVICE_ANNCE empfangen, aber Device nicht joined");
@@ -658,6 +646,20 @@ static void read_attr_resp_callback(esp_zb_zcl_cmd_read_attr_resp_message_t *mes
     }
 }
 
+/** NVS-Speichern aus esp_zb_app_signal_handler (nach stack_main_loop_iteration, nicht im Handler). */
+static void zigbee_process_pending_nvs_save(void) {
+    if (!zigbee_nvs_save_pending) {
+        return;
+    }
+    zigbee_nvs_save_pending = false;
+    if (zigbee_config_save_to_nvs()) {
+        ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (deferred aus Signal-Handler)");
+        vTaskDelay(pdMS_TO_TICKS(500));
+    } else {
+        ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config NVS-Speichern (deferred) fehlgeschlagen");
+    }
+}
+
 /**
  * @brief ZigBee Main Loop Task
  * 
@@ -677,6 +679,7 @@ static void zigbee_main_task(void *pvParameters) {
         
         while (!stack_ready_signal_received && !stack_init_failed && elapsed_ms < timeout_ms) {
             esp_zb_stack_main_loop_iteration();  // Events verarbeiten (wichtig für Signal-Handler!)
+            zigbee_process_pending_nvs_save();
             vTaskDelay(pdMS_TO_TICKS(poll_interval_ms));
             elapsed_ms += poll_interval_ms;
         }
@@ -706,6 +709,7 @@ static void zigbee_main_task(void *pvParameters) {
     // Normaler Main Loop
     while (zigbee_initialized) {
         esp_zb_stack_main_loop_iteration();  // Nicht deprecated, esp_zb_stack_main_loop() ist die infinite loop Version
+        zigbee_process_pending_nvs_save();
         vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MAIN_TASK_DELAY_MS));
     }
     
