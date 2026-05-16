@@ -1406,19 +1406,23 @@ static void zigbee_maybe_send_device_annce_on_rejoin(const char* reason) {
     ESP_LOGI(TAG, "        → DEVICE_ANNCE uebersprungen (Rejoin, Stack-ZDO-Announce)");
 }
 
-/** Battery/Metering in Cluster schreiben sobald joined (vor Z2M-Read nach Stack-Announce). */
+/** Battery/Metering: no-op nach Join – Stack liest Werte lazy aus gebundenen Variablen. */
 static void zigbee_push_cluster_vals_to_stack_if_joined(void) {
-    if (!esp_zb_bdb_dev_joined()) {
-        return;
-    }
-    esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_METERING, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-        ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED, &current_summation_delivered, false);
-    esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-        ZIGBEE_ATTR_BATTERY_PERCENT, &battery_percentage_remaining, false);
-    esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-        ZIGBEE_ATTR_BATTERY_VOLTAGE, &battery_voltage_zigbee, false);
-    esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-        ZIGBEE_ATTR_BATTERY_ALARM_STATE, &battery_alarm_state, false);
+    // no-op: Stack haelt Pointer auf current_summation_delivered, battery_percentage_remaining,
+    // battery_voltage_zigbee, battery_alarm_state – Werte werden lazy beim Read/Report gelesen.
+    // set_attribute_val hier wuerde REPORTABLE-Flag setzen und einen ungeplanten Report ausloesen (TZ-292).
+    // Werte werden einmalig via transfer_zigbee_prepare_cluster_attrs() vor esp_zb_device_register gesetzt.
+    // if (!esp_zb_bdb_dev_joined()) {
+    //     return;
+    // }
+    // esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_METERING, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+    //     ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED, &current_summation_delivered, false);
+    // esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+    //     ZIGBEE_ATTR_BATTERY_PERCENT, &battery_percentage_remaining, false);
+    // esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+    //     ZIGBEE_ATTR_BATTERY_VOLTAGE, &battery_voltage_zigbee, false);
+    // esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+    //     ZIGBEE_ATTR_BATTERY_ALARM_STATE, &battery_alarm_state, false);
 }
 
 static void zigbee_wait_for_time_sync_response(void) {
