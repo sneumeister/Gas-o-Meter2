@@ -68,6 +68,7 @@ static void zigbee_maybe_send_device_annce_on_rejoin(const char* reason);
 static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairing);
 static bool zigbee_try_handle_reboot_in_steering_wait(bool for_pairing);
 static void zigbee_update_rtc_from_stack(void);
+static void zigbee_push_cluster_vals_to_stack_if_joined(void);
 static void zigbee_wait_for_time_sync_response(void);
 #endif
 
@@ -1357,18 +1358,23 @@ static void zigbee_send_device_annce_if_needed(const char* reason) {
 
 /** Rejoin: Stack sendet ZDO Device Announce selbst – kein esp_zb_zdo_device_announcement_req (vermeidet Z2M-Doppel-Event). */
 static void zigbee_maybe_send_device_annce_on_rejoin(const char* reason) {
-    uint32_t waited_ms = 0;
-    const uint32_t poll_ms = ZIGBEE_AUTO_REJOIN_POLL_INTERVAL_MS;
-    while (waited_ms < ZIGBEE_STACK_ANNCE_WAIT_MS && !zigbee_stack_device_annce_received) {
-        vTaskDelay(pdMS_TO_TICKS(poll_ms));
-        waited_ms += poll_ms;
+    (void)reason;
+    ESP_LOGI(TAG, "        → DEVICE_ANNCE uebersprungen (Rejoin, Stack-ZDO-Announce)");
+}
+
+/** Battery/Metering in Cluster schreiben sobald joined (vor Z2M-Read nach Stack-Announce). */
+static void zigbee_push_cluster_vals_to_stack_if_joined(void) {
+    if (!esp_zb_bdb_dev_joined()) {
+        return;
     }
-    if (zigbee_stack_device_annce_received) {
-        ESP_LOGI(TAG, "        → DEVICE_ANNCE uebersprungen (Stack-Signal nach %lu ms, %s)",
-                 (unsigned long)waited_ms, reason);
-    } else {
-        ESP_LOGI(TAG, "        → DEVICE_ANNCE uebersprungen (Rejoin, Stack-ZDO-Announce, kein Request, %s)", reason);
-    }
+    esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_METERING, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED, &current_summation_delivered, false);
+    esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ZIGBEE_ATTR_BATTERY_PERCENT, &battery_percentage_remaining, false);
+    esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ZIGBEE_ATTR_BATTERY_VOLTAGE, &battery_voltage_zigbee, false);
+    esp_zb_zcl_set_attribute_val(ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ZIGBEE_ATTR_BATTERY_ALARM_STATE, &battery_alarm_state, false);
 }
 
 static void zigbee_wait_for_time_sync_response(void) {
@@ -1415,6 +1421,7 @@ static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairin
             } else {
                 rejoin_successful = true;
             }
+            zigbee_push_cluster_vals_to_stack_if_joined();
             if (zigbee_config_save_to_nvs()) {
                 ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (nach DEVICE_REBOOT Poll)");
             }
@@ -2115,6 +2122,20 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     current_summation_delivered.high = 0;                    // uint16_t: obere 16 Bit (0, da pulse_counter < 2^32)
     ESP_LOGI(TAG, "        → CurrentSummationDelivered vor Rejoin initialisiert: %lu (low: %lu, high: %u)", 
              data->pulse_counter, current_summation_delivered.low, current_summation_delivered.high);
+    
+    {
+        uint8_t bp = (uint8_t)(data->battery_percent * 2.0f);
+        if (bp > 200) bp = 200;
+        battery_percentage_remaining = bp;
+        if (data->battery_voltage > 0.0f) {
+            uint8_t bv = (uint8_t)(data->battery_voltage * 10.0f + 0.5f);
+            if (bv > 255) bv = 255;
+            battery_voltage_zigbee = bv;
+            battery_alarm_state = (data->battery_voltage < BATTERY_VOLTAGE_30)
+                ? (battery_alarm_state | 0x00000001)
+                : (battery_alarm_state & 0xFFFFFFFE);
+        }
+    }
     
     // Cluster-Werte nur setzen wenn Stack bereits joined (nach Sleep selten) – vermeidet Phantom-Reports waehrend Rejoin
     if (zigbee_initialized && esp_zb_bdb_dev_joined()) {
