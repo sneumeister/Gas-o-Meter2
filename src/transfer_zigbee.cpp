@@ -1515,6 +1515,7 @@ static void zigbee_wait_for_first_pairing_interview(void) {
         waited_ms += poll_ms;
     }
     ESP_LOGI(TAG, "        → Interview-Wartezeit abgeschlossen");
+    zigbee_stack_device_annce_received = false;
 }
 
 static void zigbee_update_rtc_from_stack(void) {
@@ -1602,7 +1603,8 @@ static bool zigbee_try_handle_reboot_in_steering_wait(bool for_pairing) {
  * @return transfer_status_t TRANSFER_STATUS_OK wenn verbunden, Fehlercode bei Fehler
  */
 transfer_status_t transfer_zigbee_ensure_joined(void) {
-    zigbee_stack_device_annce_received = false;
+    // zigbee_stack_device_annce_received nicht hier zuruecksetzen – wird fuer
+    // zigbee_wait_for_first_pairing_interview() nach Pairing benoetigt (sonst 60s Timeout)
     // Status-Prüfung: factory-new? joined?
     ESP_LOGI(TAG, "transfer_zigbee_ensure_joined: Prüfe ZigBee-Status...");
     bool is_factory_new = esp_zb_bdb_is_factory_new();
@@ -1856,7 +1858,8 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                         
                         // Status manuell setzen (wie im DEVICE_ANNCE Handler)
                         pairing_successful = true;
-                        first_pairing_after_join = true;  // Flag setzen für Interview-Wartezeit
+                        first_pairing_after_join = true;
+                        zigbee_stack_device_annce_received = true;  // Join ohne ZDO-Signal
                         
                         // HINWEIS: rx_on_when_idle wurde bereits in transfer_zigbee_init() auf true gesetzt
                         // und bleibt während der gesamten aktiven Phase aktiv (bis Deep-Sleep)
