@@ -1668,10 +1668,6 @@ static void zigbee_restore_primary_channel_mask(void) {
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "        → Primary Channel-Mask Restore fehlgeschlagen: %s", esp_err_to_name(err));
     }
-    err = esp_zb_set_secondary_network_channel_set(0);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "        → Secondary Channel-Mask Clear fehlgeschlagen: %s", esp_err_to_name(err));
-    }
 }
 
 /**
@@ -1688,7 +1684,6 @@ static bool zigbee_try_direct_bdb_rejoin(uint32_t timeout_ms, uint32_t *elapsed_
         ESP_LOGW(TAG, "        → Channel-Mask 0x%08lX fehlgeschlagen: %s",
                  (unsigned long)channel_mask, esp_err_to_name(ch_err));
     }
-    esp_zb_set_secondary_network_channel_set(0);
 
     esp_err_t err = esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_INITIALIZATION);
     if (err != ESP_OK) {
