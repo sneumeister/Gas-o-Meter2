@@ -435,21 +435,20 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             
         case ESP_ZB_BDB_SIGNAL_STEERING:
             if (err_status == ESP_OK) {
-                ESP_LOGI(TAG, "ZigBee Signal: STEERING erfolgreich (Network Discovery)");
+                ESP_LOGI(TAG, "ZigBee Signal: STEERING erfolgreich (Join laut SDK abgeschlossen)");
                 ESP_LOGI(TAG, "        → PAN ID: 0x%04X, Channel: %d, Short Address: 0x%04X",
                          esp_zb_get_pan_id(), esp_zb_get_current_channel(), esp_zb_get_short_address());
-                steering_successful = true;  // Flag setzen für Timing-Verzögerung vor Association Request
-                ESP_LOGI(TAG, "        → Network Discovery abgeschlossen - warte %d ms vor Association Request",
+                steering_successful = true;  // Flag: ensure_joined wartet ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS
+                ESP_LOGI(TAG, "        → STEERING OK - ensure_joined wartet bis %d ms vor Join-Pruefung",
                          ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS);
                 
-                // WICHTIG: Prüfe, ob Device bereits joined ist (z.B. nach Rejoin)
-                // Wenn ja, sende sofort DEVICE_ANNCE, damit Zigbee2MQTT das Interview startet
+                // esp_zb_bdb_dev_joined() kann kurz nach STEERING noch false sein
                 if (esp_zb_bdb_dev_joined()) {
                     uint16_t network_addr = esp_zb_get_short_address();
-                    ESP_LOGI(TAG, "        → Device ist bereits joined (Network Address: 0x%04X) → Sende DEVICE_ANNCE sofort!");
+                    ESP_LOGI(TAG, "        → Device bereits joined (0x%04X) → DEVICE_ANNCE", network_addr);
                     zigbee_send_device_annce_if_needed("steering_joined");
                 } else {
-                    ESP_LOGI(TAG, "        → Device ist noch nicht joined → Warte auf Association Request/Response");
+                    ESP_LOGI(TAG, "        → esp_zb_bdb_dev_joined() noch false (Stack-Stabilisierung folgt)");
                 }
             } else {
                 ESP_LOGW(TAG, "ZigBee Signal: STEERING fehlgeschlagen (Status: %s)", esp_err_to_name(err_status));
@@ -1850,11 +1849,10 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             }
             
             if (steering_successful) {
-                ESP_LOGI(TAG, "        → Network Steering erfolgreich - warte %d ms vor Association Request (Timing-Fix für SDK Issue #335)",
+                ESP_LOGI(TAG, "        → STEERING OK - warte %d ms (Stack-Stabilisierung vor Join-Pruefung)",
                          ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS);
                 vTaskDelay(pdMS_TO_TICKS(ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS));
                 elapsed_ms += ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS;
-                ESP_LOGI(TAG, "        → Timing-Verzögerung abgeschlossen - Association Request sollte jetzt gesendet werden");
             }
             
             // Warte auf Pairing-Erfolg (mit Timeout) oder Steering-Fehler
@@ -2059,11 +2057,10 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             }
             
             if (steering_successful) {
-                ESP_LOGI(TAG, "        → Network Steering erfolgreich - warte %d ms vor Association Request (Timing-Fix für SDK Issue #335)",
+                ESP_LOGI(TAG, "        → STEERING OK - warte %d ms (Stack-Stabilisierung vor Join-Pruefung)",
                          ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS);
                 vTaskDelay(pdMS_TO_TICKS(ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS));
                 elapsed_ms += ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS;
-                ESP_LOGI(TAG, "        → Timing-Verzögerung abgeschlossen - Association Request sollte jetzt gesendet werden");
             }
             
             // Warte auf Rejoin-Erfolg (mit Timeout) oder Steering-Fehler

@@ -99,15 +99,11 @@
 #define ZIGBEE_ADDR_STABILIZE_RETRY_MS      100    // Wartezeit pro Adress-Stabilisierungs-Versuch
 #define ZIGBEE_ADDR_STABILIZE_RETRY_COUNT   3      // Versuche bis Short Address mit RTC uebereinstimmt
 
-// Timing-Konfiguration für Association Request nach Network Steering
-// WICHTIG: Nach erfolgreichem Network Steering benötigt der Stack Zeit, um:
-// - Network-Informationen zu verarbeiten
-// - MAC-Layer zu stabilisieren
-// - Association Request vorzubereiten
-// Bekanntes Problem (SDK Issue #335/TZ-842): Coordinator sendet manchmal keine Association Response
-// wenn die Request zu früh nach Network Discovery kommt
-// Empfohlene Werte: 500-2000 ms (abhängig von Netzwerk-Latenz)
-#define ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS  1500  // Verzögerung nach erfolgreichem Network Steering vor Association Request (ms)
+// Eigener Workaround: gibt dem Stack Zeit nach STEERING+OK bevor
+// esp_zb_bdb_dev_joined() zuverlaessig true liefert.
+// Laut SDK-Doku ist STEERING+ESP_OK = Join abgeschlossen (nicht nur Discovery).
+// A/B-Test: auf 0 oder 200ms reduzieren wenn Join stabil bleibt.
+#define ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS  1500
 
 // TX Power Konfiguration (Sendeleistung)
 // ESP-Zigbee-SDK / IEEE802154: Default hängt vom Chip/SPI-SDK ab.
