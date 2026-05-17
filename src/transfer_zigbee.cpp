@@ -625,12 +625,12 @@ static void zigbee_process_pending_nvs_save(void) {
     if (!zigbee_nvs_save_pending) {
         return;
     }
-    zigbee_nvs_save_pending = false;
+    // Flag erst nach erfolgreichem Save loeschen – bei Fehler Retry naechste Iteration
     if (zigbee_config_save_to_nvs()) {
-        ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (deferred aus Signal-Handler)");
-        vTaskDelay(pdMS_TO_TICKS(500));
+        zigbee_nvs_save_pending = false;
+        ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (deferred)");
     } else {
-        ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config NVS-Speichern (deferred) fehlgeschlagen");
+        ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config NVS-Speichern fehlgeschlagen – Retry naechste Iteration");
     }
 }
 
