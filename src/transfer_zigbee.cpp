@@ -1666,6 +1666,8 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                     ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (passiver Rejoin)");
                 }
             }
+            // Rejoin, kein neues Pairing – veraltetes Interview-Flag verwerfen (sonst 60+30s in send_data)
+            first_pairing_after_join = false;
             return TRANSFER_STATUS_OK;
         } else {
             ESP_LOGW(TAG, "        → Passiver Auto-Rejoin nicht erfolgreich (nach %d ms) → Starte Network Steering",
@@ -1729,6 +1731,9 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             } else {
                 ESP_LOGE(TAG, "        → FEHLER: zigbee_rtc synchronisiert, aber konnte nicht in NVS gespeichert werden!");
             }
+        } else {
+            // RTC bereits synchron – kein Interview-Fenster (veraltetes Flag aus frueherem Zyklus)
+            first_pairing_after_join = false;
         }
         
         return TRANSFER_STATUS_OK;
