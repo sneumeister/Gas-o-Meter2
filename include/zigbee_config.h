@@ -91,7 +91,7 @@
 #define ZIGBEE_INTERVIEW_ANNCE_WAIT_MAX_MS  60000   // Max. Warte auf DEVICE_ANNCE (Fallback ohne Signal)
 #define ZIGBEE_INTERVIEW_POST_ANNCE_MS      30000   // Nach DEVICE_ANNCE: Z2M Interview + Configure Reporting
 #define ZIGBEE_INTERVIEW_POLL_INTERVAL_MS   200     // Poll-Intervall waehrend Interview-Warte
-#define ZIGBEE_AUTO_REJOIN_PASSIVE_WAIT_MS   2000   // Kurze Poll-Warte ob Stack joined (typ. ohne Erfolg) → danach Steering
+#define ZIGBEE_AUTO_REJOIN_PASSIVE_WAIT_MS   300    // Kurze Poll-Warte ob Stack joined (nach Deep-Sleep typ. cold → danach Steering)
 #define ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS  45000  // Poll-Timeout nach DEVICE_REBOOT / in Steering-Warte (nicht passive Phase)
 #define ZIGBEE_AUTO_REJOIN_POLL_INTERVAL_MS 200    // Schnelleres Poll nur in der Auto-Rejoin-Phase (pro Wake begrenzt)
 #define ZIGBEE_EXPLICIT_BATTERY_REPORT_ON_REJOIN  1  // Battery-Reports (Spannung/Prozent/Alarm) auch nach Rejoin explizit senden
