@@ -69,10 +69,12 @@ static void zigbee_send_device_annce_if_needed(const char* reason);
 static void zigbee_maybe_send_device_annce_on_rejoin(const char* reason);
 static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairing);
 static bool zigbee_try_handle_reboot_in_steering_wait(bool for_pairing);
+static void zigbee_update_rtc_from_stack_impl(void);
 static void zigbee_update_rtc_from_stack(void);
 static void zigbee_push_cluster_vals_to_stack_if_joined(void);
 static void zigbee_wait_for_time_sync_response(void);
 static void zigbee_wait_for_first_pairing_interview(void);
+static bool zigbee_refresh_parent_link_diagnostics_impl(bool verbose_log);
 static bool zigbee_refresh_parent_link_diagnostics(bool verbose_log);
 #endif
 
@@ -464,7 +466,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 ESP_LOGI(TAG, "        → Device erfolgreich joined (Network Address: 0x%04X)", network_addr);
                 
                 ESP_LOGI(TAG, "        → Lese Parent-Informationen aus Neighbor Table...");
-                zigbee_refresh_parent_link_diagnostics(true);
+                zigbee_refresh_parent_link_diagnostics_impl(true);
                 
                 // Prüfe, ob es ein Pairing (factory-new) oder Rejoin war
                 // HINWEIS: Wenn wir hier sind, ist das Device bereits joined, also sollte
@@ -1415,8 +1417,8 @@ static void zigbee_maybe_send_device_annce_on_rejoin(const char* reason) {
     ESP_LOGI(TAG, "        → DEVICE_ANNCE uebersprungen (Rejoin, Stack-ZDO-Announce)");
 }
 
-/** Parent aus Neighbor Table: LQI/RSSI in Diagnostics-Cluster + coord_addr. */
-static bool zigbee_refresh_parent_link_diagnostics(bool verbose_log) {
+/** Parent aus Neighbor Table: LQI/RSSI in Diagnostics-Cluster + coord_addr (ohne Lock). */
+static bool zigbee_refresh_parent_link_diagnostics_impl(bool verbose_log) {
     if (!esp_zb_bdb_dev_joined()) {
         return false;
     }
@@ -1454,6 +1456,14 @@ static bool zigbee_refresh_parent_link_diagnostics(bool verbose_log) {
         ESP_LOGW(TAG, "        → WARNUNG: Kein Parent in Neighbor Table gefunden (moeglicherweise noch nicht aktualisiert)");
     }
     return false;
+}
+
+/** Wie _impl, mit esp_zb_lock (Aufruf aus Application-Task, nicht Signal-Handler). */
+static bool zigbee_refresh_parent_link_diagnostics(bool verbose_log) {
+    esp_zb_lock_acquire(portMAX_DELAY);
+    bool ok = zigbee_refresh_parent_link_diagnostics_impl(verbose_log);
+    esp_zb_lock_release();
+    return ok;
 }
 
 /** Battery/Metering: no-op nach Join – Stack liest Werte lazy aus gebundenen Variablen. */
@@ -1518,7 +1528,7 @@ static void zigbee_wait_for_first_pairing_interview(void) {
     zigbee_stack_device_annce_received = false;
 }
 
-static void zigbee_update_rtc_from_stack(void) {
+static void zigbee_update_rtc_from_stack_impl(void) {
     zigbee_rtc.joined = true;
     zigbee_rtc.network_addr = esp_zb_get_short_address();
     zigbee_rtc.pan_id = esp_zb_get_pan_id();
@@ -1530,7 +1540,13 @@ static void zigbee_update_rtc_from_stack(void) {
         current_extended_addr |= ((uint64_t)ieee_addr[i]) << (i * 8);
     }
     zigbee_rtc.extended_addr = current_extended_addr;
-    zigbee_refresh_parent_link_diagnostics(false);
+    zigbee_refresh_parent_link_diagnostics_impl(false);
+}
+
+static void zigbee_update_rtc_from_stack(void) {
+    esp_zb_lock_acquire(portMAX_DELAY);
+    zigbee_update_rtc_from_stack_impl();
+    esp_zb_lock_release();
 }
 
 static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairing) {
