@@ -1750,16 +1750,9 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             
             zigbee_update_rtc_from_stack();
             
-            // WICHTIG: Wenn das Device gerade joined ist (zwischen Wake-ups) und es ein erstes Pairing war,
-            // setze first_pairing_after_join, damit die Interview-Wartezeit aktiviert wird
-            // Dies stellt sicher, dass Zigbee2MQTT Zeit hat, das Interview abzuschließen
-            // HINWEIS: is_factory_new ist false, wenn das Device erfolgreich gejoint ist
-            //          Wenn zigbee_rtc.joined = false war, war es definitiv ein erstes Pairing
-            if (was_not_joined && !first_pairing_after_join) {
-                ESP_LOGI(TAG, "        → Device hat gerade gejoint (erstes Pairing) → Setze first_pairing_after_join für Interview-Wartezeit");
-                ESP_LOGI(TAG, "        → Interview-Wartezeit wird in transfer_zigbee_send_data() aktiviert");
-                first_pairing_after_join = true;
-            }
+            // RTC war leer, Stack joined → Interview-Fenster in send_data
+            ESP_LOGI(TAG, "        → Device hat gerade gejoint → first_pairing_after_join (Interview-Wartezeit in send_data)");
+            first_pairing_after_join = true;
             
             // In NVS speichern
             if (zigbee_config_save_to_nvs()) {
