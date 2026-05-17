@@ -77,6 +77,15 @@ static void zigbee_wait_for_time_sync_response(void);
 static void zigbee_wait_for_first_pairing_interview(void);
 static bool zigbee_refresh_parent_link_diagnostics_impl(bool verbose_log);
 static bool zigbee_refresh_parent_link_diagnostics(bool verbose_log);
+typedef struct {
+    bool     joined;
+    uint16_t network_addr;
+    uint16_t pan_id;
+    uint8_t  channel;
+} zigbee_network_info_t;
+static bool zigbee_network_info_valid(const zigbee_network_info_t *info);
+static zigbee_network_info_t zigbee_read_network_info_impl(void);
+static zigbee_network_info_t zigbee_read_network_info_locked(void);
 #endif
 
 // RTC-RAM Variable für ZigBee-Config (Definition)
@@ -1375,33 +1384,52 @@ bool transfer_zigbee_init(void) {
 // Rejoin-Helfer (DEVICE_REBOOT, DEVICE_ANNCE, RTC)
 // ============================================
 
+static bool zigbee_network_info_valid(const zigbee_network_info_t *info) {
+    return info->joined
+        && ZIGBEE_IS_NETWORK_ADDR_VALID(info->network_addr)
+        && (info->pan_id != 0x0000);
+}
+
+/** Stack-Netzinfo lesen – nur unter esp_zb_lock (oder im Signal-Handler). */
+static zigbee_network_info_t zigbee_read_network_info_impl(void) {
+    zigbee_network_info_t info = {};
+    info.joined = esp_zb_bdb_dev_joined();
+    info.network_addr = esp_zb_get_short_address();
+    info.pan_id = esp_zb_get_pan_id();
+    info.channel = esp_zb_get_current_channel();
+    return info;
+}
+
+static zigbee_network_info_t zigbee_read_network_info_locked(void) {
+    esp_zb_lock_acquire(portMAX_DELAY);
+    zigbee_network_info_t info = zigbee_read_network_info_impl();
+    esp_zb_lock_release();
+    return info;
+}
+
 static bool zigbee_is_joined_with_valid_network(void) {
-    if (!esp_zb_bdb_dev_joined()) {
-        return false;
-    }
-    uint16_t network_addr = esp_zb_get_short_address();
-    uint16_t pan_id = esp_zb_get_pan_id();
-    return ZIGBEE_IS_NETWORK_ADDR_VALID(network_addr) && (pan_id != 0x0000);
+    zigbee_network_info_t info = zigbee_read_network_info_locked();
+    return zigbee_network_info_valid(&info);
 }
 
 static bool zigbee_network_addr_stable_for_annce(void) {
-    if (!zigbee_is_joined_with_valid_network()) {
+    zigbee_network_info_t info = zigbee_read_network_info_locked();
+    if (!zigbee_network_info_valid(&info)) {
         return false;
     }
-    uint16_t network_addr = esp_zb_get_short_address();
     if (zigbee_rtc.joined && ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
-        if (network_addr == zigbee_rtc.network_addr) {
+        if (info.network_addr == zigbee_rtc.network_addr) {
             return true;
         }
         for (int i = 0; i < ZIGBEE_ADDR_STABILIZE_RETRY_COUNT; i++) {
             vTaskDelay(pdMS_TO_TICKS(ZIGBEE_ADDR_STABILIZE_RETRY_MS));
-            network_addr = esp_zb_get_short_address();
-            if (network_addr == zigbee_rtc.network_addr) {
+            info = zigbee_read_network_info_locked();
+            if (info.network_addr == zigbee_rtc.network_addr) {
                 return true;
             }
         }
         ESP_LOGW(TAG, "        → DEVICE_ANNCE uebersprungen: Addr 0x%04X != RTC 0x%04X",
-                 network_addr, zigbee_rtc.network_addr);
+                 info.network_addr, zigbee_rtc.network_addr);
         return false;
     }
     return true;
@@ -1428,8 +1456,9 @@ static void zigbee_send_device_annce_if_needed(const char* reason) {
     }
     esp_zb_zdo_device_announcement_req();
     last_device_annce_sent_ms = now_ms;
+    zigbee_network_info_t info = zigbee_read_network_info_locked();
     ESP_LOGI(TAG, "        → DEVICE_ANNCE gesendet (Addr 0x%04X, reason=%s)",
-             esp_zb_get_short_address(), reason);
+             info.network_addr, reason);
 }
 
 /** Rejoin: Stack sendet ZDO Device Announce selbst – kein esp_zb_zdo_device_announcement_req (vermeidet Z2M-Doppel-Event). */
@@ -1550,10 +1579,11 @@ static void zigbee_wait_for_first_pairing_interview(void) {
 }
 
 static void zigbee_update_rtc_from_stack_impl(void) {
+    zigbee_network_info_t info = zigbee_read_network_info_impl();
     zigbee_rtc.joined = true;
-    zigbee_rtc.network_addr = esp_zb_get_short_address();
-    zigbee_rtc.pan_id = esp_zb_get_pan_id();
-    zigbee_rtc.channel = esp_zb_get_current_channel();
+    zigbee_rtc.network_addr = info.network_addr;
+    zigbee_rtc.pan_id = info.pan_id;
+    zigbee_rtc.channel = info.channel;
     esp_zb_ieee_addr_t ieee_addr;
     esp_zb_get_long_address(ieee_addr);
     uint64_t current_extended_addr = 0;
@@ -1577,10 +1607,9 @@ static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairin
     const uint32_t poll_ms = ZIGBEE_STEERING_POLL_INTERVAL_MS;
     while (elapsed_ms < timeout_ms) {
         if (zigbee_is_joined_with_valid_network()) {
-            uint16_t network_addr = esp_zb_get_short_address();
-            uint16_t pan_id = esp_zb_get_pan_id();
+            zigbee_network_info_t info = zigbee_read_network_info_locked();
             ESP_LOGI(TAG, "        → Join nach DEVICE_REBOOT OK (nach %lu ms), Addr 0x%04X, PAN 0x%04X",
-                     (unsigned long)elapsed_ms, network_addr, pan_id);
+                     (unsigned long)elapsed_ms, info.network_addr, info.pan_id);
             bool was_rtc_joined = zigbee_rtc.joined;
             zigbee_update_rtc_from_stack();
             if (for_pairing) {
@@ -1645,7 +1674,8 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
     // Status-Prüfung: factory-new? joined?
     ESP_LOGI(TAG, "transfer_zigbee_ensure_joined: Prüfe ZigBee-Status...");
     bool is_factory_new = esp_zb_bdb_is_factory_new();
-    bool is_joined = esp_zb_bdb_dev_joined();
+    zigbee_network_info_t net_info = zigbee_read_network_info_locked();
+    bool is_joined = net_info.joined;
     
     ESP_LOGI(TAG, "        → Factory-New: %s", is_factory_new ? "ja" : "nein");
     ESP_LOGI(TAG, "        → Joined: %s", is_joined ? "ja" : "nein");
@@ -1669,7 +1699,8 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
         while (!is_joined && elapsed_ms < passive_wait_ms) {
             vTaskDelay(pdMS_TO_TICKS(poll_interval_ms));
             elapsed_ms += poll_interval_ms;
-            is_joined = esp_zb_bdb_dev_joined();
+            net_info = zigbee_read_network_info_locked();
+            is_joined = net_info.joined;
         }
         
         if (is_joined) {
@@ -1717,20 +1748,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 ESP_LOGI(TAG, "        → Erstes Pairing erkannt (Device war factory-new und hat gerade gejoint)");
             }
             
-            uint16_t network_addr = esp_zb_get_short_address();
-            zigbee_rtc.joined = true;
-            zigbee_rtc.network_addr = network_addr;
-            zigbee_rtc.pan_id = esp_zb_get_pan_id();
-            zigbee_rtc.channel = esp_zb_get_current_channel();
-            
-            // Extended Address aktualisieren
-            esp_zb_ieee_addr_t ieee_addr;
-            esp_zb_get_long_address(ieee_addr);
-            uint64_t current_extended_addr = 0;
-            for (int i = 0; i < 8; i++) {
-                current_extended_addr |= ((uint64_t)ieee_addr[i]) << (i * 8);
-            }
-            zigbee_rtc.extended_addr = current_extended_addr;
+            zigbee_update_rtc_from_stack();
             
             // WICHTIG: Wenn das Device gerade joined ist (zwischen Wake-ups) und es ein erstes Pairing war,
             // setze first_pairing_after_join, damit die Interview-Wartezeit aktiviert wird
@@ -1877,24 +1895,15 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 
                 // Direkte Prüfung nur nach Verzögerung und wenn Network Steering erfolgreich war
                 if (direct_check_started && (elapsed_ms - direct_check_start_ms) >= direct_check_delay_ms) {
-                    // Prüfe Join-Status mit zusätzlicher Validierung (Network Address, PAN ID)
-                    // HINWEIS: esp_zb_bdb_dev_joined() ist nicht thread-safe außerhalb des Zigbee-Tasks,
-                    // aber da wir in einer Warteschleife mit Delays sind und die Flags volatile sind,
-                    // ist das Risiko einer Race Condition gering
-                    bool is_joined = esp_zb_bdb_dev_joined();
-                    uint16_t network_addr = esp_zb_get_short_address();
-                    uint16_t pan_id = esp_zb_get_pan_id();
+                    zigbee_network_info_t join_info = zigbee_read_network_info_locked();
+                    bool has_valid_network_addr = zigbee_network_info_valid(&join_info);
                     
-                    // Zusätzliche Validierung: Prüfe auch Network Address und PAN ID
-                    // Dies gibt zusätzliche Sicherheit gegen falsch-positive Ergebnisse
-                    bool has_valid_network_addr = ZIGBEE_IS_NETWORK_ADDR_VALID(network_addr);
-                    bool has_valid_pan_id = (pan_id != 0x0000);
-                    
-                    if (is_joined && !zigbee_rtc.joined && has_valid_network_addr && has_valid_pan_id) {
+                    if (join_info.joined && !zigbee_rtc.joined && has_valid_network_addr) {
                         // Device ist joined, aber pairing_successful wurde noch nicht gesetzt
                         // (DEVICE_ANNCE Signal kam nicht, aber Join war erfolgreich)
                         ESP_LOGI(TAG, "        → Device ist joined (direkte Prüfung), aber DEVICE_ANNCE Signal kam nicht");
-                        ESP_LOGI(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X", network_addr, pan_id);
+                        ESP_LOGI(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X",
+                                 join_info.network_addr, join_info.pan_id);
                         ESP_LOGI(TAG, "        → Setze Pairing-Status manuell...");
                         
                         // Status manuell setzen (wie im DEVICE_ANNCE Handler)
@@ -1953,15 +1962,12 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             // WICHTIG: Prüfe nochmal, ob das Device zwischenzeitlich erfolgreich gejoint ist
             // (kann passieren, wenn der Stack im Hintergrund weiterarbeitet und später erfolgreich ist)
             // Dies ist besonders wichtig für factory-new Devices, die während des gleichen Wake-ups joinen
-            bool is_joined_now = esp_zb_bdb_dev_joined();
-            uint16_t network_addr = esp_zb_get_short_address();
-            uint16_t pan_id = esp_zb_get_pan_id();
-            bool has_valid_network_addr = ZIGBEE_IS_NETWORK_ADDR_VALID(network_addr);
-            bool has_valid_pan_id = (pan_id != 0x0000);
+            zigbee_network_info_t join_info = zigbee_read_network_info_locked();
             
-            if (is_joined_now && has_valid_network_addr && has_valid_pan_id) {
+            if (join_info.joined && zigbee_network_info_valid(&join_info)) {
                 ESP_LOGI(TAG, "        → WICHTIG: Device ist jetzt doch joined (zwischenzeitlich erfolgreich gejoint)!");
-                ESP_LOGI(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X", network_addr, pan_id);
+                ESP_LOGI(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X",
+                         join_info.network_addr, join_info.pan_id);
                 ESP_LOGI(TAG, "        → Setze Pairing-Status nachträglich...");
                 
                 // Status nachträglich setzen (wie im DEVICE_ANNCE Handler)
@@ -2139,24 +2145,15 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 }
                 
                 if (should_check) {
-                    // Prüfe Join-Status mit zusätzlicher Validierung (Network Address, PAN ID)
-                    // HINWEIS: esp_zb_bdb_dev_joined() ist nicht thread-safe außerhalb des Zigbee-Tasks,
-                    // aber da wir in einer Warteschleife mit Delays sind und die Flags volatile sind,
-                    // ist das Risiko einer Race Condition gering
-                    bool is_joined = esp_zb_bdb_dev_joined();
-                    uint16_t network_addr = esp_zb_get_short_address();
-                    uint16_t pan_id = esp_zb_get_pan_id();
+                    zigbee_network_info_t join_info = zigbee_read_network_info_locked();
+                    bool has_valid_network = zigbee_network_info_valid(&join_info);
                     
-                    // Zusätzliche Validierung: Prüfe auch Network Address und PAN ID
-                    // Dies gibt zusätzliche Sicherheit gegen falsch-positive Ergebnisse
-                    bool has_valid_network_addr = ZIGBEE_IS_NETWORK_ADDR_VALID(network_addr);
-                    bool has_valid_pan_id = (pan_id != 0x0000);
-                    
-                    if (is_joined && !rejoin_successful && has_valid_network_addr && has_valid_pan_id) {
+                    if (join_info.joined && !rejoin_successful && has_valid_network) {
                         // Device ist rejoined, aber rejoin_successful wurde noch nicht gesetzt
                         // (DEVICE_ANNCE Signal kam nicht, aber Rejoin war erfolgreich)
                         ESP_LOGI(TAG, "        → Device ist rejoined (direkte Prüfung), aber DEVICE_ANNCE Signal kam nicht");
-                        ESP_LOGI(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X", network_addr, pan_id);
+                        ESP_LOGI(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X",
+                                 join_info.network_addr, join_info.pan_id);
                         ESP_LOGI(TAG, "        → Setze Rejoin-Status manuell...");
                         
                         rejoin_successful = true;
@@ -2306,7 +2303,7 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     
     // WICHTIG: Prüfe, ob Device bereits joined war (vor ensure_joined) - nur für Logging
     bool was_already_joined_in_rtc = zigbee_rtc.joined && ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr);
-    bool was_joined_in_stack_before = esp_zb_bdb_dev_joined();  // Prüfe Stack-Status VOR ensure_joined
+    bool was_joined_in_stack_before = zigbee_read_network_info_locked().joined;
     
     transfer_status_t join_status = transfer_zigbee_ensure_joined();
     if (join_status != TRANSFER_STATUS_OK) {
@@ -2318,7 +2315,8 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     zigbee_refresh_parent_link_diagnostics(false);
 
     // Logging: Art der Verbindung (für Diagnose)
-    bool rejoin_just_happened = was_already_joined_in_rtc && !was_joined_in_stack_before && esp_zb_bdb_dev_joined();
+    bool rejoin_just_happened = was_already_joined_in_rtc && !was_joined_in_stack_before
+        && zigbee_read_network_info_locked().joined;
     if (rejoin_just_happened) {
         ESP_LOGI(TAG, "        → Rejoin erkannt → Stack sendet Reports automatisch bei Wertänderung");
     } else if (was_already_joined_in_rtc && was_joined_in_stack_before) {
@@ -2403,7 +2401,7 @@ bool transfer_zigbee_sync_time(void) {
         return false;
     }
     
-    if (!esp_zb_bdb_dev_joined()) {
+    if (!zigbee_read_network_info_locked().joined) {
         ESP_LOGW(TAG, "transfer_zigbee_sync_time: Device nicht mit Netzwerk verbunden");
         return false;
     }
@@ -2649,7 +2647,7 @@ bool transfer_zigbee_is_initialized(void) {
 bool transfer_zigbee_is_joined(void) {
     #ifndef ARDUINO
     if (zigbee_initialized) {
-        return esp_zb_bdb_dev_joined();
+        return zigbee_read_network_info_locked().joined;
     }
     #endif
     return zigbee_rtc.joined;
