@@ -1658,6 +1658,11 @@ static void zigbee_restore_sleepy_rx_on_when_idle(void) {
              esp_zb_get_rx_on_when_idle() ? "true" : "false");
 }
 
+/** Nach jedem erfolgreichen Rejoin (BDB direkt oder Steering-Fallback). */
+static void zigbee_finalize_rejoin_success(void) {
+    zigbee_restore_sleepy_rx_on_when_idle();
+}
+
 static void zigbee_restore_primary_channel_mask(void) {
     esp_err_t err = esp_zb_set_primary_network_channel_set(ZIGBEE_PRIMARY_CHANNEL_MASK);
     if (err != ESP_OK) {
@@ -2100,7 +2105,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 if (zigbee_try_direct_bdb_rejoin(ZIGBEE_DIRECT_REJOIN_TIMEOUT_MS, &direct_elapsed_ms)) {
                     ESP_LOGI(TAG, "        → Rejoin erfolgreich (direkter Rejoin, %lu ms)",
                              (unsigned long)direct_elapsed_ms);
-                    zigbee_restore_sleepy_rx_on_when_idle();
+                    zigbee_finalize_rejoin_success();
                     rejoin_completed = true;
                     break;
                 }
@@ -2145,6 +2150,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             }
             
             if (rejoin_successful) {
+                zigbee_finalize_rejoin_success();
                 rejoin_completed = true;
                 break;
             }
@@ -2276,6 +2282,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             if (rejoin_successful) {
                 ESP_LOGI(TAG, "        → Rejoin erfolgreich (Versuch %d, nach %d ms)", 
                          steering_attempt + 1, elapsed_ms - cycle_start_ms);
+                zigbee_finalize_rejoin_success();
                 rejoin_completed = true;
                 break;
             }
