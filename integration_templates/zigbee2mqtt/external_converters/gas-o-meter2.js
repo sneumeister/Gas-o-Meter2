@@ -52,11 +52,10 @@ const fzLocal = {
                 result.battery = msg.data['batteryPercentageRemaining'] / 2;
             }
             
-            // Battery Voltage (Attribut 0x0020) als battery_voltage
-            // Zigbee sendet uint8 in 100mV Einheiten (z.B. 35 = 3.5V)
-            // Z2M erwartet mV (wie gewünscht)
+            // Battery Voltage (Attribut 0x0020) als battery_voltage in V (float)
+            // Zigbee sendet uint8 in 100mV-Einheiten (z.B. 42 = 4.2V)
             if (msg.data.hasOwnProperty('batteryVoltage')) {
-                result.battery_voltage = msg.data['batteryVoltage'] * 100; // 100mV -> mV
+                result.battery_voltage = msg.data['batteryVoltage'] / 10;
             }
             
             // Battery Alarm State (Attribut 0x003E)
@@ -103,10 +102,10 @@ const definition = {
         // Batteriestand in % (0-100) - verwendet Standard-Preset
         e.battery(),
         
-        // Batteriespannung in mV - Custom Expose mit battery_voltage
+        // Batteriespannung in V (HA device_class: voltage)
         exposes.numeric('battery_voltage', ea.STATE)
-            .withUnit('mV')
-            .withDescription('Battery voltage [mV]'),
+            .withUnit('V')
+            .withDescription('Battery voltage [V]'),
         
         // Batterie-Warnung (boolean) - verwendet Standard-Preset
         e.battery_low(),
