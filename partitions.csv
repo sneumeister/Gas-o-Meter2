@@ -12,27 +12,25 @@ nvs,      data, nvs,     0x9000,  0x7000,
 # factory beginnt bei 64 KB (0x10000) - Standard-Offset für ESP-IDF
 # ESP-IDF flasht die App automatisch bei 0x10000
 # otadata entfernt, da keine OTA-Updates verwendet werden
-# Vergrößert auf 0x224000 (2.232.320 Bytes = ~2.13 MB) für größere Firmware
-# Aktuelle Firmware: ~1.715.808 Bytes
-# Reserve: ~516 KB für zukünftige Features (BLE, MQTT, etc.)
-factory,  app,  factory, 0x10000, 0x224000,
+# 0x230000 (2.359.296 Bytes) – Stand zigbee_improvements ~2.252 KB Image + Reserve
+factory,  app,  factory, 0x10000, 0x230000,
 #
 # Custom Partitionen
 # NVS Partition für Pulse-Zähler Ringspeicher (256 KB für 12000 Einträge mit Reserve)
-# Offset: 0x10000 + 0x224000 = 0x234000
+# Offset: 0x10000 + 0x230000 = 0x240000
 # Berechnung: 12000 Einträge × ~27 Bytes/Eintrag = ~324 KB, daher 256 KB mit Reserve
-pulse_nv, data, nvs,     0x234000, 0x40000,
+pulse_nv, data, nvs,     0x240000, 0x40000,
 #
 # ZigBee Partitionen (ESP-Zigbee-SDK) - müssen VOR LittleFS stehen (LittleFS muss am Ende sein)
-# Offset: 0x234000 + 0x40000 = 0x274000
+# Offset: 0x240000 + 0x40000 = 0x280000
 # zb_storage: 16 KB für ZigBee-Netzwerk-Speicher (erforderlich für ESP-Zigbee-SDK)
-zb_storage, data, fat,      0x274000, 0x4000,
+zb_storage, data, fat,      0x280000, 0x4000,
 # zb_fct: 4 KB Factory Configuration Table (erforderlich für ESP-Zigbee-SDK)
 # Größe: 0x1000 (4 KB) für Alignment, auch wenn nur 1 KB benötigt
-zb_fct,    data, fat,      0x278000, 0x1000,
+zb_fct,    data, fat,      0x284000, 0x1000,
 #
 # LittleFS Partition für config.json und andere Dateien (512 KB)
-# Offset: 0x278000 + 0x1000 = 0x279000
+# Offset: 0x284000 + 0x1000 = 0x285000
 # Vergrößert auf 512 KB (0x80000) für ~175 KB Dateien + LittleFS-Overhead + Reserve
 # WICHTIG: LittleFS muss am Ende stehen, damit es beim Upload korrekt erkannt wird
-storage,   data, littlefs,  0x279000, 0x80000,
+storage,   data, littlefs,  0x285000, 0x80000,
