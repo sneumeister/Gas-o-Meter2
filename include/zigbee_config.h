@@ -26,6 +26,11 @@
 #define ZIGBEE_CLUSTER_METERING       0x0702  // Simple Metering Cluster (für Gas-Zähler)
 #define ZIGBEE_CLUSTER_BASIC          0x0000  // Basic Cluster (für Firmware-Version)
 #define ZIGBEE_CLUSTER_TIME           0x000A  // Time Cluster (für Zeit-Synchronisation)
+#define ZIGBEE_CLUSTER_OTA_UPGRADE    0x0019  // OTA Upgrade Cluster (Platzhalter fuer spaetere OTA)
+
+// OTA Upgrade Client (Platzhalter – jetzt einbinden, sonst Factory-Reset bei Nachruestung)
+#define ZIGBEE_OTA_MANUFACTURER_ID    0x0000u  // Custom
+#define ZIGBEE_OTA_IMAGE_TYPE_ID      0xFFFFu  // unspezifiziert
 
 // Attribute-IDs
 #define ZIGBEE_ATTR_BATTERY_PERCENT   0x0021  // Battery Percentage Remaining (0-200, 0-100%)

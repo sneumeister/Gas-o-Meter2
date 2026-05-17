@@ -21,6 +21,7 @@
     #include "zcl/esp_zigbee_zcl_power_config.h"  // Für Power Config Cluster (esp_zb_power_config_cluster_cfg_t, esp_zb_power_config_cluster_add_attr, etc.)
     #include "zcl/esp_zigbee_zcl_metering.h"  // Für Metering Cluster (ESP_ZB_ZCL_METERING_UNIT_M3_M3H_BINARY, etc.)
     #include "zcl/esp_zigbee_zcl_diagnostics.h"  // Last LQI/RSSI für Z2M-Geräteübersicht
+    #include "zcl/esp_zigbee_zcl_ota.h"  // OTA-Defaults (esp-zigbee-lib v1.x: nicht *_ota_upgrade.h)
     #include "esp_zigbee_attribute.h"  // Für esp_zb_zcl_set_attribute_val()
     #include "zcl/esp_zigbee_zcl_command.h"  // Für esp_zb_zcl_read_attr_cmd_req() (Time Cluster)
     #include "zcl/esp_zigbee_zcl_core.h"  // Für esp_zb_core_action_handler_register, ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID
@@ -1099,7 +1100,28 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
         return NULL;
     }
     ESP_LOGI(TAG, "  → Diagnostics Cluster hinzugefuegt (Last LQI/RSSI fuer Z2M)");
-    
+
+    // OTA Upgrade Cluster (Client) – Platzhalter; Cluster-Liste beim Pairing fixieren
+    ESP_LOGI(TAG, "  → Erstelle OTA Upgrade Cluster (Client, Platzhalter)...");
+    esp_zb_ota_cluster_cfg_t ota_cfg = {
+        .ota_upgrade_file_version = RING_BUFFER_VERSION,
+        .ota_upgrade_manufacturer = ZIGBEE_OTA_MANUFACTURER_ID,
+        .ota_upgrade_image_type = ZIGBEE_OTA_IMAGE_TYPE_ID,
+        .ota_upgrade_downloaded_file_ver = ESP_ZB_ZCL_OTA_UPGRADE_DOWNLOADED_FILE_VERSION_DEF_VALUE,
+    };
+    esp_zb_attribute_list_t *ota_cluster = esp_zb_ota_cluster_create(&ota_cfg);
+    if (ota_cluster == NULL) {
+        ESP_LOGE(TAG, "Fehler beim Erstellen des OTA Clusters");
+        return NULL;
+    }
+    err = esp_zb_cluster_list_add_ota_cluster(cluster_list, ota_cluster, ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Fehler beim Hinzufuegen des OTA Clusters: %s", esp_err_to_name(err));
+        return NULL;
+    }
+    ESP_LOGI(TAG, "  → OTA Cluster hinzugefuegt (Client, FileVersion=0x%08lX)",
+             (unsigned long)ota_cfg.ota_upgrade_file_version);
+
     // Time Cluster hinzufügen (Client-Rolle für Zeit-Synchronisation)
     // WICHTIG: Time Cluster wird als CLIENT hinzugefügt, damit wir die Zeit vom Coordinator lesen können
     // HINWEIS: Für Client-Rolle sind keine Attribute nötig, da wir nur lesen
