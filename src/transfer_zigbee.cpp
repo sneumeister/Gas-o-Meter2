@@ -487,7 +487,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                     pairing_successful = true;
                     first_pairing_after_join = true;  // Flag setzen für Interview-Wartezeit
                     
-                    // HINWEIS: rx_on_when_idle wurde bereits in transfer_zigbee_init() auf true gesetzt
+                    // rx_on_when_idle wird in ensure_joined vor Steering temporaer aktiviert
                     // und bleibt während der gesamten aktiven Phase aktiv (bis Deep-Sleep)
                     
                     // RTC-Status aktualisieren
@@ -1245,13 +1245,9 @@ bool transfer_zigbee_init(void) {
     esp_zb_init(&zb_nwk_cfg);  // Gibt void zurück (keine Fehlerbehandlung möglich)
     ESP_LOGI(TAG, "        → Stack initialisiert");
     
-    // RX-on-when-idle auf true setzen (nach init, vor start)
-    // WICHTIG: Da das Device nach der Datenübertragung sofort in Deep-Sleep geht,
-    // ist rx_on_when_idle energetisch nicht relevant. Wir setzen es auf true,
-    // damit das Device während Network Steering, Join und Interview kontinuierlich
-    // empfangen kann (Network Key, Interview-Requests, etc.)
-    esp_zb_set_rx_on_when_idle(true);
-    ESP_LOGI(TAG, "        → RX-on-when-idle aktiviert (Device geht nach Datenübertragung in Deep-Sleep)");
+    // Sleepy End Device: Radio aus wenn idle (Coordinator pollt / Parent CSL)
+    esp_zb_set_rx_on_when_idle(false);
+    ESP_LOGI(TAG, "        → RX-on-when-idle deaktiviert (Sleepy ED – RX nur bei Join/Steering in ensure_joined)");
     
     // TX Power setzen (nach Stack-Initialisierung)
     const int8_t zigbee_tx_power_dbm = transfer_zigbee_get_tx_power_dbm();
@@ -1790,7 +1786,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
     if (is_factory_new) {
         // Pairing-Logik mit Retry-Mechanismus
         ESP_LOGI(TAG, "        → Device ist factory-new → Starte Pairing...");
-        // HINWEIS: rx_on_when_idle wurde bereits in transfer_zigbee_init() auf true gesetzt
+        // rx_on_when_idle wird in ensure_joined vor Steering temporaer aktiviert
         
         uint32_t steering_attempt = 0;
         bool pairing_completed = false;
@@ -1904,7 +1900,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                         first_pairing_after_join = true;
                         zigbee_stack_device_annce_received = true;  // Join ohne ZDO-Signal
                         
-                        // HINWEIS: rx_on_when_idle wurde bereits in transfer_zigbee_init() auf true gesetzt
+                        // rx_on_when_idle wird in ensure_joined vor Steering temporaer aktiviert
                         // und bleibt während der gesamten aktiven Phase aktiv (bis Deep-Sleep)
                         
                         zigbee_update_rtc_from_stack();
@@ -1983,7 +1979,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
     } else {
         // Rejoin-Logik mit Retry-Mechanismus
         ESP_LOGI(TAG, "        → Device ist nicht factory-new, aber nicht joined → Starte Rejoin...");
-        // HINWEIS: rx_on_when_idle wurde bereits in transfer_zigbee_init() auf true gesetzt
+        // rx_on_when_idle wird in ensure_joined vor Steering temporaer aktiviert
         
         uint32_t steering_attempt = 0;
         bool rejoin_completed = false;

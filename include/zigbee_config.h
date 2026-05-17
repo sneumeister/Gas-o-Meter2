@@ -94,7 +94,7 @@
 #define ZIGBEE_AUTO_REJOIN_PASSIVE_WAIT_MS   2000   // Kurze Poll-Warte ob Stack joined (typ. ohne Erfolg) → danach Steering
 #define ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS  45000  // Poll-Timeout nach DEVICE_REBOOT / in Steering-Warte (nicht passive Phase)
 #define ZIGBEE_AUTO_REJOIN_POLL_INTERVAL_MS 200    // Schnelleres Poll nur in der Auto-Rejoin-Phase (pro Wake begrenzt)
-#define ZIGBEE_EXPLICIT_BATTERY_REPORT_ON_REJOIN  0  // 1 = Battery-Reports auch nach Rejoin explizit senden (mehr MQTT)
+#define ZIGBEE_EXPLICIT_BATTERY_REPORT_ON_REJOIN  1  // Battery-Reports (Spannung/Prozent/Alarm) auch nach Rejoin explizit senden
 #define ZIGBEE_DEVICE_ANNCE_MIN_INTERVAL_MS 15000  // Mindestabstand zwischen DEVICE_ANNCE (Z2M-Debounce)
 #define ZIGBEE_ADDR_STABILIZE_RETRY_MS      100    // Wartezeit pro Adress-Stabilisierungs-Versuch
 #define ZIGBEE_ADDR_STABILIZE_RETRY_COUNT   3      // Versuche bis Short Address mit RTC uebereinstimmt

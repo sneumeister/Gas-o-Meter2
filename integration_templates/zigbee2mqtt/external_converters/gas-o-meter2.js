@@ -55,7 +55,7 @@ const fzLocal = {
             // Battery Voltage (Attribut 0x0020) als battery_voltage in V (float)
             // Zigbee sendet uint8 in 100mV-Einheiten (z.B. 42 = 4.2V)
             if (msg.data.hasOwnProperty('batteryVoltage')) {
-                result.battery_voltage = msg.data['batteryVoltage'] / 10;
+                result.battery_voltage = parseFloat((msg.data['batteryVoltage'] / 10).toFixed(1));
             }
             
             // Battery Alarm State (Attribut 0x003E)
