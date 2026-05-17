@@ -146,7 +146,7 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
         {"sensor",
          "voltage",
          "{\"name\":\"Battery Voltage\",\"unique_id\":\"%s_battery_voltage\",\"state_topic\":\"%s\","
-         "\"value_template\":\"{{ value_json.battery_voltage }}\",\"unit_of_measurement\":\"mV\","
+         "\"value_template\":\"{{ value_json.battery_voltage }}\",\"unit_of_measurement\":\"V\","
          "\"device_class\":\"voltage\",\"state_class\":\"measurement\",\"icon\":\"mdi:flash\",%s}"},
         {"binary_sensor",
          "battery_low",
@@ -311,7 +311,7 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
 
     snprintf(payload_gas, sizeof(payload_gas), "%.2f", data->pulse_counter / 100.0f);
     snprintf(payload_battery, sizeof(payload_battery), "%d", (int)data->battery_percent);
-    snprintf(payload_battery_voltage, sizeof(payload_battery_voltage), "%u", (uint16_t)(data->battery_voltage * 1000.0f));
+    snprintf(payload_battery_voltage, sizeof(payload_battery_voltage), "%.2f", data->battery_voltage);
     snprintf(payload_battery_low, sizeof(payload_battery_low), "%s", (data->battery_voltage < 3.57f) ? "true" : "false");
     snprintf(payload_firmware_version, sizeof(payload_firmware_version), "%s",
              data->firmware_version ? data->firmware_version : "");
