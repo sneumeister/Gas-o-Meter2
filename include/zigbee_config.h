@@ -94,6 +94,9 @@
 #define ZIGBEE_AUTO_REJOIN_PASSIVE_WAIT_MS   300    // Kurze Poll-Warte ob Stack joined (nach Deep-Sleep typ. cold → danach Steering)
 #define ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS  45000  // Poll-Timeout nach DEVICE_REBOOT / in Steering-Warte (nicht passive Phase)
 #define ZIGBEE_AUTO_REJOIN_POLL_INTERVAL_MS 200    // Schnelleres Poll nur in der Auto-Rejoin-Phase (pro Wake begrenzt)
+#define ZIGBEE_CHANNEL_MIN                  11     // ZigBee 2.4 GHz Kanalbereich
+#define ZIGBEE_CHANNEL_MAX                  26
+#define ZIGBEE_DIRECT_REJOIN_TIMEOUT_MS     5000   // BDB-INITIALIZATION auf gespeichertem Kanal (typ. 0.5–1.5 s); danach Steering
 #define ZIGBEE_EXPLICIT_BATTERY_REPORT_ON_REJOIN  1  // Battery-Reports (Spannung/Prozent/Alarm) auch nach Rejoin explizit senden
 #define ZIGBEE_DEVICE_ANNCE_MIN_INTERVAL_MS 15000  // Mindestabstand zwischen DEVICE_ANNCE (Z2M-Debounce)
 #define ZIGBEE_ADDR_STABILIZE_RETRY_MS      100    // Wartezeit pro Adress-Stabilisierungs-Versuch
@@ -218,6 +221,11 @@ extern zigbee_rtc_t zigbee_rtc;
 
 // Prüft, ob Device gepaart ist
 #define ZIGBEE_IS_JOINED()  (zigbee_rtc.joined)
+
+// RTC/NVS: Channel + PAN bekannt → BDB INITIALIZATION auf einem Kanal statt Network Steering
+#define ZIGBEE_RTC_HAS_DIRECT_REJOIN_CTX() \
+    ((zigbee_rtc.channel) >= ZIGBEE_CHANNEL_MIN && (zigbee_rtc.channel) <= ZIGBEE_CHANNEL_MAX \
+     && (zigbee_rtc.pan_id) != ZIGBEE_DEFAULT_PAN_ID)
 
 // ============================================
 // Funktionsprototypen (implementiert in transfer_zigbee.cpp)

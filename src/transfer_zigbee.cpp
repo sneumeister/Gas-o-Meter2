@@ -86,6 +86,10 @@ typedef struct {
 static bool zigbee_network_info_valid(const zigbee_network_info_t *info);
 static zigbee_network_info_t zigbee_read_network_info_impl(void);
 static zigbee_network_info_t zigbee_read_network_info_locked(void);
+static void zigbee_enable_rx_before_steering(void);
+static void zigbee_restore_sleepy_rx_on_when_idle(void);
+static void zigbee_restore_primary_channel_mask(void);
+static bool zigbee_try_direct_bdb_rejoin(uint32_t timeout_ms, uint32_t *elapsed_ms_out);
 #endif
 
 // RTC-RAM Variable für ZigBee-Config (Definition)
@@ -1640,6 +1644,100 @@ static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairin
 }
 
 /** @return true = Join erkannt, Steering-Schleife beenden; false = Fehler oder kein Reboot */
+/** Nur vor Network Steering (Beacon Scan) – nicht fuer BDB INITIALIZATION noetig. */
+static void zigbee_enable_rx_before_steering(void) {
+    esp_zb_set_rx_on_when_idle(true);
+    ESP_LOGI(TAG, "        → RX-on-when-idle vor Network Steering aktiviert (Status: %s)",
+             esp_zb_get_rx_on_when_idle() ? "true" : "false");
+    vTaskDelay(pdMS_TO_TICKS(100));
+}
+
+static void zigbee_restore_sleepy_rx_on_when_idle(void) {
+    esp_zb_set_rx_on_when_idle(false);
+    ESP_LOGI(TAG, "        → RX-on-when-idle deaktiviert (Sleepy ED, Status: %s)",
+             esp_zb_get_rx_on_when_idle() ? "true" : "false");
+}
+
+static void zigbee_restore_primary_channel_mask(void) {
+    esp_err_t err = esp_zb_set_primary_network_channel_set(ZIGBEE_PRIMARY_CHANNEL_MASK);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "        → Primary Channel-Mask Restore fehlgeschlagen: %s", esp_err_to_name(err));
+    }
+    err = esp_zb_set_secondary_network_channel_set(0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "        → Secondary Channel-Mask Clear fehlgeschlagen: %s", esp_err_to_name(err));
+    }
+}
+
+/**
+ * Schneller Rejoin: BDB INITIALIZATION auf gespeichertem Kanal (zb_storage), kein Network Steering.
+ * Aequivalent zu esp_zb_zdo_rejoin_network(false) – diese API ist in esp-zigbee-lib 1.x nicht exportiert.
+ */
+static bool zigbee_try_direct_bdb_rejoin(uint32_t timeout_ms, uint32_t *elapsed_ms_out) {
+    ESP_LOGI(TAG, "        → Direkter Rejoin (INITIALIZATION, Ch %u, PAN 0x%04X, kein Full-Scan)",
+             (unsigned)zigbee_rtc.channel, zigbee_rtc.pan_id);
+
+    const uint32_t channel_mask = (1UL << zigbee_rtc.channel);
+    esp_err_t ch_err = esp_zb_set_primary_network_channel_set(channel_mask);
+    if (ch_err != ESP_OK) {
+        ESP_LOGW(TAG, "        → Channel-Mask 0x%08lX fehlgeschlagen: %s",
+                 (unsigned long)channel_mask, esp_err_to_name(ch_err));
+    }
+    esp_zb_set_secondary_network_channel_set(0);
+
+    esp_err_t err = esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_INITIALIZATION);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "        → BDB INITIALIZATION fehlgeschlagen: %s", esp_err_to_name(err));
+        zigbee_restore_primary_channel_mask();
+        if (elapsed_ms_out) {
+            *elapsed_ms_out = 0;
+        }
+        return false;
+    }
+
+    uint32_t elapsed_ms = 0;
+    const uint32_t poll_ms = ZIGBEE_AUTO_REJOIN_POLL_INTERVAL_MS;
+    while (elapsed_ms < timeout_ms) {
+        if (device_rebooted_during_rejoin) {
+            if (zigbee_poll_joined_after_reboot(ZIGBEE_DIRECT_REJOIN_TIMEOUT_MS - elapsed_ms, false)) {
+                device_rebooted_during_rejoin = false;
+                zigbee_restore_primary_channel_mask();
+                if (elapsed_ms_out) {
+                    *elapsed_ms_out = elapsed_ms;
+                }
+                return true;
+            }
+            device_rebooted_during_rejoin = false;
+        }
+        if (rejoin_successful || zigbee_is_joined_with_valid_network()) {
+            if (!rejoin_successful) {
+                ESP_LOGI(TAG, "        → Direkter Rejoin OK (nach %lu ms)", (unsigned long)elapsed_ms);
+                zigbee_update_rtc_from_stack();
+                rejoin_successful = true;
+                zigbee_push_cluster_vals_to_stack_if_joined();
+                zigbee_maybe_send_device_annce_on_rejoin("direct_bdb_rejoin");
+                if (zigbee_config_save_to_nvs()) {
+                    ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (direkter Rejoin)");
+                }
+            }
+            zigbee_restore_primary_channel_mask();
+            if (elapsed_ms_out) {
+                *elapsed_ms_out = elapsed_ms;
+            }
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(poll_ms));
+        elapsed_ms += poll_ms;
+    }
+    ESP_LOGW(TAG, "        → Direkter Rejoin Timeout (%lu ms) → Network Steering",
+             (unsigned long)timeout_ms);
+    zigbee_restore_primary_channel_mask();
+    if (elapsed_ms_out) {
+        *elapsed_ms_out = elapsed_ms;
+    }
+    return false;
+}
+
 static bool zigbee_try_handle_reboot_in_steering_wait(bool for_pairing) {
     if (!device_rebooted_during_rejoin) {
         return false;
@@ -1686,7 +1784,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
     // In diesem Fall sollten wir NICHT versuchen, Pairing zu machen, sondern Rejoin
     if (zigbee_rtc.joined && ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
         ESP_LOGI(TAG, "        → Device war bereits gepaart (Config in NVS/RTC-RAM vorhanden)");
-        ESP_LOGI(TAG, "        → Passive Auto-Rejoin (max %d ms), danach Network Steering bei Bedarf",
+        ESP_LOGI(TAG, "        → Passive Auto-Rejoin (max %d ms), danach ZDO-Rejoin oder Steering",
                  ZIGBEE_AUTO_REJOIN_PASSIVE_WAIT_MS);
         const uint32_t passive_wait_ms = ZIGBEE_AUTO_REJOIN_PASSIVE_WAIT_MS;
         const uint32_t poll_interval_ms = ZIGBEE_AUTO_REJOIN_POLL_INTERVAL_MS;
@@ -1721,7 +1819,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             }
             return TRANSFER_STATUS_OK;
         } else {
-            ESP_LOGW(TAG, "        → Passiver Auto-Rejoin nicht erfolgreich (nach %d ms) → Starte Network Steering",
+            ESP_LOGW(TAG, "        → Passiver Auto-Rejoin nicht erfolgreich (nach %d ms) → ZDO-Rejoin/Steering",
                      elapsed_ms);
             // Weiter mit manuellem Rejoin (siehe unten)
         }
@@ -1977,9 +2075,8 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             }
         }
     } else {
-        // Rejoin-Logik mit Retry-Mechanismus
+        // Rejoin: zuerst ZDO-Rejoin (kein Scan), bei Fehler Network Steering
         ESP_LOGI(TAG, "        → Device ist nicht factory-new, aber nicht joined → Starte Rejoin...");
-        // rx_on_when_idle wird in ensure_joined vor Steering temporaer aktiviert
         
         uint32_t steering_attempt = 0;
         bool rejoin_completed = false;
@@ -1989,7 +2086,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             rejoin_successful = false;
             steering_failed = false;
             steering_successful = false;
-            device_rebooted_during_rejoin = false;  // Flag zurücksetzen für neuen Versuch
+            device_rebooted_during_rejoin = false;
             
             if (steering_attempt > 0) {
                 ESP_LOGI(TAG, "        → Retry-Versuch %d/%d (nach %d ms Wartezeit)...", 
@@ -1998,19 +2095,24 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 elapsed_ms += steering_retry_timer_ms;
             }
             
-            // WICHTIG: RX-on-when-idle explizit VOR Network Steering aktivieren
-            // Dies stellt sicher, dass das Device den Network Key vom Trust Center empfangen kann
-            esp_zb_set_rx_on_when_idle(true);
-            bool rx_on_when_idle_status = esp_zb_get_rx_on_when_idle();
-            ESP_LOGI(TAG, "        → RX-on-when-idle vor Network Steering aktiviert (Status: %s)", 
-                     rx_on_when_idle_status ? "true" : "false");
-            
-            // WICHTIG: Kurze Verzögerung nach rx_on_when_idle, damit der Stack Zeit hat, es zu aktivieren
-            // Dies reduziert "Have not got nwk key - authentication failed" Fehler beim ersten Pairing-Versuch
-            const uint32_t rx_on_when_idle_stabilize_ms = 100;  // 100ms Verzögerung
-            vTaskDelay(pdMS_TO_TICKS(rx_on_when_idle_stabilize_ms));
-            ESP_LOGI(TAG, "        → RX-on-when-idle Stabilisierung: %d ms", rx_on_when_idle_stabilize_ms);
-            
+            if (ZIGBEE_RTC_HAS_DIRECT_REJOIN_CTX()) {
+                uint32_t direct_elapsed_ms = 0;
+                if (zigbee_try_direct_bdb_rejoin(ZIGBEE_DIRECT_REJOIN_TIMEOUT_MS, &direct_elapsed_ms)) {
+                    ESP_LOGI(TAG, "        → Rejoin erfolgreich (direkter Rejoin, %lu ms)",
+                             (unsigned long)direct_elapsed_ms);
+                    zigbee_restore_sleepy_rx_on_when_idle();
+                    rejoin_completed = true;
+                    break;
+                }
+                elapsed_ms += direct_elapsed_ms;
+                if (elapsed_ms >= cycle_timeout_ms) {
+                    break;
+                }
+            } else {
+                ESP_LOGI(TAG, "        → Kein gueltiger RTC-Kontext (Ch/PAN) → Network Steering");
+            }
+
+            zigbee_enable_rx_before_steering();
             esp_err_t comm_err = esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
             if (comm_err != ESP_OK) {
                 ESP_LOGE(TAG, "        → Fehler beim Starten von Network Steering (Rejoin, Versuch %d): %s", 
