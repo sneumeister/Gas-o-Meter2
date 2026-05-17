@@ -1485,7 +1485,7 @@ static bool zigbee_refresh_parent_link_diagnostics_impl(bool verbose_log) {
         for (int i = 0; i < 8; i++) {
             parent_ieee_addr |= ((uint64_t)nbr_info.ieee_addr[i]) << (i * 8);
         }
-        zigbee_rtc.coord_addr = 0x0000;
+        zigbee_rtc.coord_addr = parent_short_addr;
         if (!verbose_log) {
             ESP_LOGD(TAG, "        → Diagnostics Parent LQI=%u RSSI=%d",
                      (unsigned)diag_last_lqi, (int)diag_last_rssi);
@@ -1757,9 +1757,6 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             // In NVS speichern
             if (zigbee_config_save_to_nvs()) {
                 ESP_LOGI(TAG, "        → zigbee_rtc erfolgreich synchronisiert und in NVS gespeichert");
-                // WICHTIG: Flash braucht Zeit zum Schreiben - Delay vor Deep-Sleep
-                // Gesamt: 100ms (in zigbee_config_save_to_nvs) + 500ms (hier) = 600ms für Flash-Schreibvorgang
-                vTaskDelay(pdMS_TO_TICKS(500));  // 500ms zusätzliches Delay für Flash-Schreibvorgang
             } else {
                 ESP_LOGE(TAG, "        → FEHLER: zigbee_rtc synchronisiert, aber konnte nicht in NVS gespeichert werden!");
             }
@@ -1912,9 +1909,6 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                         
                         if (zigbee_config_save_to_nvs()) {
                             ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (manuell nach direkter Prüfung)");
-                            // WICHTIG: Flash braucht Zeit zum Schreiben - Delay vor Deep-Sleep
-                            // Gesamt: 100ms (in zigbee_config_save_to_nvs) + 500ms (hier) = 600ms für Flash-Schreibvorgang
-                            vTaskDelay(pdMS_TO_TICKS(500));  // 500ms zusätzliches Delay für Flash-Schreibvorgang
                         } else {
                             ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config konnte nicht in NVS gespeichert werden!");
                         }
@@ -1972,7 +1966,6 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 
                 if (zigbee_config_save_to_nvs()) {
                     ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (nachträglich nach fehlgeschlagenem Pairing)");
-                    vTaskDelay(pdMS_TO_TICKS(500));  // Flash-Schreibvorgang
                 } else {
                     ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config konnte nicht in NVS gespeichert werden!");
                 }
@@ -2154,7 +2147,6 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                         zigbee_maybe_send_device_annce_on_rejoin("rejoin_direct_check");
                         if (zigbee_config_save_to_nvs()) {
                             ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (manuell nach direkter Prüfung, Rejoin)");
-                            vTaskDelay(pdMS_TO_TICKS(500));
                         } else {
                             ESP_LOGW(TAG, "        → Warnung: ZigBee-Config konnte nicht in NVS gespeichert werden (Rejoin)");
                         }
