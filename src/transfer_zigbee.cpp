@@ -2238,9 +2238,10 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
 // (address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT). Der Stack
 // loest den Eintrag ueber die Binding-Tabelle auf, kein expliziter Coordinator
 // noetig. Reports werden vom Server zum Client geschickt -> DIRECTION_TO_CLI.
-// Belt-and-Braces: wird zusaetzlich zum konfigurierten Auto-Reporting nach jedem
-// Wert-Update aufgerufen, damit Z2M auch bei fehlgeschlagenem Configure
-// Reporting frische Werte erhaelt.
+// Belt-and-Braces: explizite report_attr_cmd_req (nicht set_attribute_val – TZ-292).
+// Cluster-RAM wird in transfer_zigbee_prepare_cluster_attrs() aktualisiert; der Stack
+// liest die beim Register gebundenen Pointer lazy. set_attribute_val wuerde REPORTABLE
+// setzen und ungeplante Reports ausloesen.
 //
 // Rueckgabe: true bei ESP_OK von esp_zb_zcl_report_attr_cmd_req.
 // Aufrufer muss esp_zb_lock_acquire halten (Zigbee-Stack-API vom Nicht-Zigbee-Task).
@@ -2331,7 +2332,7 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
         ESP_LOGI(TAG, "        → Normale Verbindung → Stack sendet Reports automatisch");
     }
 
-    // [3/4] Attribute einmalig nach ensure_joined + explizite Reports
+    // [3/4] Cluster-RAM (prepare_cluster_attrs) + explizite Reports – kein set_attribute_val (TZ-292)
     ESP_LOGI(TAG, "  [3/4] Sende Daten:");
     ESP_LOGI(TAG, "        → pulse_counter: %lu", data->pulse_counter);
     ESP_LOGI(TAG, "        → battery_percent: %.1f%%", data->battery_percent);
@@ -2340,23 +2341,7 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
     ESP_LOGI(TAG, "        → CurrentSummationDelivered (Cluster-RAM): %lu (low: %lu, high: %u)",
              data->pulse_counter, current_summation_delivered.low, current_summation_delivered.high);
 
-    // set_attribute_val nur einmal nach ensure_joined (TZ-292: Mehrfachaufruf kann ungeplante Reports ausloesen)
     {
-        esp_zb_zcl_set_attribute_val(
-            ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_METERING, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-            ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED, &current_summation_delivered, false);
-        esp_zb_zcl_set_attribute_val(
-            ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-            ZIGBEE_ATTR_BATTERY_PERCENT, &battery_percentage_remaining, false);
-        if (data->battery_voltage > 0.0f) {
-            esp_zb_zcl_set_attribute_val(
-                ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-                ZIGBEE_ATTR_BATTERY_VOLTAGE, &battery_voltage_zigbee, false);
-            esp_zb_zcl_set_attribute_val(
-                ZIGBEE_ENDPOINT_ID, ZIGBEE_CLUSTER_BATTERY, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-                ZIGBEE_ATTR_BATTERY_ALARM_STATE, &battery_alarm_state, false);
-        }
-
         const bool explicit_battery = first_pairing_after_join
             || (ZIGBEE_EXPLICIT_BATTERY_REPORT_ON_REJOIN != 0);
         bool rep_summ = false;
@@ -2379,7 +2364,7 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
         }
         esp_zb_lock_release();
 
-        ESP_LOGI(TAG, "        → Attribute gesetzt + Reports: summ=%s pct=%s v=%s alarm=%s",
+        ESP_LOGI(TAG, "        → Explizite Reports: summ=%s pct=%s v=%s alarm=%s",
                  rep_summ ? "ok" : "fail",
                  explicit_battery ? (rep_pct ? "ok" : "fail") : "skip",
                  (explicit_battery && data->battery_voltage > 0.0f) ? (rep_v ? "ok" : "fail") : "skip",
