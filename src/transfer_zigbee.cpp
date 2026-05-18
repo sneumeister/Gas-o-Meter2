@@ -56,6 +56,8 @@ static volatile bool stack_ready_signal_received = false;  // Flag: SKIP_STARTUP
 static volatile bool stack_init_failed = false;  // Flag: Stack-Initialisierung fehlgeschlagen
 static volatile bool pairing_successful = false;  // Flag: Pairing erfolgreich abgeschlossen
 static volatile bool rejoin_successful = false;  // Flag: Rejoin erfolgreich abgeschlossen
+static volatile bool zigbee_rejoin_in_progress = false;  // ensure_joined Rejoin-Schleife aktiv (fuer DEVICE_REBOOT-Guard)
+static volatile bool zigbee_pairing_in_progress = false;  // ensure_joined Pairing-Schleife aktiv (fuer DEVICE_REBOOT-Guard)
 static volatile bool device_rebooted_during_rejoin = false;  // Flag: DEVICE_REBOOT (ESP_OK) während manuellem Rejoin empfangen
 static volatile bool first_pairing_after_join = false;  // Flag: Erstes Pairing nach Join (für Interview-Wartezeit)
 static volatile bool steering_failed = false;  // Flag: Network Steering fehlgeschlagen
@@ -438,11 +440,13 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 ESP_LOGI(TAG, "        → Stack reinitialisiert, automatischer Rejoin wird intern versucht...");
                 ESP_LOGI(TAG, "        → Warte bis zu %d ms auf automatischen Rejoin (konfigurierbar via ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS)", 
                          ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS);
-                // Rejoin-Schleife wartet darauf vor Network Steering (nach INIT-Timeout)
-                if (!rejoin_successful) {
+                // Nur waehrend aktiver Pairing-/Rejoin-Schleife in ensure_joined
+                const bool in_rejoin = zigbee_rejoin_in_progress && !rejoin_successful;
+                const bool in_pairing = zigbee_pairing_in_progress && !pairing_successful;
+                if (in_rejoin || in_pairing) {
                     device_rebooted_during_rejoin = true;
                 } else {
-                    ESP_LOGD(TAG, "        → DEVICE_REBOOT ignoriert (Rejoin bereits erfolgreich)");
+                    ESP_LOGD(TAG, "        → DEVICE_REBOOT ignoriert (kein Pairing/Rejoin-Zyklus oder bereits erfolgreich)");
                 }
             } else {
                 ESP_LOGE(TAG, "        → Stack-Reinitialisierung fehlgeschlagen: %s", esp_err_to_name(err_status));
@@ -1826,6 +1830,9 @@ static bool zigbee_try_handle_reboot_in_steering_wait(bool for_pairing) {
 transfer_status_t transfer_zigbee_ensure_joined(void) {
     // zigbee_stack_device_annce_received nicht hier zuruecksetzen – wird fuer
     // zigbee_wait_for_first_pairing_interview() nach Pairing benoetigt (sonst 60s Timeout)
+    zigbee_rejoin_in_progress = false;
+    zigbee_pairing_in_progress = false;
+
     // Status-Prüfung: factory-new? joined?
     ESP_LOGI(TAG, "transfer_zigbee_ensure_joined: Prüfe ZigBee-Status...");
     bool is_factory_new = esp_zb_bdb_is_factory_new();
@@ -1945,6 +1952,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
     if (is_factory_new) {
         // Pairing-Logik mit Retry-Mechanismus
         ESP_LOGI(TAG, "        → Device ist factory-new → Starte Pairing...");
+        zigbee_pairing_in_progress = true;
         // rx_on_when_idle wird in ensure_joined vor Steering temporaer aktiviert
         
         uint32_t steering_attempt = 0;
@@ -2097,9 +2105,12 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             // Timeout (nicht Steering FAIL) -> kein Retry
             ESP_LOGE(TAG, "        → Pairing-Timeout (Versuch %d, nach %d ms)", 
                      steering_attempt + 1, elapsed_ms - cycle_start_ms);
+            zigbee_pairing_in_progress = false;
             return TRANSFER_STATUS_CONNECTION_FAILED;
         }
-        
+
+        zigbee_pairing_in_progress = false;
+
         if (!pairing_completed) {
             ESP_LOGE(TAG, "        → Pairing fehlgeschlagen nach %d Versuchen (Gesamt-Zeit: %d ms)", 
                      steering_attempt, elapsed_ms);
@@ -2132,13 +2143,15 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 pairing_completed = true;
             } else {
                 // Device ist wirklich nicht joined
+                zigbee_pairing_in_progress = false;
                 return TRANSFER_STATUS_CONNECTION_FAILED;
             }
         }
     } else {
         // Rejoin: zuerst ZDO-Rejoin (kein Scan), bei Fehler Network Steering
         ESP_LOGI(TAG, "        → Device ist nicht factory-new, aber nicht joined → Starte Rejoin...");
-        
+        zigbee_rejoin_in_progress = true;
+
         uint32_t steering_attempt = 0;
         bool rejoin_completed = false;
         
@@ -2163,6 +2176,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                              (unsigned long)direct_elapsed_ms);
                     zigbee_finalize_rejoin_success();
                     rejoin_completed = true;
+                    zigbee_rejoin_in_progress = false;
                     break;
                 }
                 elapsed_ms += direct_elapsed_ms;
@@ -2176,6 +2190,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                              (unsigned long)post_fail_wait_ms);
                     zigbee_finalize_rejoin_success();
                     rejoin_completed = true;
+                    zigbee_rejoin_in_progress = false;
                     elapsed_ms += post_fail_wait_ms;
                     break;
                 }
@@ -2222,6 +2237,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             if (rejoin_successful) {
                 zigbee_finalize_rejoin_success();
                 rejoin_completed = true;
+                zigbee_rejoin_in_progress = false;
                 break;
             }
             
@@ -2354,6 +2370,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                          steering_attempt + 1, elapsed_ms - cycle_start_ms);
                 zigbee_finalize_rejoin_success();
                 rejoin_completed = true;
+                zigbee_rejoin_in_progress = false;
                 break;
             }
             
@@ -2368,10 +2385,13 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             } else {
                 // Keine weiteren Versuche mehr
                 ESP_LOGE(TAG, "        → Keine weiteren Retry-Versuche mehr (max: %d)", steering_retry_count);
+                zigbee_rejoin_in_progress = false;
                 return TRANSFER_STATUS_CONNECTION_FAILED;
             }
         }
-        
+
+        zigbee_rejoin_in_progress = false;
+
         if (!rejoin_completed) {
             ESP_LOGE(TAG, "        → Rejoin fehlgeschlagen nach %d Versuchen (Gesamt-Zeit: %d ms)", 
                      steering_attempt, elapsed_ms);
