@@ -1707,7 +1707,11 @@ static bool zigbee_try_direct_bdb_rejoin(uint32_t timeout_ms, uint32_t *elapsed_
     const uint32_t poll_ms = ZIGBEE_AUTO_REJOIN_POLL_INTERVAL_MS;
     while (elapsed_ms < timeout_ms) {
         if (device_rebooted_during_rejoin) {
-            if (zigbee_poll_joined_after_reboot(ZIGBEE_DIRECT_REJOIN_TIMEOUT_MS - elapsed_ms, false)) {
+            const uint32_t remaining_ms = (elapsed_ms < timeout_ms)
+                                          ? (timeout_ms - elapsed_ms)
+                                          : 0;
+            if (remaining_ms > 0 &&
+                zigbee_poll_joined_after_reboot(remaining_ms, false)) {
                 device_rebooted_during_rejoin = false;
                 zigbee_restore_primary_channel_mask();
                 if (elapsed_ms_out) {
