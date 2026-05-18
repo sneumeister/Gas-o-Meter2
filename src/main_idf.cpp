@@ -1096,6 +1096,9 @@ void perform_reboot(const char* reason) {
 // ============================================
 // Berechne nächsten Timer-Wake-up-Zeitpunkt (Cron-ähnlich)
 // ============================================
+// HINWEIS: Keine Mindest-Schlafzeit implementiert. Bei großer Rückwärts-Zeitkorrektur
+// (z.B. nach längerem Time-Sync-Ausfall) kann ein zweiter Wake-up kurz nach dem ersten
+// auftreten. Das ist akzeptiert – Doppelübertragungen sind idempotent (gleicher Gasstand).
 uint64_t calculate_next_wakeup_timer() {
     struct tm timeinfo;
     time_t now;
