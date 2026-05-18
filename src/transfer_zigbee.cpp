@@ -2424,6 +2424,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 // Keine weiteren Versuche mehr
                 ESP_LOGE(TAG, "        → Keine weiteren Retry-Versuche mehr (max: %d)", steering_retry_count);
                 zigbee_rejoin_in_progress = false;
+                zigbee_restore_sleepy_rx_on_when_idle();
                 return TRANSFER_STATUS_CONNECTION_FAILED;
             }
         }
@@ -2433,6 +2434,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
         if (!rejoin_completed) {
             ESP_LOGE(TAG, "        → Rejoin fehlgeschlagen nach %d Versuchen (Gesamt-Zeit: %d ms)", 
                      steering_attempt, elapsed_ms);
+            zigbee_restore_sleepy_rx_on_when_idle();
             return TRANSFER_STATUS_CONNECTION_FAILED;
         }
     }
@@ -2440,6 +2442,9 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
     // Prüfe Gesamt-Timeout
     if (elapsed_ms >= cycle_timeout_ms) {
         ESP_LOGE(TAG, "        → Gesamt-Timeout erreicht (nach %d ms)", elapsed_ms);
+        if (!is_factory_new) {
+            zigbee_restore_sleepy_rx_on_when_idle();
+        }
         return TRANSFER_STATUS_CONNECTION_FAILED;
     }
     

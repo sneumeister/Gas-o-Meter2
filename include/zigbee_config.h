@@ -226,7 +226,7 @@ extern zigbee_rtc_t zigbee_rtc;
 // RTC/NVS: Channel + PAN bekannt → BDB INITIALIZATION auf einem Kanal statt Network Steering
 #define ZIGBEE_RTC_HAS_DIRECT_REJOIN_CTX() \
     ((zigbee_rtc.channel) >= ZIGBEE_CHANNEL_MIN && (zigbee_rtc.channel) <= ZIGBEE_CHANNEL_MAX \
-     && (zigbee_rtc.pan_id) != ZIGBEE_DEFAULT_PAN_ID)
+     && (zigbee_rtc.pan_id) != ZIGBEE_DEFAULT_PAN_ID && (zigbee_rtc.pan_id) != 0xFFFF)
 
 // ============================================
 // Funktionsprototypen (implementiert in transfer_zigbee.cpp)
