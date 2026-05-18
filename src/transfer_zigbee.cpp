@@ -70,8 +70,10 @@ static volatile bool zigbee_nvs_save_pending = false;  // NVS-Schreiben aus Sign
 #ifndef ARDUINO
 static void zigbee_send_device_annce_if_needed(const char* reason);
 static void zigbee_maybe_send_device_annce_on_rejoin(const char* reason);
-static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairing);
-static bool zigbee_try_handle_reboot_in_steering_wait(bool for_pairing);
+static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairing,
+                                            uint32_t *poll_elapsed_ms_out);
+static bool zigbee_try_handle_reboot_in_steering_wait(bool for_pairing,
+                                                     uint32_t *poll_elapsed_ms_out);
 static void zigbee_update_rtc_from_stack_impl(void);
 static void zigbee_update_rtc_from_stack(void);
 static void zigbee_push_cluster_vals_to_stack_if_joined(void);
@@ -1584,6 +1586,8 @@ static void zigbee_wait_for_first_pairing_interview(void) {
     }
     ESP_LOGI(TAG, "        → Interview-Wartezeit abgeschlossen");
     zigbee_stack_device_annce_received = false;
+    // RX war fuer Pairing/Interview noetig (Z2M Downlink); ab send_data-Schritt 4 Sleepy ED
+    zigbee_restore_sleepy_rx_on_when_idle();
 }
 
 static void zigbee_update_rtc_from_stack_impl(void) {
@@ -1608,7 +1612,8 @@ static void zigbee_update_rtc_from_stack(void) {
     esp_zb_lock_release();
 }
 
-static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairing) {
+static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairing,
+                                            uint32_t *poll_elapsed_ms_out) {
     ESP_LOGI(TAG, "        → DEVICE_REBOOT: Poll Join (%s, max %lu ms)...",
              for_pairing ? "Pairing" : "Rejoin", (unsigned long)timeout_ms);
     uint32_t elapsed_ms = 0;
@@ -1637,6 +1642,9 @@ static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairin
             } else {
                 zigbee_maybe_send_device_annce_on_rejoin("device_reboot_poll");
             }
+            if (poll_elapsed_ms_out) {
+                *poll_elapsed_ms_out = elapsed_ms;
+            }
             return true;
         }
         vTaskDelay(pdMS_TO_TICKS(poll_ms));
@@ -1648,6 +1656,9 @@ static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairin
     }
     ESP_LOGW(TAG, "        → Automatischer Rejoin nach DEVICE_REBOOT nicht erfolgreich (nach %lu ms)",
              (unsigned long)elapsed_ms);
+    if (poll_elapsed_ms_out) {
+        *poll_elapsed_ms_out = elapsed_ms;
+    }
     return false;
 }
 
@@ -1710,15 +1721,17 @@ static bool zigbee_try_direct_bdb_rejoin(uint32_t timeout_ms, uint32_t *elapsed_
             const uint32_t remaining_ms = (elapsed_ms < timeout_ms)
                                           ? (timeout_ms - elapsed_ms)
                                           : 0;
+            uint32_t poll_elapsed_ms = 0;
             if (remaining_ms > 0 &&
-                zigbee_poll_joined_after_reboot(remaining_ms, false)) {
+                zigbee_poll_joined_after_reboot(remaining_ms, false, &poll_elapsed_ms)) {
                 device_rebooted_during_rejoin = false;
                 zigbee_restore_primary_channel_mask();
                 if (elapsed_ms_out) {
-                    *elapsed_ms_out = elapsed_ms;
+                    *elapsed_ms_out = elapsed_ms + poll_elapsed_ms;
                 }
                 return true;
             }
+            elapsed_ms += poll_elapsed_ms;
             device_rebooted_during_rejoin = false;
         }
         if (rejoin_successful || zigbee_is_joined_with_valid_network()) {
@@ -1782,16 +1795,17 @@ static bool zigbee_wait_stack_ready_after_failed_direct_rejoin(uint32_t max_wait
             ESP_LOGI(TAG, "        → DEVICE_REBOOT nach INITIALIZATION-Timeout (nach %lu ms)",
                      (unsigned long)waited_ms);
             const uint32_t reboot_poll_ms = (max_wait_ms > waited_ms) ? (max_wait_ms - waited_ms) : poll_ms;
-            if (zigbee_poll_joined_after_reboot(reboot_poll_ms, false)) {
+            uint32_t poll_elapsed_ms = 0;
+            if (zigbee_poll_joined_after_reboot(reboot_poll_ms, false, &poll_elapsed_ms)) {
                 device_rebooted_during_rejoin = false;
                 if (elapsed_ms_out) {
-                    *elapsed_ms_out = waited_ms;
+                    *elapsed_ms_out = waited_ms + poll_elapsed_ms;
                 }
                 return true;
             }
             device_rebooted_during_rejoin = false;
             if (elapsed_ms_out) {
-                *elapsed_ms_out = waited_ms;
+                *elapsed_ms_out = waited_ms + poll_elapsed_ms;
             }
             return false;
         }
@@ -1807,19 +1821,31 @@ static bool zigbee_wait_stack_ready_after_failed_direct_rejoin(uint32_t max_wait
     return false;
 }
 
-static bool zigbee_try_handle_reboot_in_steering_wait(bool for_pairing) {
+static bool zigbee_try_handle_reboot_in_steering_wait(bool for_pairing,
+                                                     uint32_t *poll_elapsed_ms_out) {
+    if (poll_elapsed_ms_out) {
+        *poll_elapsed_ms_out = 0;
+    }
     if (!device_rebooted_during_rejoin) {
         return false;
     }
     ESP_LOGI(TAG, "        → DEVICE_REBOOT waehrend Steering erkannt → warte auf internen Rejoin...");
-    if (zigbee_poll_joined_after_reboot(ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS, for_pairing)) {
+    uint32_t poll_elapsed_ms = 0;
+    if (zigbee_poll_joined_after_reboot(ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS, for_pairing,
+                                        &poll_elapsed_ms)) {
         steering_successful = true;
         device_rebooted_during_rejoin = false;
+        if (poll_elapsed_ms_out) {
+            *poll_elapsed_ms_out = poll_elapsed_ms;
+        }
         return true;
     }
     ESP_LOGW(TAG, "        → Automatischer Rejoin nach DEVICE_REBOOT fehlgeschlagen → Retry Steering");
     steering_failed = true;
     device_rebooted_during_rejoin = false;
+    if (poll_elapsed_ms_out) {
+        *poll_elapsed_ms_out = poll_elapsed_ms;
+    }
     return false;
 }
 
@@ -2009,9 +2035,12 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             uint32_t steering_wait_start_ms = elapsed_ms;
             while (!steering_successful && !steering_failed && elapsed_ms < cycle_timeout_ms && 
                    (elapsed_ms - steering_wait_start_ms) < ZIGBEE_NETWORK_DISCOVERY_MS) {
-                if (zigbee_try_handle_reboot_in_steering_wait(true)) {
+                uint32_t reboot_poll_ms = 0;
+                if (zigbee_try_handle_reboot_in_steering_wait(true, &reboot_poll_ms)) {
+                    elapsed_ms += reboot_poll_ms;
                     break;
                 }
+                elapsed_ms += reboot_poll_ms;
                 vTaskDelay(pdMS_TO_TICKS(steering_poll_interval_ms));
                 elapsed_ms += steering_poll_interval_ms;
                 if (steering_failed) {
@@ -2071,9 +2100,6 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                         first_pairing_after_join = true;
                         zigbee_stack_device_annce_received = true;  // Join ohne ZDO-Signal
                         
-                        // rx_on_when_idle wird in ensure_joined vor Steering temporaer aktiviert
-                        // und bleibt während der gesamten aktiven Phase aktiv (bis Deep-Sleep)
-                        
                         zigbee_update_rtc_from_stack();
                         zigbee_send_device_annce_if_needed("pairing_direct_check");
                         
@@ -2110,6 +2136,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             ESP_LOGE(TAG, "        → Pairing-Timeout (Versuch %d, nach %d ms)", 
                      steering_attempt + 1, elapsed_ms - cycle_start_ms);
             zigbee_pairing_in_progress = false;
+            zigbee_restore_sleepy_rx_on_when_idle();
             return TRANSFER_STATUS_CONNECTION_FAILED;
         }
 
@@ -2148,6 +2175,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             } else {
                 // Device ist wirklich nicht joined
                 zigbee_pairing_in_progress = false;
+                zigbee_restore_sleepy_rx_on_when_idle();
                 return TRANSFER_STATUS_CONNECTION_FAILED;
             }
         }
@@ -2226,9 +2254,12 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             uint32_t steering_wait_start_ms = elapsed_ms;
             while (!steering_successful && !steering_failed && elapsed_ms < cycle_timeout_ms && 
                    (elapsed_ms - steering_wait_start_ms) < ZIGBEE_NETWORK_DISCOVERY_MS) {
-                if (zigbee_try_handle_reboot_in_steering_wait(false)) {
+                uint32_t reboot_poll_ms = 0;
+                if (zigbee_try_handle_reboot_in_steering_wait(false, &reboot_poll_ms)) {
+                    elapsed_ms += reboot_poll_ms;
                     break;
                 }
+                elapsed_ms += reboot_poll_ms;
                 vTaskDelay(pdMS_TO_TICKS(steering_poll_interval_ms));
                 elapsed_ms += steering_poll_interval_ms;
                 if (steering_failed) {
@@ -2273,14 +2304,17 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 // In diesem Fall sollten wir auf den automatischen Rejoin warten (ähnlich wie beim automatischen Rejoin am Anfang)
                 if (device_rebooted_during_rejoin) {
                     ESP_LOGI(TAG, "        → DEVICE_REBOOT waehrend Rejoin erkannt → Poll Join...");
-                    uint32_t reboot_poll_start_ms = elapsed_ms;
-                    if (zigbee_poll_joined_after_reboot(ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS, false)) {
+                    uint32_t poll_elapsed_ms = 0;
+                    if (zigbee_poll_joined_after_reboot(ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS, false,
+                                                        &poll_elapsed_ms)) {
+                        elapsed_ms += poll_elapsed_ms;
                         device_rebooted_during_rejoin = false;
                         break;
                     }
+                    elapsed_ms += poll_elapsed_ms;
                     device_rebooted_during_rejoin = false;
-                    ESP_LOGW(TAG, "        → Rejoin nach DEVICE_REBOOT nicht innerhalb %d ms",
-                             (int)(elapsed_ms - reboot_poll_start_ms));
+                    ESP_LOGW(TAG, "        → Rejoin nach DEVICE_REBOOT nicht innerhalb %lu ms",
+                             (unsigned long)poll_elapsed_ms);
                 }
                 
                 // SICHERHEIT: Prüfe, ob Network Steering nach langer Zeit weder erfolgreich noch fehlgeschlagen ist
