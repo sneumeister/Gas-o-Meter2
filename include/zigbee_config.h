@@ -97,6 +97,7 @@
 #define ZIGBEE_CHANNEL_MIN                  11     // ZigBee 2.4 GHz Kanalbereich
 #define ZIGBEE_CHANNEL_MAX                  26
 #define ZIGBEE_DIRECT_REJOIN_TIMEOUT_MS     5000   // BDB-INITIALIZATION auf gespeichertem Kanal (typ. 0.5–1.5 s); danach Steering
+#define ZIGBEE_DIRECT_REJOIN_POST_FAIL_WAIT_MS 3000  // Nach INIT-Timeout: DEVICE_REBOOT abwarten (vermeidet ESP_FAIL already in commissioning)
 #define ZIGBEE_EXPLICIT_BATTERY_REPORT_ON_REJOIN  1  // Battery-Reports (Spannung/Prozent/Alarm) auch nach Rejoin explizit senden
 #define ZIGBEE_DEVICE_ANNCE_MIN_INTERVAL_MS 15000  // Mindestabstand zwischen DEVICE_ANNCE (Z2M-Debounce)
 #define ZIGBEE_ADDR_STABILIZE_RETRY_MS      100    // Wartezeit pro Adress-Stabilisierungs-Versuch

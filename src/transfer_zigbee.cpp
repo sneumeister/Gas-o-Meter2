@@ -90,6 +90,7 @@ static void zigbee_enable_rx_before_steering(void);
 static void zigbee_restore_sleepy_rx_on_when_idle(void);
 static void zigbee_restore_primary_channel_mask(void);
 static bool zigbee_try_direct_bdb_rejoin(uint32_t timeout_ms, uint32_t *elapsed_ms_out);
+static bool zigbee_wait_stack_ready_after_failed_direct_rejoin(uint32_t max_wait_ms, uint32_t *elapsed_ms_out);
 #endif
 
 // RTC-RAM Variable für ZigBee-Config (Definition)
@@ -437,9 +438,12 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 ESP_LOGI(TAG, "        → Stack reinitialisiert, automatischer Rejoin wird intern versucht...");
                 ESP_LOGI(TAG, "        → Warte bis zu %d ms auf automatischen Rejoin (konfigurierbar via ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS)", 
                          ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS);
-                // WICHTIG: Wenn DEVICE_REBOOT während eines manuellen Rejoin-Versuchs kommt, markiere dies
-                // Die Rejoin-Schleife wird dann auf automatischen Rejoin umschalten
-                device_rebooted_during_rejoin = true;
+                // Rejoin-Schleife wartet darauf vor Network Steering (nach INIT-Timeout)
+                if (!rejoin_successful) {
+                    device_rebooted_during_rejoin = true;
+                } else {
+                    ESP_LOGD(TAG, "        → DEVICE_REBOOT ignoriert (Rejoin bereits erfolgreich)");
+                }
             } else {
                 ESP_LOGE(TAG, "        → Stack-Reinitialisierung fehlgeschlagen: %s", esp_err_to_name(err_status));
                 stack_init_failed = true;  // Fehler-Flag setzen
@@ -1738,6 +1742,63 @@ static bool zigbee_try_direct_bdb_rejoin(uint32_t timeout_ms, uint32_t *elapsed_
     return false;
 }
 
+/**
+ * Nach INITIALIZATION-Timeout ist der Stack oft noch im Commissioning.
+ * Warte auf DEVICE_REBOOT und internen Rejoin, bevor Network Steering startet.
+ * @return true wenn Join erkannt (Steering entbehrlich)
+ */
+static bool zigbee_wait_stack_ready_after_failed_direct_rejoin(uint32_t max_wait_ms, uint32_t *elapsed_ms_out) {
+    ESP_LOGI(TAG, "        → INITIALIZATION ohne Join – warte DEVICE_REBOOT/Join (max %lu ms)",
+             (unsigned long)max_wait_ms);
+    uint32_t waited_ms = 0;
+    const uint32_t poll_ms = ZIGBEE_AUTO_REJOIN_POLL_INTERVAL_MS;
+
+    while (waited_ms < max_wait_ms) {
+        if (rejoin_successful || zigbee_is_joined_with_valid_network()) {
+            if (!rejoin_successful) {
+                ESP_LOGI(TAG, "        → Join nach INITIALIZATION-Timeout (nach %lu ms)", (unsigned long)waited_ms);
+                zigbee_update_rtc_from_stack();
+                rejoin_successful = true;
+                zigbee_push_cluster_vals_to_stack_if_joined();
+                zigbee_maybe_send_device_annce_on_rejoin("direct_rejoin_post_fail");
+                if (zigbee_config_save_to_nvs()) {
+                    ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (Join nach INIT-Timeout)");
+                }
+            }
+            if (elapsed_ms_out) {
+                *elapsed_ms_out = waited_ms;
+            }
+            return true;
+        }
+        if (device_rebooted_during_rejoin) {
+            ESP_LOGI(TAG, "        → DEVICE_REBOOT nach INITIALIZATION-Timeout (nach %lu ms)",
+                     (unsigned long)waited_ms);
+            const uint32_t reboot_poll_ms = (max_wait_ms > waited_ms) ? (max_wait_ms - waited_ms) : poll_ms;
+            if (zigbee_poll_joined_after_reboot(reboot_poll_ms, false)) {
+                device_rebooted_during_rejoin = false;
+                if (elapsed_ms_out) {
+                    *elapsed_ms_out = waited_ms;
+                }
+                return true;
+            }
+            device_rebooted_during_rejoin = false;
+            if (elapsed_ms_out) {
+                *elapsed_ms_out = waited_ms;
+            }
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(poll_ms));
+        waited_ms += poll_ms;
+    }
+    device_rebooted_during_rejoin = false;
+    ESP_LOGW(TAG, "        → Kein DEVICE_REBOOT innerhalb %lu ms – starte Network Steering",
+             (unsigned long)max_wait_ms);
+    if (elapsed_ms_out) {
+        *elapsed_ms_out = waited_ms;
+    }
+    return false;
+}
+
 static bool zigbee_try_handle_reboot_in_steering_wait(bool for_pairing) {
     if (!device_rebooted_during_rejoin) {
         return false;
@@ -2105,6 +2166,20 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                     break;
                 }
                 elapsed_ms += direct_elapsed_ms;
+                if (elapsed_ms >= cycle_timeout_ms) {
+                    break;
+                }
+                uint32_t post_fail_wait_ms = 0;
+                if (zigbee_wait_stack_ready_after_failed_direct_rejoin(
+                        ZIGBEE_DIRECT_REJOIN_POST_FAIL_WAIT_MS, &post_fail_wait_ms)) {
+                    ESP_LOGI(TAG, "        → Rejoin erfolgreich nach INITIALIZATION-Timeout (+%lu ms)",
+                             (unsigned long)post_fail_wait_ms);
+                    zigbee_finalize_rejoin_success();
+                    rejoin_completed = true;
+                    elapsed_ms += post_fail_wait_ms;
+                    break;
+                }
+                elapsed_ms += post_fail_wait_ms;
                 if (elapsed_ms >= cycle_timeout_ms) {
                     break;
                 }
