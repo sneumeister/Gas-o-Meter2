@@ -1096,9 +1096,8 @@ void perform_reboot(const char* reason) {
 // ============================================
 // Berechne nächsten Timer-Wake-up-Zeitpunkt (Cron-ähnlich)
 // ============================================
-// HINWEIS: Keine Mindest-Schlafzeit implementiert. Bei großer Rückwärts-Zeitkorrektur
-// (z.B. nach längerem Time-Sync-Ausfall) kann ein zweiter Wake-up kurz nach dem ersten
-// auftreten. Das ist akzeptiert – Doppelübertragungen sind idempotent (gleicher Gasstand).
+// Wake-up < 0.5 × wakeup_minutes → diesen Timer überspringen, nächstes volles Intervall
+// (Extremfall: Schlafdauer ≈ 0.5× + 1× Intervall). Schützt vor Doppel-Wake nach Time-Sync.
 uint64_t calculate_next_wakeup_timer() {
     struct tm timeinfo;
     time_t now;
@@ -1121,10 +1120,20 @@ uint64_t calculate_next_wakeup_timer() {
     // Beispiel: target_time = 12345, interval = 600 → next_wakeup = 12600
     time_t next_wakeup_time = ((target_time / interval_seconds) + 1) * interval_seconds;
     
-    // 5. Wake-Interval = Target-UNIX_EPOCH - Ist-UNIX_EPOCH
+    // 5. Wake-Interval = nächste Grenze minus Ist-Zeit
     int seconds_until_wakeup = (int)(next_wakeup_time - current_time);
-    
-    // 6. Zur Textausgabe: Target-UNIX_EPOCH in Time-struct wandeln
+
+    // 6. Zu kurzer Timer (< 0.5 × Intervall) → ein volles Intervall weiter (Cron-Grenze)
+    const int min_sleep_seconds = (interval_seconds + 1) / 2;  // 0.5 × Intervall, aufgerundet
+    if (seconds_until_wakeup < min_sleep_seconds) {
+        const int skipped_seconds = seconds_until_wakeup;
+        next_wakeup_time += interval_seconds;
+        seconds_until_wakeup = (int)(next_wakeup_time - current_time);
+        ESP_LOGI(TAG, "Wake-up zu kurz (%d s < 0.5×%d min) → übersprungen, nächstes volles Intervall (in %d s)",
+                 skipped_seconds, config_rtc.wakeup_minutes, seconds_until_wakeup);
+    }
+
+    // 7. Zur Textausgabe: Target-UNIX_EPOCH in Time-struct wandeln
     struct tm next_wakeup_tm;
     localtime_r(&next_wakeup_time, &next_wakeup_tm);
     ESP_LOGI(TAG, "Aktuelle Zeit: %02d:%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
