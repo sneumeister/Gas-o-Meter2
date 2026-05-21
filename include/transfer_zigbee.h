@@ -42,7 +42,7 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data);
 bool transfer_zigbee_sync_time(void);
 
 /**
- * @brief Deinitialisiert den ZigBee-Stack
+ * @brief Stoppt ZigBee Main Loop (kein esp_zb_deinit; vollstaendiger Reset per Reboot).
  */
 void transfer_zigbee_deinit(void);
 

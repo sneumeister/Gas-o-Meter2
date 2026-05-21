@@ -2677,7 +2677,7 @@ void transfer_zigbee_deinit(void) {
     }
     
     ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "ZigBee-Stack Deinitialisierung");
+    ESP_LOGI(TAG, "ZigBee beenden (Main Loop stoppen)");
     ESP_LOGI(TAG, "========================================");
     
     // ZigBee Main Loop Task beenden
@@ -2689,10 +2689,9 @@ void transfer_zigbee_deinit(void) {
         ESP_LOGI(TAG, "        → Task beendet");
     }
     
-    // Stack deinitialisieren (falls API vorhanden)
-    ESP_LOGI(TAG, "  [2/2] Stack wird deinitialisiert...");
-    // TODO: esp_zb_deinit() aufrufen, falls verfügbar
-    ESP_LOGI(TAG, "        → Stack deinitialisiert");
+    // Kein esp_zb_deinit() (nicht in esp-zigbee-lib) – nur Main-Loop-Task stoppen.
+    // Nach Factory-Reset folgt ohnehin Reboot (Web-UX); danach frischer Stack-Start.
+    ESP_LOGI(TAG, "  [2/2] ZigBee Main Loop gestoppt (kein vollstaendiger Stack-Teardown)");
     
     ESP_LOGI(TAG, "========================================");
     
@@ -2802,12 +2801,12 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode) {
     
     ESP_LOGI(TAG, "  → ZigBee Factory-Reset abgeschlossen");
     
-    // 5. ZigBee-Stack deinitialisieren (falls initialisiert)
+    // 5. ZigBee Main Loop stoppen (kein esp_zb_deinit; Reboot ueber Web-UX reicht)
     #ifndef ARDUINO
     if (zigbee_initialized) {
-        ESP_LOGI(TAG, "  → ZigBee-Stack wird deinitialisiert...");
+        ESP_LOGI(TAG, "  → ZigBee Main Loop wird gestoppt...");
         transfer_zigbee_deinit();
-        ESP_LOGI(TAG, "  → ZigBee-Stack deinitialisiert (keine automatische Neuinitialisierung)");
+        ESP_LOGI(TAG, "  → Main Loop gestoppt (Stack-Reset erfolgt beim Geraete-Reboot)");
     } else {
         ESP_LOGI(TAG, "  → ZigBee-Stack war nicht initialisiert");
     }
