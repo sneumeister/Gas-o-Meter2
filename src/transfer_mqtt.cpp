@@ -1,7 +1,4 @@
 #include "transfer_mqtt.h"
-
-#ifndef ARDUINO
-
 #include "mqtt_config.h"
 #include "time_sync.h"
 #include "hardware.h"
@@ -366,5 +363,3 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
 void transfer_mqtt_deinit(void) {
     mqtt_initialized = false;
 }
-
-#endif

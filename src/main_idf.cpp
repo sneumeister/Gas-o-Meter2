@@ -39,7 +39,6 @@
 #include "time_sync.h"
 #include <stdlib.h>
 
-// ArduinoJson (ESP-IDF-kompatibel)
 #include <ArduinoJson.h>
 
 // Template-Placeholder (aus CMakeLists.txt)
@@ -391,7 +390,7 @@ volatile uint64_t last_web_activity_us = 0;  // Zeitpunkt der letzten Web-Server
 bool should_enter_deep_sleep = false;
 const char* deep_sleep_reason = NULL;
 
-// Reboot-Steuerung (wie Arduino: Variable setzen, Reboot im Task)
+// Reboot-Steuerung: Flag setzen, Ausführung in web_timeout_task
 bool reboot_requested = false;
 const char* reboot_reason = NULL;
 
@@ -2844,15 +2843,10 @@ const char* processor_get_value(const char* var) {
         bool is_factory_new = false;
         bool is_joined = false;
         
-        #ifndef ARDUINO
-        // ESP-IDF: Prüfe ZigBee-Status (nur wenn transfer_mode=zigbee)
         if (strcmp(config_rtc.transfer_mode, "zigbee") == 0) {
-            // Verwende Wrapper-Funktionen, die automatisch den Stack-Status prüfen (wenn initialisiert)
-            // oder auf zigbee_rtc zurückfallen (wenn Stack nicht initialisiert)
             is_joined = transfer_zigbee_is_joined();
             is_factory_new = transfer_zigbee_is_factory_new();
         }
-        #endif
         
         if (strcmp(config_rtc.transfer_mode, "zigbee") != 0) {
             snprintf(buffer, sizeof(buffer), "Nicht aktiv");
@@ -3257,7 +3251,7 @@ static bool get_query_param(httpd_req_t *req, const char* key, char* value, size
     return true;
 }
 
-// Hilfsfunktion: POST-Parameter extrahieren (wie Arduino's hasParam/getParam mit true)
+// Hilfsfunktion: POST-Parameter aus application/x-www-form-urlencoded extrahieren
 // Unterstützt sowohl multipart/form-data als auch application/x-www-form-urlencoded
 static bool get_post_param(const char* post_data, size_t post_len, const char* key, char* value, size_t max_len) {
     // Prüfe ob multipart/form-data (hat "Content-Disposition" und "name=")
@@ -3412,11 +3406,10 @@ static esp_err_t config_save_handler(httpd_req_t *req) {
         return ESP_OK;
     }
     
-    // Parameter extrahieren (wie Arduino's hasParam/getParam mit true)
+    // Parameter extrahieren
     char json_data[1024] = "";
     char current_password[64] = "";
     
-    // Prüfe ob "data" Parameter vorhanden (wie Arduino's hasParam("data", true))
     if (!get_post_param(post_data, len, "data", json_data, sizeof(json_data))) {
         ESP_LOGE(TAG, "FEHLER: Parameter 'data' fehlt");
         httpd_resp_set_status(req, "400 Bad Request");
@@ -3429,7 +3422,7 @@ static esp_err_t config_save_handler(httpd_req_t *req) {
         return ESP_OK;
     }
     
-    // current_password Parameter (optional, wie Arduino's hasParam("current_password", true))
+    // current_password Parameter (optional)
     get_post_param(post_data, len, "current_password", current_password, sizeof(current_password));
     
     // Authentifizierung prüfen
@@ -3452,7 +3445,6 @@ static esp_err_t config_save_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
     
-    // DEBUG: Zeige empfangene JSON-Daten (wie Arduino)
     ESP_LOGI(TAG, "=== Empfangene Config-Daten ===");
     ESP_LOGI(TAG, "%s", json_data);
     ESP_LOGI(TAG, "===============================");
@@ -3472,7 +3464,6 @@ static esp_err_t config_save_handler(httpd_req_t *req) {
         return ESP_OK;
     }
     
-    // DEBUG: Zeige geparste Werte (wie Arduino)
     ESP_LOGI(TAG, "=== Geparste Config-Werte ===");
     if (doc["hostname"].is<const char*>()) {
         ESP_LOGI(TAG, "  hostname: %s", doc["hostname"].as<const char*>());
@@ -3543,7 +3534,6 @@ static esp_err_t config_save_handler(httpd_req_t *req) {
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, response_json, HTTPD_RESP_USE_STRLEN);
         
-        // DEBUG: Erfolgsmeldung (wie Arduino)
         ESP_LOGI(TAG, "Config erfolgreich gespeichert (config.json)");
         ESP_LOGI(TAG, "  → RTC-Config invalidiert - wird beim nächsten Start aus config.json geladen");
         ESP_LOGI(TAG, "  → TX Power (applied): wifi=%d dBm, ble=%d dBm, zigbee=%d dBm",
@@ -3579,11 +3569,9 @@ static esp_err_t config_save_handler(httpd_req_t *req) {
 // Handler für /reboot (POST)
 // WICHTIG: Nur POST-Body wird akzeptiert, KEINE Query-Parameter (Sicherheitsmaßnahme gegen versehentliches Reset)
 static esp_err_t reboot_handler(httpd_req_t *req) {
-    // POST-Daten lesen (wie Arduino's hasParam("cmd", true))
-    const size_t MAX_POST_SIZE = 512;  // Erhöht für multipart/form-data
+    const size_t MAX_POST_SIZE = 512;
     size_t content_len = req->content_len;
     
-    // DEBUG: Zeige Content-Length
     ESP_LOGD(TAG, "Reboot-Handler: Content-Length=%zu", content_len);
     
     if (content_len == 0 || content_len > MAX_POST_SIZE) {
@@ -3607,7 +3595,6 @@ static esp_err_t reboot_handler(httpd_req_t *req) {
     // DEBUG: Zeige empfangene POST-Daten
     ESP_LOGD(TAG, "Reboot-Handler: POST-Daten empfangen (%d Bytes): %.200s", len, post_data);
     
-    // POST-Parameter prüfen: cmd=reboot (wie Arduino's hasParam("cmd", true) && getParam("cmd", true)->value() == "reboot")
     char cmd[32] = "";
     if (!get_post_param(post_data, len, "cmd", cmd, sizeof(cmd))) {
         ESP_LOGE(TAG, "Reboot-Handler: Parameter 'cmd' nicht gefunden in POST-Daten");
@@ -3643,7 +3630,7 @@ static esp_err_t reboot_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_send(req, "Reboot wird durchgeführt...", HTTPD_RESP_USE_STRLEN);
     
-    // Reboot-Variable setzen (wie Arduino: Variable setzen, Reboot im Task)
+    // Reboot-Variable setzen (Ausführung in web_timeout_task)
     reboot_requested = true;
     reboot_reason = "Reboot durch Web-Interface ausgelöst";
     
@@ -3653,11 +3640,9 @@ static esp_err_t reboot_handler(httpd_req_t *req) {
 // Handler für /deepsleep (POST)
 // WICHTIG: Nur POST-Body wird akzeptiert, KEINE Query-Parameter (Sicherheitsmaßnahme gegen versehentliches Deep-Sleep)
 static esp_err_t deepsleep_handler(httpd_req_t *req) {
-    // POST-Daten lesen (wie Arduino's hasParam("cmd", true))
-    const size_t MAX_POST_SIZE = 512;  // Erhöht für multipart/form-data
+    const size_t MAX_POST_SIZE = 512;
     size_t content_len = req->content_len;
     
-    // DEBUG: Zeige Content-Length
     ESP_LOGD(TAG, "DeepSleep-Handler: Content-Length=%zu", content_len);
     
     if (content_len == 0 || content_len > MAX_POST_SIZE) {
@@ -3728,7 +3713,6 @@ static esp_err_t deepsleep_handler(httpd_req_t *req) {
 static esp_err_t counter_set_handler(httpd_req_t *req) {
     last_web_activity_us = esp_timer_get_time();
     
-    // POST-Daten lesen (wie Arduino's hasParam("value", true))
     const size_t MAX_POST_SIZE = 256;
     size_t content_len = req->content_len;
     if (content_len == 0 || content_len > MAX_POST_SIZE) {
@@ -3747,7 +3731,6 @@ static esp_err_t counter_set_handler(httpd_req_t *req) {
         return ESP_OK;
     }
     
-    // POST-Parameter prüfen: value (wie Arduino's hasParam("value", true))
     char value_str[32] = "";
     if (!get_post_param(post_data, len, "value", value_str, sizeof(value_str))) {
         httpd_resp_set_status(req, "400 Bad Request");
@@ -3932,7 +3915,6 @@ static esp_err_t zigbee_action_handler(httpd_req_t *req) {
         bool success = transfer_zigbee_factory_reset(config_rtc.transfer_mode);
         
         if (success) {
-            #ifndef ARDUINO
             if (strcmp(config_rtc.transfer_mode, TRANSFER_MODE_ZIGBEE) == 0) {
                 httpd_resp_set_type(req, "application/json");
                 httpd_resp_send(req, "{\"status\":\"success\",\"message\":\"Factory-Reset erfolgreich. Bitte Gerät manuell neu starten, damit der ZigBee-Stack sauber initialisiert wird.\"}", HTTPD_RESP_USE_STRLEN);
@@ -3940,13 +3922,6 @@ static esp_err_t zigbee_action_handler(httpd_req_t *req) {
                 httpd_resp_set_type(req, "application/json");
                 httpd_resp_send(req, "{\"status\":\"success\",\"message\":\"Factory-Reset erfolgreich (ZigBee war nicht aktiv).\"}", HTTPD_RESP_USE_STRLEN);
             }
-            #else
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_send(req, "{\"status\":\"success\",\"message\":\"Factory-Reset erfolgreich. Gerät wird neu gestartet.\"}", HTTPD_RESP_USE_STRLEN);
-            vTaskDelay(pdMS_TO_TICKS(500));
-            reboot_requested = true;
-            reboot_reason = "ZigBee Factory-Reset durchgeführt";
-            #endif
         } else {
             httpd_resp_set_status(req, "500 Internal Server Error");
             httpd_resp_set_type(req, "application/json");
@@ -3956,8 +3931,6 @@ static esp_err_t zigbee_action_handler(httpd_req_t *req) {
         return ESP_OK;
         
     } else if (strcmp(cmd, "start-pairing") == 0) {
-        // Start Pairing über Wrapper-Funktion
-        #ifndef ARDUINO
         transfer_status_t pairing_status = transfer_zigbee_start_pairing();
         if (pairing_status == TRANSFER_STATUS_OK) {
             httpd_resp_set_type(req, "application/json");
@@ -3971,12 +3944,7 @@ static esp_err_t zigbee_action_handler(httpd_req_t *req) {
                      transfer_status_to_string(pairing_status));
             httpd_resp_send(req, error_json, HTTPD_RESP_USE_STRLEN);
         }
-        #else
-        httpd_resp_set_status(req, "400 Bad Request");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_send(req, "Fehler: Nur für ESP-IDF verfügbar", HTTPD_RESP_USE_STRLEN);
-        #endif
-        
+
         return ESP_OK;
         
     } else {
@@ -4821,7 +4789,7 @@ extern "C" void app_main(void) {
                 break;
     }
     
-    // Web-Timeout Task starten (ersetzt Arduino loop())
+    // Web-Timeout Task starten
     // Funktionsdeklaration: void web_timeout_task(void *parameter);
     xTaskCreate(
         web_timeout_task,      // Task-Funktion
@@ -4837,7 +4805,6 @@ extern "C" void app_main(void) {
 // ============================================
 // FreeRTOS Task: Web-Server Timeout und Deep-Sleep Management
 // ============================================
-// Ersetzt die Arduino loop() Funktion
 void web_timeout_task(void *parameter) {
     const TickType_t check_interval = pdMS_TO_TICKS(1000);  // 1 Sekunde
     const uint64_t sleep_threshold_us = WIFI_WAIT_FOR_SLEEP * 60 * 1000000ULL;  // Minuten in Mikrosekunden
@@ -4846,7 +4813,7 @@ void web_timeout_task(void *parameter) {
     ESP_LOGI(TAG, "Web-Timeout Task gestartet");
     
     while (1) {
-        // Reboot-Prüfung (wie Arduino: Variable prüfen und Reboot durchführen)
+        // Reboot-Prüfung
         if (reboot_requested) {
             ESP_LOGI(TAG, "Reboot angefordert: %s", reboot_reason ? reboot_reason : "Unbekannt");
             vTaskDelay(pdMS_TO_TICKS(500));  // Warte auf Antwort-Übertragung

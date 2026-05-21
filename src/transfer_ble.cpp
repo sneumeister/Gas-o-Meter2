@@ -3,9 +3,6 @@
 #include "hardware.h"
 #include "time_sync.h"
 #include "version.h"
-
-#ifndef ARDUINO
-
 #include "esp_log.h"
 #include "esp_bt.h"
 #include "nimble/nimble_port.h"
@@ -660,5 +657,3 @@ bool transfer_ble_start_pairing(void) {
 bool transfer_ble_is_advertising(void) {
     return ble_advertising;
 }
-
-#endif // !ARDUINO

@@ -191,13 +191,7 @@
 // ============================================
 // Wird bei Power-On aus NVS geladen, bei Deep-Sleep-Wake-up direkt aus RTC-RAM verwendet
 
-#ifndef ARDUINO
-    // ESP-IDF: RTC_DATA_ATTR wird von esp_attr.h definiert
-    #include "esp_attr.h"
-#else
-    // Arduino: RTC_DATA_ATTR wird von ESP32 Core definiert
-    #include "esp_sleep.h"
-#endif
+#include "esp_attr.h"
 
 typedef struct {
     bool joined;                // Join-Status (true = gepaart, false = nicht gepaart)

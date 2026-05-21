@@ -4,47 +4,38 @@
 #include "version.h"
 #include "time_sync.h"
 #include <string.h>  // Für strlen(), memcpy()
-
-#ifndef ARDUINO
-    #include "esp_log.h"
-    #include "nvs.h"
-    #include "nvs_flash.h"
-    #include "esp_zigbee_core.h"
-    #include "esp_zigbee_type.h"
-    #include "esp_zigbee_cluster.h"
-    #include "esp_zigbee_endpoint.h"
-    #include "esp_zigbee_attribute.h"
-    #include "bdb/esp_zigbee_bdb_commissioning.h"  // Für esp_zb_bdb_start_top_level_commissioning, esp_zb_bdb_is_factory_new, esp_zb_bdb_dev_joined
-    #include "nwk/esp_zigbee_nwk.h"  // Für ESP_ZB_DEVICE_TYPE_ED
-    #include "zcl/esp_zigbee_zcl_common.h"  // Für ESP_ZB_AF_HA_PROFILE_ID, ESP_ZB_HA_CUSTOM_ATTR_DEVICE_ID
-    #include "zcl/esp_zigbee_zcl_basic.h"  // Für esp_zb_basic_cluster_add_attr(), ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID, etc.
-    #include "zcl/esp_zigbee_zcl_power_config.h"  // Für Power Config Cluster (esp_zb_power_config_cluster_cfg_t, esp_zb_power_config_cluster_add_attr, etc.)
-    #include "zcl/esp_zigbee_zcl_metering.h"  // Für Metering Cluster (ESP_ZB_ZCL_METERING_UNIT_M3_M3H_BINARY, etc.)
-    #include "zcl/esp_zigbee_zcl_diagnostics.h"  // Last LQI/RSSI für Z2M-Geräteübersicht
-    #include "zcl/esp_zigbee_zcl_ota.h"  // OTA-Defaults (esp-zigbee-lib v1.x: nicht *_ota_upgrade.h)
-    #include "esp_zigbee_attribute.h"  // Für esp_zb_zcl_set_attribute_val()
-    #include "zcl/esp_zigbee_zcl_command.h"  // Für esp_zb_zcl_read_attr_cmd_req() (Time Cluster)
-    #include "zcl/esp_zigbee_zcl_core.h"  // Für esp_zb_core_action_handler_register, ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID
-    #include "zdo/esp_zigbee_zdo_common.h"  // Für ESP_ZB_ZDO_SIGNAL_PRODUCTION_CONFIG_READY
-    #include "zdo/esp_zigbee_zdo_command.h"  // Für esp_zb_zdo_device_announcement_req()
-    #include "esp_zigbee_secur.h"  // Für esp_zb_secur_network_min_join_lqi_set()
-    #include "freertos/FreeRTOS.h"
-    #include "freertos/task.h"
-    #include "esp_timer.h"
-    #include "esp_partition.h"  // Für Factory-Reset (Partitionen löschen)
-    #include <ctime>   // Für time_t, struct tm, gmtime_r()
-    #include <cstdio>  // Für printf (Serial-Ausgabe)
-    #if CONFIG_ESP_ZB_TRACE_ENABLE
-        #include "esp_zigbee_trace.h"  // Für erweiterte ZigBee-Logging-Funktionen
-    #endif
-    static const char* TAG = "transfer_zigbee";
-#else
-    #include "nvs.h"
-    #include "nvs_flash.h"
-    #define ESP_LOGI(...) Serial.printf(__VA_ARGS__); Serial.println()
-    #define ESP_LOGW(...) Serial.printf(__VA_ARGS__); Serial.println()
-    #define ESP_LOGE(...) Serial.printf(__VA_ARGS__); Serial.println()
+#include "esp_log.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+#include "esp_zigbee_core.h"
+#include "esp_zigbee_type.h"
+#include "esp_zigbee_cluster.h"
+#include "esp_zigbee_endpoint.h"
+#include "esp_zigbee_attribute.h"
+#include "bdb/esp_zigbee_bdb_commissioning.h"
+#include "nwk/esp_zigbee_nwk.h"
+#include "zcl/esp_zigbee_zcl_common.h"
+#include "zcl/esp_zigbee_zcl_basic.h"
+#include "zcl/esp_zigbee_zcl_power_config.h"
+#include "zcl/esp_zigbee_zcl_metering.h"
+#include "zcl/esp_zigbee_zcl_diagnostics.h"
+#include "zcl/esp_zigbee_zcl_ota.h"
+#include "zcl/esp_zigbee_zcl_command.h"
+#include "zcl/esp_zigbee_zcl_core.h"
+#include "zdo/esp_zigbee_zdo_common.h"
+#include "zdo/esp_zigbee_zdo_command.h"
+#include "esp_zigbee_secur.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_timer.h"
+#include "esp_partition.h"
+#include <ctime>
+#include <cstdio>
+#if CONFIG_ESP_ZB_TRACE_ENABLE
+#include "esp_zigbee_trace.h"
 #endif
+
+static const char* TAG = "transfer_zigbee";
 
 // ============================================
 // Globale Variablen
@@ -67,7 +58,6 @@ static volatile bool zigbee_time_sync_response_received = false;
 static volatile bool zigbee_stack_device_annce_received = false;
 static volatile bool zigbee_nvs_save_pending = false;  // NVS-Schreiben aus Signal-Handler deferren
 
-#ifndef ARDUINO
 static void zigbee_send_device_annce_if_needed(const char* reason);
 static void zigbee_maybe_send_device_annce_on_rejoin(const char* reason);
 static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairing,
@@ -95,7 +85,6 @@ static void zigbee_restore_sleepy_rx_on_when_idle(void);
 static void zigbee_restore_primary_channel_mask(void);
 static bool zigbee_try_direct_bdb_rejoin(uint32_t timeout_ms, uint32_t *elapsed_ms_out);
 static bool zigbee_wait_stack_ready_after_failed_direct_rejoin(uint32_t max_wait_ms, uint32_t *elapsed_ms_out);
-#endif
 
 // RTC-RAM Variable für ZigBee-Config (Definition)
 // WICHTIG: Deklaration ist in zigbee_config.h als extern
@@ -2802,7 +2791,6 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode) {
     ESP_LOGI(TAG, "  → ZigBee Factory-Reset abgeschlossen");
     
     // 5. ZigBee Main Loop stoppen (kein esp_zb_deinit; Reboot ueber Web-UX reicht)
-    #ifndef ARDUINO
     if (zigbee_initialized) {
         ESP_LOGI(TAG, "  → ZigBee Main Loop wird gestoppt...");
         transfer_zigbee_deinit();
@@ -2810,14 +2798,12 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode) {
     } else {
         ESP_LOGI(TAG, "  → ZigBee-Stack war nicht initialisiert");
     }
-    #endif
     
     factory_reset_in_progress = false;  // Flag zurücksetzen
     return true;
 }
 
 transfer_status_t transfer_zigbee_start_pairing(void) {
-    #ifndef ARDUINO
     // Prüfe, ob ZigBee-Stack initialisiert ist
     if (!zigbee_initialized) {
         // Stack initialisieren (falls noch nicht geschehen)
@@ -2836,10 +2822,6 @@ transfer_status_t transfer_zigbee_start_pairing(void) {
     ESP_LOGE(TAG, "transfer_zigbee_start_pairing: Fehler beim Starten von Network Steering: %s",
              esp_err_to_name(comm_err));
     return TRANSFER_STATUS_CONNECTION_FAILED;
-    #else
-    ESP_LOGE(TAG, "transfer_zigbee_start_pairing: Nur für ESP-IDF verfügbar");
-    return TRANSFER_STATUS_NOT_CONFIGURED;
-    #endif
 }
 
 bool transfer_zigbee_is_factory_reset_in_progress(void) {
@@ -2861,11 +2843,9 @@ bool transfer_zigbee_is_initialized(void) {
  * @return true wenn Device joined ist, false sonst
  */
 bool transfer_zigbee_is_joined(void) {
-    #ifndef ARDUINO
     if (zigbee_initialized) {
         return zigbee_read_network_info_locked().joined;
     }
-    #endif
     return zigbee_rtc.joined;
 }
 
@@ -2875,11 +2855,9 @@ bool transfer_zigbee_is_joined(void) {
  * @return true wenn Device factory-new ist, false sonst
  */
 bool transfer_zigbee_is_factory_new(void) {
-    #ifndef ARDUINO
     if (zigbee_initialized) {
         return esp_zb_bdb_is_factory_new();
     }
-    #endif
     // Fallback: Wenn nicht joined und keine gültige Network Address → factory-new
     return !zigbee_rtc.joined && !ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr);
 }

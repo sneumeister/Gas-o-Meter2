@@ -4,15 +4,9 @@
 #include "transfer_mqtt.h"
 #include "hardware.h"
 #include <string.h>  // Für strcmp
+#include "esp_log.h"
 
-#ifndef ARDUINO
-    #include "esp_log.h"
-    static const char* TAG = "transfer";
-#else
-    #define ESP_LOGI(...) Serial.printf(__VA_ARGS__); Serial.println()
-    #define ESP_LOGW(...) Serial.printf(__VA_ARGS__); Serial.println()
-    #define ESP_LOGE(...) Serial.printf(__VA_ARGS__); Serial.println()
-#endif
+static const char* TAG = "transfer";
 
 // ============================================
 // Globale Variablen

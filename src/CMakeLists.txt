@@ -1,5 +1,4 @@
 # ESP-IDF Component für gas-o-meter2
-# Nur main_idf.cpp kompilieren (main_arduino.cpp bleibt als Referenz)
 
 # PROJECT_DIR ist die ESP-IDF Variable für das Projekt-Root-Verzeichnis
 get_filename_component(INCLUDE_DIR "${PROJECT_DIR}/include" ABSOLUTE)
