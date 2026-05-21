@@ -284,17 +284,8 @@ bool zigbee_config_save_to_nvs(void) {
         return false;
     }
     ESP_LOGI(TAG, "zigbee_config_save_to_nvs: nvs_commit erfolgreich");
-    
-    // WICHTIG: Flash braucht Zeit zum Schreiben - Delay NACH nvs_commit, VOR nvs_close
-    // Dies stellt sicher, dass die Daten wirklich auf den Flash geschrieben werden, bevor der Handle geschlossen wird
-    vTaskDelay(pdMS_TO_TICKS(100));  // 100ms Delay für Flash-Schreibvorgang nach nvs_commit
-    
     nvs_close(nvs_handle);
-    
-    // WICHTIG: Verifiziere nach zusätzlichem Delay, ob Daten wirklich geschrieben wurden
-    // Zusätzliches Delay gibt Flash mehr Zeit zum Abschließen der Schreibvorgänge
-    vTaskDelay(pdMS_TO_TICKS(50));  // 50ms zusätzliches Delay vor Verifikation (Gesamt: 150ms nach nvs_commit)
-    
+
     nvs_handle_t verify_handle;
     err = nvs_open(ZIGBEE_NVS_NAMESPACE, NVS_READONLY, &verify_handle);
     if (err == ESP_OK) {
