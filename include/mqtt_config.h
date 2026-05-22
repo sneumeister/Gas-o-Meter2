@@ -10,6 +10,11 @@
 #define MQTT_TOPIC_SUFFIX_DATA "data"
 #define MQTT_TOPIC_SUFFIX_RSSI "rssi"
 #define MQTT_TOPIC_SUFFIX_NTP_STATUS "ntp_status"
+#define MQTT_TOPIC_SUFFIX_STATUS "status"
+
+/** Home Assistant availability (LWT + explizites offline vor Disconnect). */
+#define MQTT_AVAIL_PAYLOAD_ONLINE "online"
+#define MQTT_AVAIL_PAYLOAD_OFFLINE "offline"
 
 #define MQTT_HOST_MAX_LEN 63
 #define MQTT_USERNAME_MAX_LEN 63

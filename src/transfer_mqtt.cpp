@@ -94,6 +94,8 @@ static char s_ha_unique_id[MQTT_MAIN_TOPIC_MAX_LEN + 32];
 static char s_ha_state_data[MQTT_MAIN_TOPIC_MAX_LEN + 32];
 static char s_ha_state_rssi[MQTT_MAIN_TOPIC_MAX_LEN + 32];
 static char s_ha_state_ntp[MQTT_MAIN_TOPIC_MAX_LEN + 32];
+static char s_ha_state_status[MQTT_MAIN_TOPIC_MAX_LEN + 16];
+static char s_ha_avail_fragment[MQTT_MAIN_TOPIC_MAX_LEN + 128];
 static char s_ha_ident[MQTT_MAIN_TOPIC_MAX_LEN + 48];
 static char s_ha_device_tail[96];
 static char s_ha_device_json[320];
@@ -113,6 +115,10 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
     build_topic(s_ha_state_data, sizeof(s_ha_state_data), main_topic, MQTT_TOPIC_SUFFIX_DATA);
     build_topic(s_ha_state_rssi, sizeof(s_ha_state_rssi), main_topic, MQTT_TOPIC_SUFFIX_RSSI);
     build_topic(s_ha_state_ntp, sizeof(s_ha_state_ntp), main_topic, MQTT_TOPIC_SUFFIX_NTP_STATUS);
+    build_topic(s_ha_state_status, sizeof(s_ha_state_status), main_topic, MQTT_TOPIC_SUFFIX_STATUS);
+    snprintf(s_ha_avail_fragment, sizeof(s_ha_avail_fragment),
+             ",\"availability_topic\":\"%s\",\"payload_available\":\"%s\",\"payload_not_available\":\"%s\"",
+             s_ha_state_status, MQTT_AVAIL_PAYLOAD_ONLINE, MQTT_AVAIL_PAYLOAD_OFFLINE);
 
     snprintf(s_ha_ident, sizeof(s_ha_ident), "%s_%s", MQTT_HA_DEVICE_TOPIC_PREFIX, s_ha_slug);
 
@@ -139,37 +145,37 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
          "gas",
          "{\"name\":\"Gas Counter\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"value_template\":\"{{ value_json.gas }}\",\"unit_of_measurement\":\"m\\u00b3\","
-         "\"device_class\":\"gas\",\"state_class\":\"total_increasing\",\"icon\":\"mdi:meter-gas\",%s}"},
+         "\"device_class\":\"gas\",\"state_class\":\"total_increasing\",\"icon\":\"mdi:meter-gas\",%s%s}"},
         {"sensor",
          "battery",
          "{\"name\":\"Battery\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"value_template\":\"{{ value_json.battery }}\",\"unit_of_measurement\":\"%%\","
-         "\"device_class\":\"battery\",\"state_class\":\"measurement\",\"icon\":\"mdi:battery\",%s}"},
+         "\"device_class\":\"battery\",\"state_class\":\"measurement\",\"icon\":\"mdi:battery\",%s%s}"},
         {"sensor",
          "voltage",
          "{\"name\":\"Battery Voltage\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"value_template\":\"{{ value_json.battery_voltage }}\",\"unit_of_measurement\":\"V\","
-         "\"device_class\":\"voltage\",\"state_class\":\"measurement\",\"icon\":\"mdi:flash\",%s}"},
+         "\"device_class\":\"voltage\",\"state_class\":\"measurement\",\"icon\":\"mdi:flash\",%s%s}"},
         {"binary_sensor",
          "battery_low",
          "{\"name\":\"Battery Low\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"value_template\":\"{%% if value_json.battery_low %%}ON{%% else %%}OFF{%% endif %%}\","
          "\"payload_on\":\"ON\",\"payload_off\":\"OFF\",\"device_class\":\"battery\","
-         "\"icon\":\"mdi:battery-alert\",%s}"},
+         "\"icon\":\"mdi:battery-alert\",%s%s}"},
         {"sensor",
          "firmware",
          "{\"name\":\"Firmware\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"value_template\":\"{{ value_json.firmware_version }}\",\"icon\":\"mdi:information\","
-         "\"entity_category\":\"diagnostic\",%s}"},
+         "\"entity_category\":\"diagnostic\",%s%s}"},
         {"sensor",
          "rssi",
          "{\"name\":\"RSSI\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"value_template\":\"{{ value | int }}\",\"unit_of_measurement\":\"dBm\","
-         "\"device_class\":\"signal_strength\",\"state_class\":\"measurement\",%s}"},
+         "\"device_class\":\"signal_strength\",\"state_class\":\"measurement\",%s%s}"},
         {"sensor",
          "ntp_status",
          "{\"name\":\"Last NTP Sync\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-         "\"device_class\":\"timestamp\",\"entity_category\":\"diagnostic\",%s}"},
+         "\"device_class\":\"timestamp\",\"entity_category\":\"diagnostic\",%s%s}"},
     };
 
     const char* state_topics[] = {
@@ -208,7 +214,7 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
                  s_ha_unique_id);
 
         snprintf(s_ha_payload, sizeof(s_ha_payload), entries[i].json_body, s_ha_unique_id, state_topics[i],
-                 device_json);
+                 s_ha_avail_fragment, device_json);
 
         if (mqtt_publish_with_retry(client, s_ha_topic, s_ha_payload)) {
             ESP_LOGI(TAG, "MQTT HA Auto-Discovery gesendet: %s", s_ha_topic);
@@ -265,12 +271,19 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
     char uri[128];
     snprintf(uri, sizeof(uri), "mqtt://%s:%u", mqtt_host, (unsigned int)mqtt_port);
 
+    char status_topic[MQTT_MAIN_TOPIC_MAX_LEN + 16];
+    build_topic(status_topic, sizeof(status_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_STATUS);
+
     esp_mqtt_client_config_t mqtt_cfg = {};
     mqtt_cfg.broker.address.uri = uri;
     mqtt_cfg.session.keepalive = 30;
     mqtt_cfg.network.timeout_ms = MQTT_CONNECT_TIMEOUT_MS;
     mqtt_cfg.credentials.username = mqtt_username;
     mqtt_cfg.credentials.authentication.password = mqtt_password;
+    mqtt_cfg.session.last_will.topic = status_topic;
+    mqtt_cfg.session.last_will.msg = MQTT_AVAIL_PAYLOAD_OFFLINE;
+    mqtt_cfg.session.last_will.qos = MQTT_QOS;
+    mqtt_cfg.session.last_will.retain = MQTT_RETAIN;
 
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
     if (client == nullptr) {
@@ -296,6 +309,11 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
         esp_mqtt_client_stop(client);
         esp_mqtt_client_destroy(client);
         return TRANSFER_STATUS_CONNECTION_FAILED;
+    }
+
+    bool ok = mqtt_publish_with_retry(client, status_topic, MQTT_AVAIL_PAYLOAD_ONLINE);
+    if (!ok) {
+        ESP_LOGW(TAG, "MQTT availability online fehlgeschlagen: %s", status_topic);
     }
 
     /* HA Discovery vor Telemetrie (retain), damit Entities existieren bevor State ankommt. */
@@ -328,7 +346,6 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
              payload_firmware_version, payload_timestamp);
 
     char topic[128];
-    bool ok = true;
 
     build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_DATA);
     ok &= mqtt_publish_with_retry(client, topic, payload_data);
@@ -357,6 +374,11 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
 
     build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_TIMESTAMP);
     ok &= mqtt_publish_with_retry(client, topic, payload_timestamp);
+
+    if (!mqtt_publish_with_retry(client, status_topic, MQTT_AVAIL_PAYLOAD_OFFLINE)) {
+        ESP_LOGW(TAG, "MQTT availability offline fehlgeschlagen: %s", status_topic);
+        ok = false;
+    }
 
     vTaskDelay(pdMS_TO_TICKS(MQTT_PUBLISH_TIMEOUT_MS));
     esp_mqtt_client_stop(client);
