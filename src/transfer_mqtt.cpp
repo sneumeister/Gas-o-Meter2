@@ -163,9 +163,8 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
          "\"device_class\":\"signal_strength\",\"state_class\":\"measurement\",%s}"},
         {"sensor",
          "ntp_status",
-         "{\"name\":\"NTP Status\",\"unique_id\":\"%s_ntp_status\",\"state_topic\":\"%s\","
-         "\"value_template\":\"{{ value | int }}\",\"unit_of_measurement\":\"epoch_s\","
-         "\"entity_category\":\"diagnostic\",%s}"},
+         "{\"name\":\"Last NTP Sync\",\"unique_id\":\"%s_ntp_status\",\"state_topic\":\"%s\","
+         "\"device_class\":\"timestamp\",\"entity_category\":\"diagnostic\",%s}"},
     };
 
     const char* state_topics[] = {
@@ -245,7 +244,6 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
     }
 
     bool ntp_ok = sync_ntp_time();
-    int64_t ntp_status = ntp_ok ? time_sync_last_epoch : -1;
 
     char timestamp_iso[40] = "";
     if (ntp_ok) {
@@ -303,7 +301,6 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
     char payload_firmware_version[32];
     char payload_timestamp[40];
     char payload_rssi[16];
-    char payload_ntp_status[24];
     char payload_data[256];
 
     snprintf(payload_gas, sizeof(payload_gas), "%.2f", data->pulse_counter / 100.0f);
@@ -315,7 +312,6 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
              data->firmware_version ? data->firmware_version : "");
     snprintf(payload_timestamp, sizeof(payload_timestamp), "%s", timestamp_iso);
     snprintf(payload_rssi, sizeof(payload_rssi), "%d", (int)ap_info.rssi);
-    snprintf(payload_ntp_status, sizeof(payload_ntp_status), "%lld", (long long)ntp_status);
 
     snprintf(payload_data, sizeof(payload_data),
              "{\"gas\":%s,\"battery\":%s,\"battery_voltage\":%s,\"battery_low\":%s,"
@@ -333,7 +329,8 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
     ok &= mqtt_publish_with_retry(client, topic, payload_rssi);
 
     build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_NTP_STATUS);
-    ok &= mqtt_publish_with_retry(client, topic, payload_ntp_status);
+    ok &= mqtt_publish_with_retry(client, topic,
+                                  (ntp_ok && timestamp_iso[0] != '\0') ? timestamp_iso : "");
 
     build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_GAS);
     ok &= mqtt_publish_with_retry(client, topic, payload_gas);
