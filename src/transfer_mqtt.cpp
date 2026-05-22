@@ -30,6 +30,9 @@ extern const char* transfer_mqtt_get_hostname(void);
 
 static bool mqtt_initialized = false;
 static volatile bool mqtt_connected = false;
+/** Nur diese msg_id (letzter Publish-Versuch) löst Erfolg aus – verspätete PUBACKs älterer IDs ignorieren. */
+static volatile int mqtt_pending_msg_id = -1;
+static volatile bool mqtt_publish_acked = false;
 
 static void build_topic(char* out, size_t out_size, const char* main_topic, const char* suffix) {
     snprintf(out, out_size, "%s/%s", main_topic, suffix);
@@ -42,21 +45,56 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_
     switch ((esp_mqtt_event_id_t)event_id) {
         case MQTT_EVENT_CONNECTED:
             mqtt_connected = true;
+            mqtt_pending_msg_id = -1;
+            mqtt_publish_acked = false;
             break;
         case MQTT_EVENT_DISCONNECTED:
             mqtt_connected = false;
+            break;
+        case MQTT_EVENT_PUBLISHED:
+            if (event->msg_id == mqtt_pending_msg_id) {
+                mqtt_publish_acked = true;
+            }
             break;
         default:
             break;
     }
 }
 
+/** Wartet auf PUBACK (MQTT_EVENT_PUBLISHED) für mqtt_pending_msg_id; bricht bei Ack sofort ab. */
+static bool mqtt_wait_publish_ack(void) {
+    uint32_t waited_ms = 0;
+    const uint32_t poll_ms = 50;
+    while (!mqtt_publish_acked && mqtt_connected && waited_ms < MQTT_PUBLISH_ACK_TIMEOUT_MS) {
+        vTaskDelay(pdMS_TO_TICKS(poll_ms));
+        waited_ms += poll_ms;
+    }
+    return mqtt_publish_acked && mqtt_connected;
+}
+
 static bool mqtt_publish_with_retry(esp_mqtt_client_handle_t client, const char* topic, const char* payload) {
     for (int attempt = 0; attempt < MQTT_MAX_PUBLISH_ATTEMPTS; ++attempt) {
+        if (!mqtt_connected) {
+            return false;
+        }
+        mqtt_publish_acked = false;
+        mqtt_pending_msg_id = -1;
+
         int msg_id = esp_mqtt_client_publish(client, topic, payload, 0, MQTT_QOS, MQTT_RETAIN);
-        if (msg_id >= 0) {
+        if (msg_id < 0) {
+            vTaskDelay(pdMS_TO_TICKS(MQTT_PUBLISH_RETRY_DELAY_MS));
+            continue;
+        }
+
+        mqtt_pending_msg_id = msg_id;
+        if (mqtt_wait_publish_ack()) {
+            mqtt_pending_msg_id = -1;
             return true;
         }
+
+        ESP_LOGW(TAG, "MQTT PUBACK Timeout (msg_id=%d, topic=%s), Versuch %d/%d", msg_id, topic, attempt + 1,
+                 MQTT_MAX_PUBLISH_ATTEMPTS);
+        mqtt_pending_msg_id = -1;
         vTaskDelay(pdMS_TO_TICKS(MQTT_PUBLISH_RETRY_DELAY_MS));
     }
     return false;
@@ -380,7 +418,8 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
         ok = false;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(MQTT_PUBLISH_TIMEOUT_MS));
+    /* PUBACK pro Publish bereits abgewartet; kurze Pause vor sauberem Disconnect. */
+    vTaskDelay(pdMS_TO_TICKS(MQTT_PUBLISH_RETRY_DELAY_MS));
     esp_mqtt_client_stop(client);
     vTaskDelay(pdMS_TO_TICKS(MQTT_DISCONNECT_TIMEOUT_MS));
     esp_mqtt_client_destroy(client);
