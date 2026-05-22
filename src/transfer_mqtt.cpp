@@ -309,7 +309,8 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
     snprintf(payload_gas, sizeof(payload_gas), "%.2f", data->pulse_counter / 100.0f);
     snprintf(payload_battery, sizeof(payload_battery), "%d", (int)data->battery_percent);
     snprintf(payload_battery_voltage, sizeof(payload_battery_voltage), "%.2f", data->battery_voltage);
-    snprintf(payload_battery_low, sizeof(payload_battery_low), "%s", (data->battery_voltage < 3.57f) ? "true" : "false");
+    snprintf(payload_battery_low, sizeof(payload_battery_low), "%s",
+             (data->battery_voltage < BATTERY_VOLTAGE_30) ? "true" : "false");
     snprintf(payload_firmware_version, sizeof(payload_firmware_version), "%s",
              data->firmware_version ? data->firmware_version : "");
     snprintf(payload_timestamp, sizeof(payload_timestamp), "%s", timestamp_iso);
