@@ -83,8 +83,14 @@ static void mqtt_ha_main_topic_slug(char* out, size_t cap, const char* main_topi
     }
 }
 
+/** HA object_id / unique_id: gas_o_meter2_<slug>_<tail> (wie Discovery-Topic, ohne homeassistant/…/config). */
+static void mqtt_ha_build_entity_uid(char* out, size_t cap, const char* slug, const char* object_id_tail) {
+    snprintf(out, cap, "%s_%s_%s", MQTT_HA_DEVICE_TOPIC_PREFIX, slug, object_id_tail);
+}
+
 /* ~1,9 kB Puffer nicht auf dem Main-Task-Stack (sonst Stack protection fault mit connect_wifi/send_data). */
 static char s_ha_slug[MQTT_MAIN_TOPIC_MAX_LEN + 1];
+static char s_ha_unique_id[MQTT_MAIN_TOPIC_MAX_LEN + 32];
 static char s_ha_state_data[MQTT_MAIN_TOPIC_MAX_LEN + 32];
 static char s_ha_state_rssi[MQTT_MAIN_TOPIC_MAX_LEN + 32];
 static char s_ha_state_ntp[MQTT_MAIN_TOPIC_MAX_LEN + 32];
@@ -119,7 +125,6 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
              "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\",\"manufacturer\":\"%s\",\"model\":\"%s\"%s}",
              s_ha_ident, dev_name, MQTT_HA_MANUFACTURER, MQTT_HA_MODEL, s_ha_device_tail);
 
-    char* const slug = s_ha_slug;
     char* const state_topic_data = s_ha_state_data;
     char* const state_topic_rssi = s_ha_state_rssi;
     char* const state_topic_ntp = s_ha_state_ntp;
@@ -132,38 +137,38 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
     } entries[] = {
         {"sensor",
          "gas",
-         "{\"name\":\"Gas Counter\",\"unique_id\":\"%s_gas\",\"state_topic\":\"%s\","
+         "{\"name\":\"Gas Counter\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"value_template\":\"{{ value_json.gas }}\",\"unit_of_measurement\":\"m\\u00b3\","
          "\"device_class\":\"gas\",\"state_class\":\"total_increasing\",\"icon\":\"mdi:meter-gas\",%s}"},
         {"sensor",
          "battery",
-         "{\"name\":\"Battery\",\"unique_id\":\"%s_battery\",\"state_topic\":\"%s\","
+         "{\"name\":\"Battery\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"value_template\":\"{{ value_json.battery }}\",\"unit_of_measurement\":\"%%\","
          "\"device_class\":\"battery\",\"state_class\":\"measurement\",\"icon\":\"mdi:battery\",%s}"},
         {"sensor",
          "voltage",
-         "{\"name\":\"Battery Voltage\",\"unique_id\":\"%s_battery_voltage\",\"state_topic\":\"%s\","
+         "{\"name\":\"Battery Voltage\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"value_template\":\"{{ value_json.battery_voltage }}\",\"unit_of_measurement\":\"V\","
          "\"device_class\":\"voltage\",\"state_class\":\"measurement\",\"icon\":\"mdi:flash\",%s}"},
         {"binary_sensor",
          "battery_low",
-         "{\"name\":\"Battery Low\",\"unique_id\":\"%s_battery_low\",\"state_topic\":\"%s\","
+         "{\"name\":\"Battery Low\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"value_template\":\"{%% if value_json.battery_low %%}ON{%% else %%}OFF{%% endif %%}\","
          "\"payload_on\":\"ON\",\"payload_off\":\"OFF\",\"device_class\":\"battery\","
          "\"icon\":\"mdi:battery-alert\",%s}"},
         {"sensor",
          "firmware",
-         "{\"name\":\"Firmware\",\"unique_id\":\"%s_firmware_version\",\"state_topic\":\"%s\","
+         "{\"name\":\"Firmware\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"value_template\":\"{{ value_json.firmware_version }}\",\"icon\":\"mdi:information\","
          "\"entity_category\":\"diagnostic\",%s}"},
         {"sensor",
          "rssi",
-         "{\"name\":\"RSSI\",\"unique_id\":\"%s_rssi\",\"state_topic\":\"%s\","
+         "{\"name\":\"RSSI\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"value_template\":\"{{ value | int }}\",\"unit_of_measurement\":\"dBm\","
          "\"device_class\":\"signal_strength\",\"state_class\":\"measurement\",%s}"},
         {"sensor",
          "ntp_status",
-         "{\"name\":\"Last NTP Sync\",\"unique_id\":\"%s_ntp_status\",\"state_topic\":\"%s\","
+         "{\"name\":\"Last NTP Sync\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"device_class\":\"timestamp\",\"entity_category\":\"diagnostic\",%s}"},
     };
 
@@ -182,8 +187,9 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
     if (!enable) {
         unsigned cleared = 0;
         for (size_t i = 0; i < n_entries; ++i) {
-            snprintf(s_ha_topic, sizeof(s_ha_topic), "homeassistant/%s/%s_%s_%s/config", entries[i].component,
-                     MQTT_HA_DEVICE_TOPIC_PREFIX, slug, entries[i].object_id_tail);
+            mqtt_ha_build_entity_uid(s_ha_unique_id, sizeof(s_ha_unique_id), s_ha_slug, entries[i].object_id_tail);
+            snprintf(s_ha_topic, sizeof(s_ha_topic), "homeassistant/%s/%s/config", entries[i].component,
+                     s_ha_unique_id);
             if (mqtt_publish_with_retry(client, s_ha_topic, "")) {
                 ++cleared;
             } else {
@@ -196,10 +202,12 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
     }
 
     for (size_t i = 0; i < n_entries; ++i) {
-        snprintf(s_ha_topic, sizeof(s_ha_topic), "homeassistant/%s/%s_%s_%s/config", entries[i].component,
-                 MQTT_HA_DEVICE_TOPIC_PREFIX, slug, entries[i].object_id_tail);
+        mqtt_ha_build_entity_uid(s_ha_unique_id, sizeof(s_ha_unique_id), s_ha_slug, entries[i].object_id_tail);
 
-        snprintf(s_ha_payload, sizeof(s_ha_payload), entries[i].json_body, main_topic, state_topics[i],
+        snprintf(s_ha_topic, sizeof(s_ha_topic), "homeassistant/%s/%s/config", entries[i].component,
+                 s_ha_unique_id);
+
+        snprintf(s_ha_payload, sizeof(s_ha_payload), entries[i].json_body, s_ha_unique_id, state_topics[i],
                  device_json);
 
         if (mqtt_publish_with_retry(client, s_ha_topic, s_ha_payload)) {
