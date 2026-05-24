@@ -12,6 +12,9 @@
 #define MQTT_TOPIC_SUFFIX_NTP_STATUS "ntp_status"
 #define MQTT_TOPIC_SUFFIX_STATUS "status"
 
+/** ntp_status-Payload: noch nie per NTP synchronisiert (Integer-Topic, HA epoch_s). */
+#define MQTT_NTP_STATUS_NEVER_SYNCED "-1"
+
 /** Home Assistant availability (LWT + explizites offline vor Disconnect). */
 #define MQTT_AVAIL_PAYLOAD_ONLINE "online"
 #define MQTT_AVAIL_PAYLOAD_OFFLINE "offline"

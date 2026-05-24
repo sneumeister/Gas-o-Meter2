@@ -139,7 +139,7 @@ Alle BLE-Nodes („BLE Notify (0xFFF1)“, „BLE Read (0x2A26)“, „BLE Zeit 
 
 Es gibt **keine** offizielle Node-RED-Vorschrift für MQTT-Topic-Namen. Die frühere feste Verdrahtung (`gas-o-meter2/data`, `gas_o_meter2_*` in HA-Discovery) stammte aus diesem Projektbeispiel und gängigen HA-Discovery-Mustern (`homeassistant/<component>/<object_id>/config`). Die Firmware trennt bewusst: **Haupt-Topic** (oft mit Bindestrich, DNS-artig) für MQTT-State-Topics versus **Präfix + Slug** (`MQTT_HA_DEVICE_TOPIC_PREFIX` + aus dem Haupt-Topic abgeleiteter Slug mit Unterstrichen) für die **Discovery-Object-IDs**. Der BLE-Flow folgt jetzt derselben Logik wie WiFi-MQTT; anpassbar über **`PRESETS`** bzw. `flow.mqtt_main_topic` / `flow.ha_device_prefix`.
 
-**Hinweis BLE:** Über den ESP kommen echte Werte für RSSI und NTP-Status nur im WiFi-Pfad. Im BLE-Flow publizieren die Einzeltopics **`…/rssi`** und **`…/ntp_status`** Platzhalter (`0` / `-1`), damit HA-Discovery und Topic-Liste mit der Firmware übereinstimmen.
+**Hinweis BLE:** RSSI und NTP gibt es am ESP nur im WiFi/MQTT-Pfad. Im BLE-Flow: **`…/ntp_status`** = Platzhalter **`-1`** (Epoch, nie synchronisiert), **`…/timestamp`** = ISO-UTC vom Gateway (Parse BLE Data). WiFi-Firmware: **`ntp_status`** = Unix-Epoch des letzten NTP-Syncs, **`…/timestamp`** = dieselbe Zeit als ISO-UTC.
 
 ### BLE-Status-Handling (weniger Debug-Meldungen)
 
