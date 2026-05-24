@@ -17,6 +17,15 @@
     #define LOW     0
 #endif
 
+// BOARD_VERSION_ID: per -DBOARD_VERSION_ID in platformio.ini (PCB_* Environments)
+// 20251022 — erste Platine (ADC-USB-Erkennung)
+// 20260523 — zweite Platine (VBUS / GPIO18, HIGH = USB 5 V)
+#if !defined(BOARD_VERSION_ID) || \
+    ((BOARD_VERSION_ID != 20251022) && (BOARD_VERSION_ID != 20260523))
+  #undef BOARD_VERSION_ID
+  #define BOARD_VERSION_ID 20251022
+#endif
+
 // ============================================
 // Hardware Pin-Definitionen
 // ============================================
@@ -94,10 +103,13 @@
 #define BATTERY_MIN_VOLTAGE   BATTERY_VOLTAGE_PROTECTION  // Minimale Akku-Spannung (V) = 0%
 #define BATTERY_MAX_VOLTAGE   BATTERY_VOLTAGE_FULL        // Maximale Akku-Spannung (V) = 100%
 
-// Stromversorgungs-Erkennung
+// Stromversorgungs-Erkennung (Platine 20251022: ADC; Platine 20260523: VBUS GPIO18)
 // Spannung < USB_DETECTION_THRESHOLD: USB-Stromversorgung (ESP32C6 würde sonst nicht starten)
 // Spannung >= USB_DETECTION_THRESHOLD aber < BATTERY_VOLTAGE_20: Akku zu niedrig → Deep-Sleep
 #define USB_DETECTION_THRESHOLD   2.0f    // Schwellwert für USB-Erkennung (V) - darunter: USB angeschlossen
+
+// VBUS-Erkennung (Platine 20260523): GPIO18 / Pin11 / D10 — VBUS 5V => HIGH
+#define VBUS_DETECT_GPIO  18
 
 // NTP-Konfiguration
 #define DEFAULT_NTP_SERVER    "pool.ntp.org"  // Default NTP-Server (gut für Europa)
@@ -258,5 +270,47 @@ inline uint8_t VOLTAGE_TO_PERCENT(float voltage) {
 
 #define SET_ANTENNA_EXTERNAL() \
     gpio_set_level((gpio_num_t)ANTENNA_SELECT_GPIO, ANTENNA_EXTERNAL)
+
+// ============================================
+// VBUS / Stromversorgung Helper Makros
+// ============================================
+
+#define INIT_VBUS_DETECT_GPIO() \
+    do { \
+        gpio_config_t _vbus = {}; \
+        _vbus.pin_bit_mask = (1ULL << VBUS_DETECT_GPIO); \
+        _vbus.mode = GPIO_MODE_INPUT; \
+        _vbus.pull_up_en = GPIO_PULLUP_DISABLE; \
+        _vbus.pull_down_en = GPIO_PULLDOWN_DISABLE; \
+        _vbus.intr_type = GPIO_INTR_DISABLE; \
+        gpio_config(&_vbus); \
+    } while (0)
+
+#if BOARD_VERSION_ID == 20260523
+#define IS_USB_POWER(battery_voltage_v) \
+    (gpio_get_level((gpio_num_t)VBUS_DETECT_GPIO) == 1)
+#else
+#define IS_USB_POWER(battery_voltage_v) \
+    ((battery_voltage_v) < USB_DETECTION_THRESHOLD)
+#endif
+
+#if BOARD_VERSION_ID == 20260523
+#define LOG_USB_POWER_DETECTED(tag, battery_voltage_v) \
+    ESP_LOGI(tag, "USB-Stromversorgung erkannt (VBUS GPIO%d=%d)", \
+             VBUS_DETECT_GPIO, (int)gpio_get_level((gpio_num_t)VBUS_DETECT_GPIO))
+#else
+#define LOG_USB_POWER_DETECTED(tag, battery_voltage_v) \
+    ESP_LOGI(tag, "USB-Stromversorgung erkannt (Spannung %.2f V < %.2f V)", \
+             (float)(battery_voltage_v), USB_DETECTION_THRESHOLD)
+#endif
+
+#define LOG_POWER_SUPPLY_MODE(tag, battery_voltage_v, is_usb_power_v) \
+    do { \
+        if (is_usb_power_v) { \
+            LOG_USB_POWER_DETECTED(tag, battery_voltage_v); \
+        } else { \
+            ESP_LOGI(tag, "Akku-Betrieb (Spannung: %.2f V)", (float)(battery_voltage_v)); \
+        } \
+    } while (0)
 
 #endif // HARDWARE_H

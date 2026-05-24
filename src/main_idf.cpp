@@ -2615,6 +2615,10 @@ const char* processor_get_value(const char* var) {
     if (strcmp(var, "build_date") == 0) {
         return SKETCHCOMPILE;
     }
+    if (strcmp(var, "board_version") == 0) {
+        snprintf(buffer, sizeof(buffer), "%d", BOARD_VERSION_ID);
+        return buffer;
+    }
     if (strcmp(var, "currentWifiData") == 0) {
         // Aktuelle WiFi-Credentials für Vergleich
         static char json_buffer[256];
@@ -4485,6 +4489,9 @@ extern "C" void app_main(void) {
     
     // Antennenumschaltung initialisieren (interne Antenne als Standard)
     INIT_ANTENNA_SWITCH(ANTENNA_INTERNAL);
+
+    INIT_VBUS_DETECT_GPIO();
+    ESP_LOGI(TAG, "Platinenversion: %d", BOARD_VERSION_ID);
     
     // Taster A (BUTTON_A_GPIO) für Wake-up konfigurieren (INPUT_PULLUP, active-low)
     gpio_config_t io_conf = {};
@@ -4530,7 +4537,7 @@ extern "C" void app_main(void) {
         
         // Akku-Schutz-Prüfung: Bei zu niedriger Spannung sofort Deep-Sleep (ohne Übertragung)
         // WICHTIG: Diese Prüfung erfolgt BEVOR Config geladen wird, um Akku zu schützen!
-        bool is_usb_power = (battery_voltage < USB_DETECTION_THRESHOLD);
+        bool is_usb_power = IS_USB_POWER(battery_voltage);
         
         if (!is_usb_power && battery_voltage < BATTERY_VOLTAGE_20) {
             // Akku-Betrieb und Spannung < 20%: Sofort Deep-Sleep zum Akku-Schutz
@@ -4590,14 +4597,13 @@ extern "C" void app_main(void) {
     
     // Stromversorgungs-Prüfung (basierend auf bereits durchgeführter ADC-Messung)
     // WICHTIG: Bei USB-Stromversorgung kann Timer aktiv bleiben (keine Akku-Probleme)
-    bool is_usb_power = (battery_voltage < USB_DETECTION_THRESHOLD);
+    bool is_usb_power = IS_USB_POWER(battery_voltage);
     bool enable_timer_wakeup = true;  // Standard: Timer aktiviert
     
+    LOG_POWER_SUPPLY_MODE(TAG, battery_voltage, is_usb_power);
     if (is_usb_power) {
         // USB-Stromversorgung: Timer kann aktiv bleiben (keine Akku-Probleme)
-        ESP_LOGI(TAG, "USB-Stromversorgung erkannt - Betrieb fortgesetzt");
-        ESP_LOGI(TAG, "Spannung: %.2f V (USB-Schwelle: %.2f V)", 
-                 battery_voltage, USB_DETECTION_THRESHOLD);
+        ESP_LOGI(TAG, "Betrieb fortgesetzt");
         // enable_timer_wakeup bleibt true
     } else {
         // Akku-Betrieb: Timer-Wake-up deaktivieren bei kritischer Spannung
@@ -4645,7 +4651,7 @@ extern "C" void app_main(void) {
         // 1. Batteriespannung-Test und ggf. in Ring-Speicher schreiben
         // < 30% ODER USB: Schreibe in Ring-Speicher (RTC-RAM könnte verloren gehen)
         // >= 30%: Kein Schreiben (RTC-RAM bleibt erhalten)
-        if (battery_voltage < BATTERY_VOLTAGE_30 || battery_voltage < USB_DETECTION_THRESHOLD) {
+        if (battery_voltage < BATTERY_VOLTAGE_30 || IS_USB_POWER(battery_voltage)) {
             ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher (< 30%% oder USB)...");
             write_ulp_pulse_counter_to_ring_buffer();
         }
@@ -4845,7 +4851,7 @@ void web_timeout_task(void *parameter) {
             // Ring-Speicher-Prüfung (einmalig, zentralisiert)
             // < 30% ODER USB: Schreibe in Ring-Speicher (RTC-RAM könnte verloren gehen)
             // >= 30%: Kein Schreiben (RTC-RAM bleibt erhalten)
-            if (battery_voltage < BATTERY_VOLTAGE_30 || battery_voltage < USB_DETECTION_THRESHOLD) {
+            if (battery_voltage < BATTERY_VOLTAGE_30 || IS_USB_POWER(battery_voltage)) {
                 ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher vor Deep-Sleep (< 30%% oder USB)...");
                 write_ulp_pulse_counter_to_ring_buffer();
             } else {
@@ -4854,7 +4860,7 @@ void web_timeout_task(void *parameter) {
             
             // Timer-Wake-up: Bei USB-Stromversorgung immer aktivieren
             // Bei Akku-Betrieb: Nur aktivieren, wenn Spannung > BATTERY_VOLTAGE_PROTECTION
-            bool is_usb_power = (battery_voltage < USB_DETECTION_THRESHOLD);
+            bool is_usb_power = IS_USB_POWER(battery_voltage);
             bool enable_timer = is_usb_power || (battery_voltage > BATTERY_VOLTAGE_PROTECTION);
             enter_deep_sleep_with_gpio_and_timer_wakeup(enable_timer);
             

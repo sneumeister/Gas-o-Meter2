@@ -17,6 +17,7 @@ idf_component_register(
           "time_sync.cpp"
     INCLUDE_DIRS "${INCLUDE_DIR}"
     REQUIRES 
+        littlefs
         mdns                    # Externe Komponente via Component Manager (idf_component.yml)
         esp_http_server
         esp_adc
