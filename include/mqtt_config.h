@@ -33,8 +33,6 @@
 #define MQTT_DUMMY_HOST "dummy_mqtt_host"
 
 #define MQTT_CONNECT_TIMEOUT_MS 5000
-/** Früher pauschaler Drain vor disconnect; mit MQTT_PUBLISH_ACK_TIMEOUT_MS pro Publish obsolet in Firmware. */
-#define MQTT_PUBLISH_TIMEOUT_MS 3000
 #define MQTT_MAX_PUBLISH_ATTEMPTS 3
 /** Max. Wartezeit pro Publish auf QoS-1-PUBACK (MQTT_EVENT_PUBLISHED). */
 #define MQTT_PUBLISH_ACK_TIMEOUT_MS 2000
