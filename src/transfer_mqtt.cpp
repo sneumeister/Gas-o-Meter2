@@ -209,7 +209,8 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
          "rssi",
          "{\"name\":\"RSSI\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
          "\"value_template\":\"{{ value | int }}\",\"unit_of_measurement\":\"dBm\","
-         "\"device_class\":\"signal_strength\",\"state_class\":\"measurement\",%s%s}"},
+         "\"device_class\":\"signal_strength\",\"state_class\":\"measurement\","
+         "\"entity_category\":\"diagnostic\",%s%s}"},
         {"sensor",
          "ntp_status",
          "{\"name\":\"Last NTP Sync\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
