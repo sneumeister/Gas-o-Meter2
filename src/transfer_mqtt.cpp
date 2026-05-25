@@ -2,9 +2,9 @@
 #include "mqtt_config.h"
 #include "time_sync.h"
 #include "hardware.h"
+#include "wifi_manager.h"
 
 #include "esp_log.h"
-#include "esp_wifi.h"
 #include "esp_event.h"
 #include "mqtt_client.h"
 #include "freertos/FreeRTOS.h"
@@ -16,9 +16,7 @@
 
 static const char* TAG = "transfer_mqtt";
 
-extern bool connect_wifi(void);
 extern bool sync_ntp_time(void);
-extern wifi_ap_record_t ap_info;
 
 extern const char* transfer_mqtt_get_host(void);
 extern uint16_t transfer_mqtt_get_port(void);
@@ -126,7 +124,7 @@ static void mqtt_ha_build_entity_uid(char* out, size_t cap, const char* slug, co
     snprintf(out, cap, "%s_%s_%s", MQTT_HA_DEVICE_TOPIC_PREFIX, slug, object_id_tail);
 }
 
-/* ~1,9 kB Puffer nicht auf dem Main-Task-Stack (sonst Stack protection fault mit connect_wifi/send_data). */
+/* ~1,9 kB Puffer nicht auf dem Main-Task-Stack (sonst Stack protection fault mit wifi_connect_sta/send_data). */
 static char s_ha_slug[MQTT_MAIN_TOPIC_MAX_LEN + 1];
 static char s_ha_unique_id[MQTT_MAIN_TOPIC_MAX_LEN + 32];
 static char s_ha_state_data[MQTT_MAIN_TOPIC_MAX_LEN + 32];
@@ -292,7 +290,7 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
         return TRANSFER_STATUS_NOT_CONFIGURED;
     }
 
-    if (!connect_wifi()) {
+    if (!wifi_connect_sta()) {
         ESP_LOGE(TAG, "WiFi-Verbindung für MQTT fehlgeschlagen");
         return TRANSFER_STATUS_CONNECTION_FAILED;
     }
@@ -386,7 +384,7 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
              (data->battery_voltage < BATTERY_VOLTAGE_30) ? "true" : "false");
     snprintf(payload_firmware_version, sizeof(payload_firmware_version), "%s",
              data->firmware_version ? data->firmware_version : "");
-    snprintf(payload_rssi, sizeof(payload_rssi), "%d", (int)ap_info.rssi);
+    snprintf(payload_rssi, sizeof(payload_rssi), "%d", (int)wifi_get_ap_info()->rssi);
 
     if (ntp_timestamp_valid) {
         snprintf(payload_data, sizeof(payload_data),

@@ -36,6 +36,7 @@
 #include "ble_config.h"
 #include "mqtt_config.h"
 #include "wifi_scan_config.h"
+#include "wifi_manager.h"
 #include "time_sync.h"
 #include <stdlib.h>
 
@@ -196,6 +197,14 @@ static void stop_dns_captive_server(void) {
     }
 }
 
+extern "C" void wifi_manager_platform_stop_dns_captive(void) {
+    stop_dns_captive_server();
+}
+
+extern "C" bool wifi_manager_platform_start_dns_captive(void) {
+    return start_dns_captive_server();
+}
+
 
 // LP-Core Initialisierung und Start
 // Läuft auf dem HP-Core und startet den LP-Core-Prozessor
@@ -337,6 +346,23 @@ bool transfer_mqtt_get_ha_autodiscovery(void) {
 const char* transfer_mqtt_get_hostname(void) {
     return config_rtc.hostname;
 }
+
+extern "C" bool wifi_manager_load_sta_config(wifi_manager_sta_config_t* out) {
+    if (out == nullptr) {
+        return false;
+    }
+    out->wifi_count = config_rtc.wifi_count;
+    out->wifi_tx_power_dbm = config_rtc.wifi_tx_power_dbm;
+    strncpy(out->hostname, config_rtc.hostname, sizeof(out->hostname) - 1);
+    out->hostname[sizeof(out->hostname) - 1] = '\0';
+    for (uint8_t i = 0; i < 2; i++) {
+        strncpy(out->ssid[i], config_rtc.wifi_credentials[i].ssid, sizeof(out->ssid[i]) - 1);
+        out->ssid[i][sizeof(out->ssid[i]) - 1] = '\0';
+        strncpy(out->password[i], config_rtc.wifi_credentials[i].password, sizeof(out->password[i]) - 1);
+        out->password[i][sizeof(out->password[i]) - 1] = '\0';
+    }
+    return true;
+}
 RTC_DATA_ATTR uint32_t ring_idx = RING_BUFFER_SIZE;  // Ring-Buffer-Index (im RTC-RAM, wird bei Power-On/ESP.restart() neu ermittelt)
 
 // ============================================
@@ -367,12 +393,6 @@ RTC_DATA_ATTR uint32_t ring_idx = RING_BUFFER_SIZE;  // Ring-Buffer-Index (im RT
 httpd_handle_t server = NULL;  // ESP-IDF HTTP Server Handle
 bool littlefs_mounted = false;
 bool server_started = false;  // Flag: Web-Server gestartet?
-
-// WiFi-Status-Variablen
-bool wifi_connected = false;
-bool wifi_initialized = false;  // Flag: WiFi initialisiert?
-wifi_ap_record_t ap_info;  // Für WiFi-Scan-Ergebnisse
-esp_netif_ip_info_t wifi_ip_info;  // WiFi-IP-Informationen
 
 // Akku-Messwerte
 uint32_t battery_adc_mv = 0;  // ADC-Wert in Millivolt
@@ -1032,27 +1052,9 @@ void shutdown_resources() {
     vTaskDelay(pdMS_TO_TICKS(50));
 
     // 4. WiFi trennen und stoppen (STA und/oder AP)
-    if (wifi_initialized) {
-        ESP_LOGI(TAG, "Trenne WiFi...");
-        // WiFi trennen (falls im STA-Modus verbunden)
-        if (wifi_connected) {
-            esp_err_t ret = esp_wifi_disconnect();
-            if (ret != ESP_OK) {
-                ESP_LOGW(TAG, "esp_wifi_disconnect() gab Fehler zurück: %s", esp_err_to_name(ret));
-            }
-            wifi_connected = false;
-        }
-        
-        // WiFi stoppen (funktioniert für STA und AP)
-        esp_err_t ret = esp_wifi_stop();
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "esp_wifi_stop() gab Fehler zurück: %s", esp_err_to_name(ret));
-        }
-        ESP_LOGI(TAG, "WiFi getrennt und gestoppt");
+    if (wifi_manager_is_initialized()) {
+        wifi_manager_session_end();
         vTaskDelay(pdMS_TO_TICKS(100));
-        
-        // WiFi deinitialisieren (optional, spart etwas RAM)
-        // esp_wifi_deinit();  // Auskommentiert, da WiFi beim nächsten Wake-up wieder initialisiert wird
     }
     
     // 5. LittleFS unmounten (sichert alle ausstehenden Schreibvorgänge)
@@ -2145,388 +2147,8 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
     return true;
 }
 
-// ============================================
-// WiFi-Event-Handler (ESP-IDF)
-// ============================================
-static void wifi_event_handler(void* arg, esp_event_base_t event_base,
-                               int32_t event_id, void* event_data) {
-    if (event_base == WIFI_EVENT) {
-        switch (event_id) {
-            case WIFI_EVENT_STA_START:
-                ESP_LOGI(TAG, "WiFi Station gestartet");
-                // esp_wifi_connect() wird manuell nach WiFi-Scan aufgerufen (in connect_wifi())
-                break;
-            case WIFI_EVENT_STA_CONNECTED: {
-                wifi_event_sta_connected_t* event = (wifi_event_sta_connected_t*) event_data;
-                ESP_LOGI(TAG, "Verbunden mit SSID: %s", event->ssid);
-                break;
-            }
-            case WIFI_EVENT_STA_DISCONNECTED:
-                wifi_connected = false;
-                if (event_data != NULL) {
-                    wifi_event_sta_disconnected_t* event = (wifi_event_sta_disconnected_t*)event_data;
-                    ESP_LOGI(TAG, "WiFi getrennt (reason=%d)", (int)event->reason);
-                } else {
-                    ESP_LOGI(TAG, "WiFi getrennt");
-                }
-                break;
-            case WIFI_EVENT_AP_STACONNECTED: {
-                wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*)event_data;
-                ESP_LOGI(TAG, "AP Client verbunden: %02X:%02X:%02X:%02X:%02X:%02X, AID=%d",
-                         event->mac[0], event->mac[1], event->mac[2],
-                         event->mac[3], event->mac[4], event->mac[5],
-                         event->aid);
-                break;
-            }
-            case WIFI_EVENT_AP_STADISCONNECTED: {
-                wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*)event_data;
-                ESP_LOGI(TAG, "AP Client getrennt: %02X:%02X:%02X:%02X:%02X:%02X, AID=%d",
-                         event->mac[0], event->mac[1], event->mac[2],
-                         event->mac[3], event->mac[4], event->mac[5],
-                         event->aid);
-                break;
-            }
-            default:
-                break;
-        }
-    } else if (event_base == IP_EVENT) {
-        switch (event_id) {
-            case IP_EVENT_STA_GOT_IP: {
-                ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-                wifi_ip_info = event->ip_info;
-                wifi_connected = true;
-                ESP_LOGI(TAG, "IP erhalten: " IPSTR, IP2STR(&wifi_ip_info.ip));
-                break;
-            }
-            default:
-                break;
-        }
-    }
-}
-
-// Statische Variablen für Event-Handler-Instanzen
-static esp_event_handler_instance_t instance_any_id = NULL;
-static esp_event_handler_instance_t instance_got_ip = NULL;
-
 // Statische Variable für mDNS-Initialisierung
 static bool mdns_initialized = false;
-
-// ============================================
-// WiFi TX Power Hilfsfunktion
-// ============================================
-/**
- * @brief Setzt die WiFi TX Power (Sendeleistung)
- * 
- * WICHTIG: Muss nach esp_wifi_start() aufgerufen werden!
- * 
- * @param tx_power TX Power in 0.25 dBm Einheiten (8-80, entspricht 2-20 dBm)
- *                 WICHTIG: Wert wird zur Compile-Zeit in hardware.h definiert (WIFI_TX_POWER_DEFAULT),
- *                 daher wird keine Laufzeit-Bereichsprüfung durchgeführt
- * @return true bei Erfolg, false bei Fehler
- */
-static bool wifi_set_tx_power(int8_t tx_power) {
-    esp_err_t ret = esp_wifi_set_max_tx_power(tx_power);
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "WiFi TX Power gesetzt: %d (%.2f dBm)", tx_power, tx_power * 0.25f);
-        return true;
-    } else {
-        ESP_LOGW(TAG, "WiFi TX Power konnte nicht gesetzt werden: %s (Wert: %d)", 
-                 esp_err_to_name(ret), tx_power);
-        return false;
-    }
-}
-
-// ============================================
-// WiFi-Initialisierung (ESP-IDF)
-// ============================================
-bool init_wifi() {
-    if (wifi_initialized) {
-        return true;  // Bereits initialisiert
-    }
-    
-    // Event-Loop und Netif initialisieren (nur einmal)
-    esp_netif_init();
-    esp_event_loop_create_default();
-    esp_netif_create_default_wifi_sta();
-    esp_netif_create_default_wifi_ap();
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_err_t ret = esp_wifi_init(&cfg);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi-Initialisierung fehlgeschlagen: %s", esp_err_to_name(ret));
-        return false;
-    }
-
-    esp_wifi_set_storage(WIFI_STORAGE_RAM);
-
-    // Event-Handler registrieren (nur einmal)
-    if (instance_any_id == NULL) {
-        esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                             &wifi_event_handler, NULL, &instance_any_id);
-        esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                                             &wifi_event_handler, NULL, &instance_got_ip);
-    }
-
-    wifi_initialized = true;
-    ESP_LOGI(TAG, "WiFi initialisiert");
-    return true;
-}
-
-// ============================================
-// WiFi-Verbindung mit höchster RSSI
-// ============================================
-bool connect_wifi() {
-    if (config_rtc.wifi_count == 0) {
-        ESP_LOGE(TAG, "Keine WiFi-Credentials verfügbar");
-        return false;
-    }
-    
-    // WiFi initialisieren (falls noch nicht geschehen)
-    if (!init_wifi()) {
-        return false;
-    }
-    
-    // Sicherstellen: Captive-DNS läuft nicht im STA-Modus
-    stop_dns_captive_server();
-    esp_wifi_set_mode(WIFI_MODE_STA);
-    
-    // WiFi starten (erforderlich für Scan)
-    esp_err_t ret = esp_wifi_start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi-Start fehlgeschlagen: %s", esp_err_to_name(ret));
-        return false;
-    }
-    
-    // WiFi TX Power setzen (nach esp_wifi_start)
-    wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
-    
-    vTaskDelay(pdMS_TO_TICKS(100));  // Kurze Verzögerung für WiFi-Initialisierung
-
-    ESP_LOGI(TAG, "WiFi-Credentials konfiguriert: %u", (unsigned int)config_rtc.wifi_count);
-    for (uint8_t i = 0; i < config_rtc.wifi_count && i < 2; i++) {
-        ESP_LOGI(TAG, "  Kandidat[%u]: SSID=%s", (unsigned int)i, config_rtc.wifi_credentials[i].ssid);
-    }
-    
-    // Hostname setzen (für DHCP-Server)
-    esp_netif_t* sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (sta_netif) {
-        esp_netif_set_hostname(sta_netif, config_rtc.hostname);
-        ESP_LOGI(TAG, "Hostname gesetzt: %s", config_rtc.hostname);
-    }
-    
-    // WiFi-Scan durchführen
-    wifi_scan_config_t scan_config = {
-        .ssid = NULL,
-        .bssid = NULL,
-        .channel = 0,
-        .show_hidden = false,
-    };
-    uint16_t ap_count = 0;
-    const int scan_retries = 3;
-    for (int scan_try = 1; scan_try <= scan_retries; scan_try++) {
-        ret = esp_wifi_scan_start(&scan_config, true);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "WiFi-Scan fehlgeschlagen (Versuch %d/%d): %s",
-                     scan_try, scan_retries, esp_err_to_name(ret));
-            vTaskDelay(pdMS_TO_TICKS(300));
-            continue;
-        }
-        esp_wifi_scan_get_ap_num(&ap_count);
-        ESP_LOGI(TAG, "WiFi-Scan Versuch %d/%d: %u Netzwerke gefunden",
-                 scan_try, scan_retries, (unsigned int)ap_count);
-        if (ap_count > 0) {
-            break;
-        }
-        vTaskDelay(pdMS_TO_TICKS(300));
-    }
-    if (ap_count == 0) {
-        ESP_LOGE(TAG, "Keine Netzwerke gefunden");
-        return false;
-    }
-
-    /* Kein VLA / kein großer Puffer: esp_wifi_scan_get_ap_record() liefert je einen
-     * Eintrag in RSSI-Reihenfolge und gibt dessen Speicher frei. Bei Abbruch vor
-     * leerer Liste: esp_wifi_clear_ap_list() (siehe ESP-IDF-Doku). */
-    typedef struct {
-        const char* ssid;
-        const char* password;
-        int rssi;
-        wifi_ap_record_t ap_rec;
-    } wifi_candidate_t;
-
-    wifi_candidate_t candidates[2];
-    uint8_t candidate_count = 0;
-
-    wifi_ap_record_t rec;
-    while (candidate_count < 2 && esp_wifi_scan_get_ap_record(&rec) == ESP_OK) {
-        for (uint8_t i = 0; i < config_rtc.wifi_count && i < 2; i++) {
-            if (strcmp((const char*)rec.ssid, config_rtc.wifi_credentials[i].ssid) != 0) {
-                continue;
-            }
-            bool already = false;
-            for (uint8_t c = 0; c < candidate_count; c++) {
-                if (strcmp(candidates[c].ssid, config_rtc.wifi_credentials[i].ssid) == 0) {
-                    already = true;
-                    break;
-                }
-            }
-            if (already) {
-                break;
-            }
-            candidates[candidate_count].ssid = config_rtc.wifi_credentials[i].ssid;
-            candidates[candidate_count].password = config_rtc.wifi_credentials[i].password;
-            candidates[candidate_count].rssi = rec.rssi;
-            candidates[candidate_count].ap_rec = rec;
-            ESP_LOGI(TAG, "Bekannte SSID gefunden: %s (RSSI: %d dBm)",
-                     candidates[candidate_count].ssid, rec.rssi);
-            candidate_count++;
-            break;
-        }
-    }
-    esp_wifi_clear_ap_list();
-
-    if (candidate_count == 0) {
-        ESP_LOGE(TAG, "Kein bekanntes Netzwerk gefunden");
-        return false;
-    }
-
-    // Verbindung herstellen (mit Fallback auf weitere bekannte SSIDs)
-    for (uint8_t c = 0; c < candidate_count; c++) {
-        const char* selected_ssid = candidates[c].ssid;
-        const char* selected_password = candidates[c].password;
-
-        ESP_LOGI(TAG, "Verbinde mit: %s (RSSI: %d dBm, Versuch %u/%u)",
-                 selected_ssid, candidates[c].rssi, (unsigned int)(c + 1), (unsigned int)candidate_count);
-
-        wifi_config_t wifi_config = {};
-        wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-        strncpy((char*)wifi_config.sta.ssid, selected_ssid, sizeof(wifi_config.sta.ssid) - 1);
-        strncpy((char*)wifi_config.sta.password, selected_password, sizeof(wifi_config.sta.password) - 1);
-
-        esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-        esp_wifi_start();
-        wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
-        esp_wifi_disconnect();
-        vTaskDelay(pdMS_TO_TICKS(100));
-        esp_wifi_connect();
-
-        // Warte auf Verbindung (über Event-Handler)
-        wifi_connected = false;
-        int attempts = 0;
-        while (!wifi_connected && attempts < 40) {  // 20 Sekunden (40 * 500ms)
-            vTaskDelay(pdMS_TO_TICKS(500));
-            attempts++;
-        }
-
-        if (wifi_connected) {
-            ap_info = candidates[c].ap_rec;
-            char ip_str[16];
-            snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&wifi_ip_info.ip));
-            ESP_LOGI(TAG, "WiFi verbunden! IP: %s", ip_str);
-            return true;
-        }
-
-        ESP_LOGW(TAG, "Verbindung zu %s fehlgeschlagen, versuche nächstes bekanntes Netz...", selected_ssid);
-    }
-
-    ESP_LOGE(TAG, "WiFi-Verbindung fehlgeschlagen");
-    return false;
-}
-
-// ============================================
-// Access Point starten (offenes WLAN)
-// ============================================
-bool start_access_point() {
-    ESP_LOGI(TAG, "Starte Access Point...");
-    
-    // WiFi initialisieren (falls noch nicht geschehen)
-    if (!init_wifi()) {
-        return false;
-    }
-    
-    // WiFi stoppen (falls es läuft), bevor Modus geändert wird
-    esp_wifi_stop();
-    vTaskDelay(pdMS_TO_TICKS(200));
-    
-    // AP+STA: STA-Interface bleibt frei für Umgebungs-Scan ohne Moduswechsel.
-    // STA wird unten „leer“ gesetzt, damit nach fehlgeschlagenem connect_wifi kein Hintergrund-Reconnect läuft.
-    esp_wifi_set_mode(WIFI_MODE_APSTA);
-    
-    // AP-Konfiguration
-    // SSID kopieren (max. 32 Zeichen)
-    size_t ssid_len = strlen(config_rtc.hostname);
-    if (ssid_len > 31) {
-        ssid_len = 31;
-        ESP_LOGW(TAG, "SSID zu lang, gekürzt auf: %.*s", (int)ssid_len, config_rtc.hostname);
-    }
-    
-    wifi_config_t ap_config = {};
-    ap_config.ap.ssid_len = (uint8_t)ssid_len;  // Expliziter Cast zu uint8_t (max. 31 Zeichen)
-    ap_config.ap.channel = 1;
-    ap_config.ap.max_connection = 4;
-    ap_config.ap.authmode = WIFI_AUTH_OPEN;
-    ap_config.ap.pmf_cfg.capable = true;
-    ap_config.ap.pmf_cfg.required = false;
-    
-    strncpy((char*)ap_config.ap.ssid, config_rtc.hostname, ssid_len);
-    ap_config.ap.ssid[ssid_len] = '\0';
-    ap_config.ap.ssid_len = (uint8_t)ssid_len;  // Expliziter Cast zu uint8_t
-
-    // AP bewusst offen halten:
-    // Fallback/Ersteinrichtung soll ohne Passwort direkt erreichbar sein.
-    ap_config.ap.password[0] = '\0';
-    ap_config.ap.authmode = WIFI_AUTH_OPEN;
-    
-    esp_err_t ret = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "AP-Konfiguration fehlgeschlagen: %s", esp_err_to_name(ret));
-        return false;
-    }
-
-    // STA-Interface: keine Verbindung (sonst Scan/Captive-Störungen durch Reconnect-Versuche)
-    wifi_config_t sta_clear = {};
-    sta_clear.sta.ssid[0] = '\0';
-    sta_clear.sta.password[0] = '\0';
-    // Leeres Passwort + WPA2-Threshold erzeugt Treiber-Warnung („kann OPEN nicht verbinden“).
-    // OPEN ist hier nur konsistent zur leeren STA-Config; Verbindung erfolgt ohnehin nicht (SSID leer).
-    sta_clear.sta.threshold.authmode = WIFI_AUTH_OPEN;
-    ret = esp_wifi_set_config(WIFI_IF_STA, &sta_clear);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "STA-Config (leer) fehlgeschlagen: %s", esp_err_to_name(ret));
-        return false;
-    }
-    
-    // IP-Konfiguration für AP
-    esp_netif_t* ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-    if (ap_netif) {
-        esp_netif_ip_info_t ip_info;
-        IP4_ADDR(&ip_info.ip, AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
-        IP4_ADDR(&ip_info.gw, AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
-        IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
-        esp_netif_dhcps_stop(ap_netif);
-        esp_netif_set_ip_info(ap_netif, &ip_info);
-        esp_netif_dhcps_start(ap_netif);
-    }
-    
-    // WiFi starten
-    ret = esp_wifi_start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "AP-Start fehlgeschlagen: %s", esp_err_to_name(ret));
-        return false;
-    }
-    
-    // WiFi TX Power setzen (nach esp_wifi_start)
-    wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
-    
-    ESP_LOGI(TAG, "Access Point gestartet (Modus AP+STA, Captive nutzt nur AP): %s", config_rtc.hostname);
-    ESP_LOGI(TAG, "AP IP: %d.%d.%d.%d", AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
-    ESP_LOGI(TAG, "WLAN ist offen (kein Passwort)");
-
-    if (!start_dns_captive_server()) {
-        ESP_LOGW(TAG, "DNS Captive konnte nicht gestartet werden (HTTP-Captive-Redirect bleibt aktiv)");
-    }
-    return true;
-}
 
 // ============================================
 // NTP-Zeitsynchronisation (ESP-IDF)
@@ -2537,7 +2159,7 @@ static void time_sync_notification_cb(struct timeval *tv) {
 }
 
 bool sync_ntp_time() {
-    if (!wifi_connected) {
+    if (!wifi_is_connected()) {
         ESP_LOGE(TAG, "NTP-Sync: WiFi nicht verbunden");
         return false;
     }
@@ -2623,13 +2245,14 @@ const char* processor_get_value(const char* var) {
         // Aktuelle WiFi-Credentials für Vergleich
         static char json_buffer[256];
         strcpy(json_buffer, "[");
-        if (wifi_connected) {
+        if (wifi_is_connected()) {
+            const wifi_ap_record_t* ap = wifi_get_ap_info();
             // Finde passendes Credential
             for (uint8_t i = 0; i < config_rtc.wifi_count; i++) {
-                if (strcmp((const char*)ap_info.ssid, config_rtc.wifi_credentials[i].ssid) == 0) {
+                if (strcmp((const char*)ap->ssid, config_rtc.wifi_credentials[i].ssid) == 0) {
                     strcat(json_buffer, "{");
                     strcat(json_buffer, "\"ssid\":\"");
-                    strcat(json_buffer, (const char*)ap_info.ssid);
+                    strcat(json_buffer, (const char*)ap->ssid);
                     strcat(json_buffer, "\",\"password\":\"");
                     strcat(json_buffer, config_rtc.wifi_credentials[i].password);
                     strcat(json_buffer, "\"");
@@ -2914,31 +2537,31 @@ const char* processor_get_value(const char* var) {
     }
     if (strcmp(var, "wifi_info_style") == 0) {
         // WiFi-Info Sichtbarkeit: "display:block;" wenn verbunden, "display:none;" wenn nicht verbunden
-        return wifi_connected ? "display:block;" : "display:none;";
+        return wifi_is_connected() ? "display:block;" : "display:none;";
     }
     if (strcmp(var, "wifi_ip") == 0) {
-        if (wifi_connected) {
-            snprintf(buffer, sizeof(buffer), IPSTR, IP2STR(&wifi_ip_info.ip));
+        if (wifi_is_connected()) {
+            snprintf(buffer, sizeof(buffer), IPSTR, IP2STR(&wifi_get_ip_info()->ip));
             return buffer;
         }
         return "-";
     }
     if (strcmp(var, "wifi_rssi") == 0) {
-        if (wifi_connected) {
-            snprintf(buffer, sizeof(buffer), "%d", ap_info.rssi);
+        if (wifi_is_connected()) {
+            snprintf(buffer, sizeof(buffer), "%d", wifi_get_ap_info()->rssi);
             return buffer;
         }
         return "-";
     }
     if (strcmp(var, "wifi_ssid") == 0) {
         // Zeige aktuell verbundenes SSID (falls verbunden)
-        if (wifi_connected) {
-            return (const char*)ap_info.ssid;
+        if (wifi_is_connected()) {
+            return (const char*)wifi_get_ap_info()->ssid;
         }
         return "Nicht verbunden";
     }
     if (strcmp(var, "wifi_status") == 0) {
-        return wifi_connected ? "Verbunden" : "Nicht verbunden";
+        return wifi_is_connected() ? "Verbunden" : "Nicht verbunden";
     }
     
     // Unbekannte Variable - leeren String zurückgeben
@@ -4014,7 +3637,7 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
     const bool scan_in_ap_mode = (mode_before == WIFI_MODE_AP || mode_before == WIFI_MODE_APSTA);
     
     // WiFi-Scan durchführen
-    if (!init_wifi()) {
+    if (!wifi_manager_init()) {
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, "{\"error\":\"WiFi-Scan fehlgeschlagen\"}", HTTPD_RESP_USE_STRLEN);
@@ -4054,7 +3677,7 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
         }
     }
     
-    wifi_set_tx_power((int8_t)(config_rtc.wifi_tx_power_dbm * 4));
+    wifi_manager_apply_tx_power();
     vTaskDelay(pdMS_TO_TICKS(100));
 
     if (scan_in_ap_mode) {
@@ -4735,7 +4358,7 @@ extern "C" void app_main(void) {
             ESP_LOGI(TAG, "Config erfolgreich geladen");
             
             // WiFi verbinden
-            if (connect_wifi()) {
+            if (wifi_connect_sta()) {
                         // mDNS initialisieren (nur einmal, nach erfolgreicher WiFi-Verbindung mit IP)
                         // ESP-IDF Best Practice: mDNS nach IP-Adresszuweisung initialisieren
                         if (!mdns_initialized) {
@@ -4774,13 +4397,13 @@ extern "C" void app_main(void) {
                 // Web-Server starten
                 setupWebServer();
                         char ip_str[16];
-                        snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&wifi_ip_info.ip));
+                        snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&wifi_get_ip_info()->ip));
                         ESP_LOGI(TAG, "Web-Server: http://%s", ip_str);
                     } else {
                         ESP_LOGE(TAG, "WiFi-Verbindung fehlgeschlagen → Starte Access Point");
                         
                         // Access Point starten
-                        if (start_access_point()) {
+                        if (wifi_start_access_point()) {
                             // Web-Server starten (ohne mDNS und NTP im AP-Modus)
                             setupWebServer();
                             ESP_LOGI(TAG, "Web-Server (AP-Modus): http://%d.%d.%d.%d", 

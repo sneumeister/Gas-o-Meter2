@@ -15,6 +15,7 @@ idf_component_register(
           "transfer_ble.cpp"
           "transfer_mqtt.cpp"
           "time_sync.cpp"
+          "wifi_manager.cpp"
     INCLUDE_DIRS "${INCLUDE_DIR}"
     REQUIRES 
         littlefs

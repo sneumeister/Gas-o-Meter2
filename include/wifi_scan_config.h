@@ -5,7 +5,7 @@
  * esp_wifi_scan_get_ap_record() (ein Eintrag pro Aufruf); Rest mit
  * esp_wifi_clear_ap_list() freigeben.
  *
- * connect_wifi() nutzt dieselbe API sequentiell und braucht keinen großen Puffer.
+ * wifi_connect_sta() nutzt dieselbe API sequentiell und braucht keinen großen Puffer.
  * Die Scan-Liste ist nach RSSI absteigend sortiert (stärkste zuerst).
  */
 #define WIFI_SCAN_MAX_AP 10
