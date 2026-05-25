@@ -11,6 +11,7 @@ compile_commands.json
 .vscode/launch.json
 .vscode/ipch
 .cursor
+.claude
 docs/*.md
 
 # Sensible Konfiguration
