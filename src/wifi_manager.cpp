@@ -26,6 +26,17 @@ static bool s_wifi_connected = false;
 static wifi_ap_record_t s_ap_info = {};
 static esp_netif_ip_info_t s_wifi_ip_info = {};
 
+/** Connect-Pfad: große Strukturen nicht auf Main-Task-Stack (MQTT-Timer-Wake). */
+static wifi_manager_sta_config_t s_connect_cfg;
+struct wifi_connect_candidate_t {
+    const char* ssid;
+    const char* password;
+    int rssi;
+    wifi_ap_record_t ap_rec;
+};
+static wifi_connect_candidate_t s_connect_candidates[2];
+static wifi_ap_record_t s_connect_scan_rec;
+
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     (void)arg;
     if (event_base == WIFI_EVENT) {
@@ -102,8 +113,16 @@ bool wifi_manager_init(void) {
         }
     }
 
-    esp_netif_init();
-    esp_event_loop_create_default();
+    esp_err_t err = esp_netif_init();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "esp_netif_init fehlgeschlagen: %s", esp_err_to_name(err));
+        return false;
+    }
+    err = esp_event_loop_create_default();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "esp_event_loop_create_default fehlgeschlagen: %s", esp_err_to_name(err));
+        return false;
+    }
     esp_netif_create_default_wifi_sta();
     esp_netif_create_default_wifi_ap();
 
@@ -133,8 +152,7 @@ bool wifi_manager_is_initialized(void) {
 }
 
 bool wifi_manager_session_begin(void) {
-    wifi_manager_sta_config_t cfg = {};
-    if (!wifi_manager_load_sta_config(&cfg)) {
+    if (!wifi_manager_load_sta_config(&s_connect_cfg)) {
         return false;
     }
     if (!wifi_manager_init()) {
@@ -150,24 +168,23 @@ bool wifi_manager_session_begin(void) {
         return false;
     }
 
-    wifi_manager_set_tx_power_quarter_dbm((int8_t)(cfg.wifi_tx_power_dbm * 4));
+    wifi_manager_set_tx_power_quarter_dbm((int8_t)(s_connect_cfg.wifi_tx_power_dbm * 4));
     vTaskDelay(pdMS_TO_TICKS(100));
 
     esp_netif_t* sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (sta_netif != nullptr) {
-        esp_netif_set_hostname(sta_netif, cfg.hostname);
-        ESP_LOGI(TAG, "Hostname gesetzt: %s", cfg.hostname);
+        esp_netif_set_hostname(sta_netif, s_connect_cfg.hostname);
+        ESP_LOGI(TAG, "Hostname gesetzt: %s", s_connect_cfg.hostname);
     }
     return true;
 }
 
 bool wifi_connect_sta(void) {
-    wifi_manager_sta_config_t cfg = {};
-    if (!wifi_manager_load_sta_config(&cfg)) {
+    if (!wifi_manager_load_sta_config(&s_connect_cfg)) {
         ESP_LOGE(TAG, "Keine WiFi-Credentials verfügbar");
         return false;
     }
-    if (cfg.wifi_count == 0) {
+    if (s_connect_cfg.wifi_count == 0) {
         ESP_LOGE(TAG, "Keine WiFi-Credentials verfügbar");
         return false;
     }
@@ -176,9 +193,9 @@ bool wifi_connect_sta(void) {
         return false;
     }
 
-    ESP_LOGI(TAG, "WiFi-Credentials konfiguriert: %u", (unsigned)cfg.wifi_count);
-    for (uint8_t i = 0; i < cfg.wifi_count && i < 2; i++) {
-        ESP_LOGI(TAG, "  Kandidat[%u]: SSID=%s", (unsigned)i, cfg.ssid[i]);
+    ESP_LOGI(TAG, "WiFi-Credentials konfiguriert: %u", (unsigned)s_connect_cfg.wifi_count);
+    for (uint8_t i = 0; i < s_connect_cfg.wifi_count && i < 2; i++) {
+        ESP_LOGI(TAG, "  Kandidat[%u]: SSID=%s", (unsigned)i, s_connect_cfg.ssid[i]);
     }
 
     wifi_scan_config_t scan_config = {};
@@ -206,25 +223,16 @@ bool wifi_connect_sta(void) {
         return false;
     }
 
-    struct wifi_candidate_t {
-        const char* ssid;
-        const char* password;
-        int rssi;
-        wifi_ap_record_t ap_rec;
-    };
-
-    wifi_candidate_t candidates[2];
     uint8_t candidate_count = 0;
 
-    wifi_ap_record_t rec;
-    while (candidate_count < 2 && esp_wifi_scan_get_ap_record(&rec) == ESP_OK) {
-        for (uint8_t i = 0; i < cfg.wifi_count && i < 2; i++) {
-            if (strcmp((const char*)rec.ssid, cfg.ssid[i]) != 0) {
+    while (candidate_count < 2 && esp_wifi_scan_get_ap_record(&s_connect_scan_rec) == ESP_OK) {
+        for (uint8_t i = 0; i < s_connect_cfg.wifi_count && i < 2; i++) {
+            if (strcmp((const char*)s_connect_scan_rec.ssid, s_connect_cfg.ssid[i]) != 0) {
                 continue;
             }
             bool already = false;
             for (uint8_t c = 0; c < candidate_count; c++) {
-                if (strcmp(candidates[c].ssid, cfg.ssid[i]) == 0) {
+                if (strcmp(s_connect_candidates[c].ssid, s_connect_cfg.ssid[i]) == 0) {
                     already = true;
                     break;
                 }
@@ -232,12 +240,12 @@ bool wifi_connect_sta(void) {
             if (already) {
                 break;
             }
-            candidates[candidate_count].ssid = cfg.ssid[i];
-            candidates[candidate_count].password = cfg.password[i];
-            candidates[candidate_count].rssi = rec.rssi;
-            candidates[candidate_count].ap_rec = rec;
-            ESP_LOGI(TAG, "Bekannte SSID gefunden: %s (RSSI: %d dBm)", candidates[candidate_count].ssid,
-                     rec.rssi);
+            s_connect_candidates[candidate_count].ssid = s_connect_cfg.ssid[i];
+            s_connect_candidates[candidate_count].password = s_connect_cfg.password[i];
+            s_connect_candidates[candidate_count].rssi = s_connect_scan_rec.rssi;
+            s_connect_candidates[candidate_count].ap_rec = s_connect_scan_rec;
+            ESP_LOGI(TAG, "Bekannte SSID gefunden: %s (RSSI: %d dBm)",
+                     s_connect_candidates[candidate_count].ssid, s_connect_scan_rec.rssi);
             candidate_count++;
             break;
         }
@@ -250,11 +258,11 @@ bool wifi_connect_sta(void) {
     }
 
     for (uint8_t c = 0; c < candidate_count; c++) {
-        const char* selected_ssid = candidates[c].ssid;
-        const char* selected_password = candidates[c].password;
+        const char* selected_ssid = s_connect_candidates[c].ssid;
+        const char* selected_password = s_connect_candidates[c].password;
 
-        ESP_LOGI(TAG, "Verbinde mit: %s (RSSI: %d dBm, Versuch %u/%u)", selected_ssid, candidates[c].rssi,
-                 (unsigned)(c + 1), (unsigned)candidate_count);
+        ESP_LOGI(TAG, "Verbinde mit: %s (RSSI: %d dBm, Versuch %u/%u)", selected_ssid,
+                 s_connect_candidates[c].rssi, (unsigned)(c + 1), (unsigned)candidate_count);
 
         wifi_config_t wifi_config = {};
         wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
@@ -275,7 +283,7 @@ bool wifi_connect_sta(void) {
                                                pdMS_TO_TICKS(WIFI_STA_CONNECT_TIMEOUT_MS));
 
         if ((bits & WIFI_BIT_GOT_IP) != 0 && s_wifi_connected) {
-            s_ap_info = candidates[c].ap_rec;
+            s_ap_info = s_connect_candidates[c].ap_rec;
             char ip_str[16];
             snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&s_wifi_ip_info.ip));
             ESP_LOGI(TAG, "WiFi verbunden! IP: %s", ip_str);

@@ -302,6 +302,7 @@ RTC_DATA_ATTR config_rtc_t config_rtc = {
     .config_loaded = false
 };
 RTC_DATA_ATTR int wakeupCount = 0;  // Zählt nur Deep-Sleep-Wake-ups (nicht ESP.restart())
+RTC_DATA_ATTR uint32_t timer_wake_count = 0;  // Nur Timer-Wake-ups (für Übertragungs-Intervall)
 RTC_DATA_ATTR bool isPowerOn = false;
 
 // Hostname-Zugriff für transfer_ble.cpp (BLE Device Name = Hostname)
@@ -416,6 +417,40 @@ const char* reboot_reason = NULL;
 
 // Funktionsdeklarationen
 void web_timeout_task(void *parameter);
+void enter_deep_sleep_with_gpio_and_timer_wakeup(bool enable_timer);
+bool write_ulp_pulse_counter_to_ring_buffer();
+
+static bool wake_allows_web_ui(esp_sleep_wakeup_cause_t reason) {
+    return reason == ESP_SLEEP_WAKEUP_GPIO || reason == ESP_SLEEP_WAKEUP_EXT0 ||
+           reason == ESP_SLEEP_WAKEUP_EXT1 || reason == ESP_SLEEP_WAKEUP_UNDEFINED;
+}
+
+/** true = jetzt transfer_data() ausführen (Timer-Wake-up, Intervall aus Config). */
+static bool timer_wake_should_transfer(bool config_available) {
+    if (!config_available || config_rtc.transfer_minutes == 255) {
+        return false;
+    }
+    if (config_rtc.wakeup_minutes == 0) {
+        return false;
+    }
+    const uint8_t every_n = (uint8_t)(config_rtc.transfer_minutes / config_rtc.wakeup_minutes);
+    const uint8_t interval = (every_n == 0) ? 1 : every_n;
+    return (timer_wake_count % interval) == 0;
+}
+
+static void persist_pulse_counter_before_deep_sleep(void) {
+    if (battery_voltage < BATTERY_VOLTAGE_30 || IS_USB_POWER(battery_voltage)) {
+        ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher vor Deep-Sleep (< 30%% oder USB)...");
+        write_ulp_pulse_counter_to_ring_buffer();
+    } else {
+        ESP_LOGI(TAG, "Akku-Spannung OK (>= 30%%) → ulp_pulse_counter bleibt im RTC-RAM (kein Schreiben nötig)");
+    }
+}
+
+static void enter_deep_sleep_after_wakeup(bool enable_timer_wakeup) {
+    persist_pulse_counter_before_deep_sleep();
+    enter_deep_sleep_with_gpio_and_timer_wakeup(enable_timer_wakeup);
+}
 
 // ============================================
 // ADC Initialisierung (ESP-IDF)
@@ -4104,10 +4139,6 @@ extern "C" void app_main(void) {
     // WiFi-Debug-Nachrichten reduzieren (muss ganz am Anfang stehen)
     SET_WIFI_LOG_LEVEL();
     
-    // Event-System initialisieren (für WiFi, etc.)
-    esp_netif_init();
-    esp_event_loop_create_default();
-    
     vTaskDelay(pdMS_TO_TICKS(1000));
     
     // Antennenumschaltung initialisieren (interne Antenne als Standard)
@@ -4308,16 +4339,17 @@ extern "C" void app_main(void) {
         }
         
         // 3. Abhängig vom Wake-up-Grund: Unterschiedliche Aktionen
+        const bool web_ui_wake = wake_allows_web_ui(wakeup_reason);
         switch (wakeup_reason) {
-            case ESP_SLEEP_WAKEUP_TIMER:
-                // Timer-Wake-up: Prüfen, ob Datenübertragung fällig ist
-                // Übertragung nur alle X Timer-Wake-ups (basierend auf transfer_minutes)
-                struct tm timeinfo;
-                time_t now;
-                time(&now);
-                if (localtime_r(&now, &timeinfo) && (timeinfo.tm_min % config_rtc.transfer_minutes == 0) && config_available) {
-                    ESP_LOGI(TAG, "=== Timer-Wake-up: Datenübertragung (Minute %d, Intervall: %d Min) ===",
-                             timeinfo.tm_min, config_rtc.transfer_minutes);
+            case ESP_SLEEP_WAKEUP_TIMER: {
+                // Timer-Wake-up: Übertragung alle N Timer-Wake-ups (transfer_minutes / wakeup_minutes)
+                timer_wake_count++;
+                if (timer_wake_should_transfer(config_available)) {
+                    const uint8_t every_n = (uint8_t)(config_rtc.transfer_minutes / config_rtc.wakeup_minutes);
+                    ESP_LOGI(TAG,
+                             "=== Timer-Wake-up: Datenübertragung (Zähler %lu, alle %u Wake-ups, %u Min) ===",
+                             (unsigned long)timer_wake_count, (unsigned)every_n,
+                             (unsigned)config_rtc.transfer_minutes);
                     
                     // Transfer-Daten vorbereiten (ADC-Messung wurde bereits beim Wake-up durchgeführt)
                     // HINWEIS: battery_voltage und battery_percent wurden bereits beim Wake-up gemessen
@@ -4339,21 +4371,21 @@ extern "C" void app_main(void) {
                                 transfer_status_to_string(transfer_status), transfer_status);
                     }
                     
-                    should_enter_deep_sleep = true;
-                    deep_sleep_reason = "Timer-Wake-up: Datenübertragung abgeschlossen";
                 } else {
-                    uint8_t current_min = localtime_r(&now, &timeinfo) ? timeinfo.tm_min : 0;
-                    ESP_LOGI(TAG, "=== Timer-Wake-up: Keine Übertragung (Minute %d, Intervall: %d Min) ===",
-                             current_min, config_rtc.transfer_minutes);
-                    should_enter_deep_sleep = true;
-                    deep_sleep_reason = (!config_available) ? "Timer-Wake-up: Config-Fehler" : "Timer-Wake-up: Keine Übertragung fällig";
+                    ESP_LOGI(TAG,
+                             "=== Timer-Wake-up: Keine Übertragung (Zähler %lu, Intervall %u Min) ===",
+                             (unsigned long)timer_wake_count, (unsigned)config_rtc.transfer_minutes);
                 }
+                ESP_LOGI(TAG, "Timer-Wake-up: Deep-Sleep (kein Web-Frontend)");
+                enter_deep_sleep_after_wakeup(enable_timer_wakeup);
                 break;
-                
+            }
+
             case ESP_SLEEP_WAKEUP_GPIO:
+            case ESP_SLEEP_WAKEUP_EXT0:
+            case ESP_SLEEP_WAKEUP_EXT1:
             case ESP_SLEEP_WAKEUP_UNDEFINED:
-            default:
-                // Power-On oder GPIO-Wake-up: WiFi und Web-Server starten
+                // Taster oder Power-On: WiFi und Web-Server
                 if (config_available) {
             ESP_LOGI(TAG, "Config erfolgreich geladen");
             
@@ -4416,19 +4448,22 @@ extern "C" void app_main(void) {
                     ESP_LOGE(TAG, "Config-Laden fehlgeschlagen → WiFi/Web-Server nicht gestartet");
         }
                 break;
-    }
-    
-    // Web-Timeout Task starten
-    // Funktionsdeklaration: void web_timeout_task(void *parameter);
-    xTaskCreate(
-        web_timeout_task,      // Task-Funktion
-        "web_timeout",         // Task-Name
-        4096,                  // Stack-Größe (Bytes)
-        NULL,                  // Parameter
-        1,                     // Priorität
-        NULL                   // Task-Handle (nicht benötigt)
-    );
-    // Log-Meldung erfolgt in web_timeout_task() selbst, wenn der Task tatsächlich startet
+
+            default:
+                ESP_LOGW(TAG, "Wake-up 0x%x ohne Web-UI → Deep-Sleep", (unsigned)wakeup_reason);
+                enter_deep_sleep_after_wakeup(enable_timer_wakeup);
+                break;
+        }
+
+        if (web_ui_wake) {
+            xTaskCreate(
+                web_timeout_task,
+                "web_timeout",
+                4096,
+                NULL,
+                1,
+                NULL);
+        }
 }
 
 // ============================================
@@ -4470,22 +4505,9 @@ void web_timeout_task(void *parameter) {
         // Deep-Sleep-Prüfung (wie in loop())
         if (should_enter_deep_sleep) {
             ESP_LOGI(TAG, "%s", deep_sleep_reason);
-            
-            // Ring-Speicher-Prüfung (einmalig, zentralisiert)
-            // < 30% ODER USB: Schreibe in Ring-Speicher (RTC-RAM könnte verloren gehen)
-            // >= 30%: Kein Schreiben (RTC-RAM bleibt erhalten)
-            if (battery_voltage < BATTERY_VOLTAGE_30 || IS_USB_POWER(battery_voltage)) {
-                ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher vor Deep-Sleep (< 30%% oder USB)...");
-                write_ulp_pulse_counter_to_ring_buffer();
-            } else {
-                ESP_LOGI(TAG, "Akku-Spannung OK (>= 30%%) → ulp_pulse_counter bleibt im RTC-RAM (kein Schreiben nötig)");
-            }
-            
-            // Timer-Wake-up: Bei USB-Stromversorgung immer aktivieren
-            // Bei Akku-Betrieb: Nur aktivieren, wenn Spannung > BATTERY_VOLTAGE_PROTECTION
             bool is_usb_power = IS_USB_POWER(battery_voltage);
             bool enable_timer = is_usb_power || (battery_voltage > BATTERY_VOLTAGE_PROTECTION);
-            enter_deep_sleep_with_gpio_and_timer_wakeup(enable_timer);
+            enter_deep_sleep_after_wakeup(enable_timer);
             
             // Wenn wir hier ankommen, wurde Deep-Sleep nicht gestartet (z.B. keine Wake-up-Quelle)
             // Flag zurücksetzen, um Endlosschleife zu vermeiden

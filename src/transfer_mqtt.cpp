@@ -11,8 +11,8 @@
 #include "freertos/task.h"
 
 #include <cstdio>
+#include <cstring>
 #include <ctime>
-#include <string.h>
 
 static const char* TAG = "transfer_mqtt";
 
@@ -137,6 +137,21 @@ static char s_ha_device_tail[96];
 static char s_ha_device_json[320];
 static char s_ha_topic[160];
 static char s_ha_payload[1024];
+
+/* Send-Pfad: nicht auf Main-Task-Stack (zusammen mit wifi_connect_sta). */
+static char s_mqtt_uri[128];
+static char s_mqtt_status_topic[MQTT_MAIN_TOPIC_MAX_LEN + 16];
+static char s_mqtt_topic[128];
+static char s_mqtt_timestamp_iso[40];
+static char s_payload_gas[32];
+static char s_payload_battery[16];
+static char s_payload_battery_voltage[16];
+static char s_payload_battery_low[8];
+static char s_payload_firmware_version[32];
+static char s_payload_rssi[16];
+static char s_payload_ntp_epoch[24];
+static char s_payload_data[256];
+static esp_mqtt_client_config_t s_mqtt_cfg;
 
 /**
  * Home Assistant MQTT Discovery (retain, QoS aus mqtt_config.h).
@@ -297,36 +312,34 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
 
     bool ntp_ok = sync_ntp_time();
 
-    char timestamp_iso[40] = "";
+    s_mqtt_timestamp_iso[0] = '\0';
     time_t ntp_sync_epoch = 0;
     if (ntp_ok) {
         ntp_sync_epoch = time_sync_last_epoch;
         struct tm tm_utc;
         if (ntp_sync_epoch > 0 && gmtime_r(&ntp_sync_epoch, &tm_utc) != nullptr) {
-            strftime(timestamp_iso, sizeof(timestamp_iso), "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
+            strftime(s_mqtt_timestamp_iso, sizeof(s_mqtt_timestamp_iso), "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
         } else {
             ntp_sync_epoch = 0;
         }
     }
 
-    char uri[128];
-    snprintf(uri, sizeof(uri), "mqtt://%s:%u", mqtt_host, (unsigned int)mqtt_port);
+    snprintf(s_mqtt_uri, sizeof(s_mqtt_uri), "mqtt://%s:%u", mqtt_host, (unsigned int)mqtt_port);
 
-    char status_topic[MQTT_MAIN_TOPIC_MAX_LEN + 16];
-    build_topic(status_topic, sizeof(status_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_STATUS);
+    build_topic(s_mqtt_status_topic, sizeof(s_mqtt_status_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_STATUS);
 
-    esp_mqtt_client_config_t mqtt_cfg = {};
-    mqtt_cfg.broker.address.uri = uri;
-    mqtt_cfg.session.keepalive = 30;
-    mqtt_cfg.network.timeout_ms = MQTT_CONNECT_TIMEOUT_MS;
-    mqtt_cfg.credentials.username = mqtt_username;
-    mqtt_cfg.credentials.authentication.password = mqtt_password;
-    mqtt_cfg.session.last_will.topic = status_topic;
-    mqtt_cfg.session.last_will.msg = MQTT_AVAIL_PAYLOAD_OFFLINE;
-    mqtt_cfg.session.last_will.qos = MQTT_QOS;
-    mqtt_cfg.session.last_will.retain = MQTT_RETAIN;
+    memset(&s_mqtt_cfg, 0, sizeof(s_mqtt_cfg));
+    s_mqtt_cfg.broker.address.uri = s_mqtt_uri;
+    s_mqtt_cfg.session.keepalive = 30;
+    s_mqtt_cfg.network.timeout_ms = MQTT_CONNECT_TIMEOUT_MS;
+    s_mqtt_cfg.credentials.username = mqtt_username;
+    s_mqtt_cfg.credentials.authentication.password = mqtt_password;
+    s_mqtt_cfg.session.last_will.topic = s_mqtt_status_topic;
+    s_mqtt_cfg.session.last_will.msg = MQTT_AVAIL_PAYLOAD_OFFLINE;
+    s_mqtt_cfg.session.last_will.qos = MQTT_QOS;
+    s_mqtt_cfg.session.last_will.retain = MQTT_RETAIN;
 
-    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&s_mqtt_cfg);
     if (client == nullptr) {
         ESP_LOGE(TAG, "MQTT Client Init fehlgeschlagen");
         return TRANSFER_STATUS_INIT_FAILED;
@@ -352,91 +365,80 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
         return TRANSFER_STATUS_CONNECTION_FAILED;
     }
 
-    bool ok = mqtt_publish_with_retry(client, status_topic, MQTT_AVAIL_PAYLOAD_ONLINE);
+    bool ok = mqtt_publish_with_retry(client, s_mqtt_status_topic, MQTT_AVAIL_PAYLOAD_ONLINE);
     if (!ok) {
-        ESP_LOGW(TAG, "MQTT availability online fehlgeschlagen: %s", status_topic);
+        ESP_LOGW(TAG, "MQTT availability online fehlgeschlagen: %s", s_mqtt_status_topic);
     }
 
     /* HA Discovery vor Telemetrie (retain), damit Entities existieren bevor State ankommt. */
     transfer_mqtt_publish_ha_discovery(client, mqtt_main_topic, transfer_mqtt_get_hostname(),
                                        transfer_mqtt_get_ha_autodiscovery(), data->firmware_version);
 
-    char payload_gas[32];
-    char payload_battery[16];
-    char payload_battery_voltage[16];
-    char payload_battery_low[8];
-    char payload_firmware_version[32];
-    char payload_rssi[16];
-    char payload_ntp_epoch[24];
-    char payload_data[256];
-
     /* MQTT: ntp_status = Unix-Epoch letzter NTP-Sync; timestamp = dieselbe Zeit als ISO-UTC.
      * Nie Sync: ntp_status = MQTT_NTP_STATUS_NEVER_SYNCED ("-1"), kein /timestamp-Publish.
      * Sync früher ok, dieser Wake fehlgeschlagen: beide Topics nicht publishen (Retain bleibt). */
     const bool ntp_timestamp_valid =
-        ntp_ok && ntp_sync_epoch > 0 && timestamp_iso[0] != '\0' &&
+        ntp_ok && ntp_sync_epoch > 0 && s_mqtt_timestamp_iso[0] != '\0' &&
         (strcmp(time_sync_last_source, "NTP") == 0);
 
-    snprintf(payload_gas, sizeof(payload_gas), "%.2f", data->pulse_counter / 100.0f);
-    snprintf(payload_battery, sizeof(payload_battery), "%d", (int)data->battery_percent);
-    snprintf(payload_battery_voltage, sizeof(payload_battery_voltage), "%.2f", data->battery_voltage);
-    snprintf(payload_battery_low, sizeof(payload_battery_low), "%s",
+    snprintf(s_payload_gas, sizeof(s_payload_gas), "%.2f", data->pulse_counter / 100.0f);
+    snprintf(s_payload_battery, sizeof(s_payload_battery), "%d", (int)data->battery_percent);
+    snprintf(s_payload_battery_voltage, sizeof(s_payload_battery_voltage), "%.2f", data->battery_voltage);
+    snprintf(s_payload_battery_low, sizeof(s_payload_battery_low), "%s",
              (data->battery_voltage < BATTERY_VOLTAGE_30) ? "true" : "false");
-    snprintf(payload_firmware_version, sizeof(payload_firmware_version), "%s",
+    snprintf(s_payload_firmware_version, sizeof(s_payload_firmware_version), "%s",
              data->firmware_version ? data->firmware_version : "");
-    snprintf(payload_rssi, sizeof(payload_rssi), "%d", (int)wifi_get_ap_info()->rssi);
+    snprintf(s_payload_rssi, sizeof(s_payload_rssi), "%d", (int)wifi_get_ap_info()->rssi);
 
     if (ntp_timestamp_valid) {
-        snprintf(payload_data, sizeof(payload_data),
+        snprintf(s_payload_data, sizeof(s_payload_data),
                  "{\"gas\":%s,\"battery\":%s,\"battery_voltage\":%s,\"battery_low\":%s,"
                  "\"firmware_version\":\"%s\",\"timestamp\":\"%s\"}",
-                 payload_gas, payload_battery, payload_battery_voltage, payload_battery_low,
-                 payload_firmware_version, timestamp_iso);
+                 s_payload_gas, s_payload_battery, s_payload_battery_voltage, s_payload_battery_low,
+                 s_payload_firmware_version, s_mqtt_timestamp_iso);
     } else {
-        snprintf(payload_data, sizeof(payload_data),
+        snprintf(s_payload_data, sizeof(s_payload_data),
                  "{\"gas\":%s,\"battery\":%s,\"battery_voltage\":%s,\"battery_low\":%s,"
                  "\"firmware_version\":\"%s\"}",
-                 payload_gas, payload_battery, payload_battery_voltage, payload_battery_low,
-                 payload_firmware_version);
+                 s_payload_gas, s_payload_battery, s_payload_battery_voltage, s_payload_battery_low,
+                 s_payload_firmware_version);
     }
 
-    char topic[128];
+    build_topic(s_mqtt_topic, sizeof(s_mqtt_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_DATA);
+    ok &= mqtt_publish_with_retry(client, s_mqtt_topic, s_payload_data);
 
-    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_DATA);
-    ok &= mqtt_publish_with_retry(client, topic, payload_data);
-
-    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_RSSI);
-    ok &= mqtt_publish_with_retry(client, topic, payload_rssi);
+    build_topic(s_mqtt_topic, sizeof(s_mqtt_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_RSSI);
+    ok &= mqtt_publish_with_retry(client, s_mqtt_topic, s_payload_rssi);
 
     if (ntp_timestamp_valid) {
-        snprintf(payload_ntp_epoch, sizeof(payload_ntp_epoch), "%lld", (long long)ntp_sync_epoch);
-        build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_NTP_STATUS);
-        ok &= mqtt_publish_with_retry(client, topic, payload_ntp_epoch);
-        build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_TIMESTAMP);
-        ok &= mqtt_publish_with_retry(client, topic, timestamp_iso);
+        snprintf(s_payload_ntp_epoch, sizeof(s_payload_ntp_epoch), "%lld", (long long)ntp_sync_epoch);
+        build_topic(s_mqtt_topic, sizeof(s_mqtt_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_NTP_STATUS);
+        ok &= mqtt_publish_with_retry(client, s_mqtt_topic, s_payload_ntp_epoch);
+        build_topic(s_mqtt_topic, sizeof(s_mqtt_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_TIMESTAMP);
+        ok &= mqtt_publish_with_retry(client, s_mqtt_topic, s_mqtt_timestamp_iso);
     } else if (time_sync_last_epoch == 0) {
         /* Nie synchronisiert: Sentinel -1 (kein ISO auf /timestamp — Topic fehlt/leer in HA). */
-        build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_NTP_STATUS);
-        ok &= mqtt_publish_with_retry(client, topic, MQTT_NTP_STATUS_NEVER_SYNCED);
+        build_topic(s_mqtt_topic, sizeof(s_mqtt_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_NTP_STATUS);
+        ok &= mqtt_publish_with_retry(client, s_mqtt_topic, MQTT_NTP_STATUS_NEVER_SYNCED);
     }
 
-    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_GAS);
-    ok &= mqtt_publish_with_retry(client, topic, payload_gas);
+    build_topic(s_mqtt_topic, sizeof(s_mqtt_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_GAS);
+    ok &= mqtt_publish_with_retry(client, s_mqtt_topic, s_payload_gas);
 
-    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_BATTERY);
-    ok &= mqtt_publish_with_retry(client, topic, payload_battery);
+    build_topic(s_mqtt_topic, sizeof(s_mqtt_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_BATTERY);
+    ok &= mqtt_publish_with_retry(client, s_mqtt_topic, s_payload_battery);
 
-    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_BATTERY_VOLTAGE);
-    ok &= mqtt_publish_with_retry(client, topic, payload_battery_voltage);
+    build_topic(s_mqtt_topic, sizeof(s_mqtt_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_BATTERY_VOLTAGE);
+    ok &= mqtt_publish_with_retry(client, s_mqtt_topic, s_payload_battery_voltage);
 
-    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_BATTERY_LOW);
-    ok &= mqtt_publish_with_retry(client, topic, payload_battery_low);
+    build_topic(s_mqtt_topic, sizeof(s_mqtt_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_BATTERY_LOW);
+    ok &= mqtt_publish_with_retry(client, s_mqtt_topic, s_payload_battery_low);
 
-    build_topic(topic, sizeof(topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_FIRMWARE_VERSION);
-    ok &= mqtt_publish_with_retry(client, topic, payload_firmware_version);
+    build_topic(s_mqtt_topic, sizeof(s_mqtt_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_FIRMWARE_VERSION);
+    ok &= mqtt_publish_with_retry(client, s_mqtt_topic, s_payload_firmware_version);
 
-    if (!mqtt_publish_with_retry(client, status_topic, MQTT_AVAIL_PAYLOAD_OFFLINE)) {
-        ESP_LOGW(TAG, "MQTT availability offline fehlgeschlagen: %s", status_topic);
+    if (!mqtt_publish_with_retry(client, s_mqtt_status_topic, MQTT_AVAIL_PAYLOAD_OFFLINE)) {
+        ESP_LOGW(TAG, "MQTT availability offline fehlgeschlagen: %s", s_mqtt_status_topic);
         ok = false;
     }
 
