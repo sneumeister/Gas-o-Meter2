@@ -98,7 +98,7 @@ static bool mqtt_publish_with_retry(esp_mqtt_client_handle_t client, const char*
     return false;
 }
 
-/** Slug für HA-Discovery-Topics: `/` → `_`, Leerzeichen entfernen (laut Projekt-Doku). */
+/** Slug für HA-Discovery-Topics: `/` und `-` → `_`, Leerzeichen entfernen (HA-Topic ohne Mehrdeutigkeit). */
 static void mqtt_ha_main_topic_slug(char* out, size_t cap, const char* main_topic) {
     size_t j = 0;
     if (main_topic == nullptr) {
@@ -106,7 +106,7 @@ static void mqtt_ha_main_topic_slug(char* out, size_t cap, const char* main_topi
         return;
     }
     for (size_t i = 0; main_topic[i] != '\0' && j + 1 < cap; ++i) {
-        if (main_topic[i] == '/') {
+        if (main_topic[i] == '/' || main_topic[i] == '-') {
             out[j++] = '_';
         } else if (main_topic[i] != ' ') {
             out[j++] = main_topic[i];
@@ -131,12 +131,13 @@ static char s_ha_state_data[MQTT_MAIN_TOPIC_MAX_LEN + 32];
 static char s_ha_state_rssi[MQTT_MAIN_TOPIC_MAX_LEN + 32];
 static char s_ha_state_ntp[MQTT_MAIN_TOPIC_MAX_LEN + 32];
 static char s_ha_state_status[MQTT_MAIN_TOPIC_MAX_LEN + 16];
+static char s_ha_expire_fragment[32];
 static char s_ha_avail_fragment[MQTT_MAIN_TOPIC_MAX_LEN + 128];
 static char s_ha_ident[MQTT_MAIN_TOPIC_MAX_LEN + 48];
 static char s_ha_device_tail[96];
 static char s_ha_device_json[320];
 static char s_ha_topic[160];
-static char s_ha_payload[1024];
+static char s_ha_payload[1536];
 
 /* Send-Pfad: nicht auf Main-Task-Stack (zusammen mit wifi_connect_sta). */
 static char s_mqtt_uri[128];
@@ -167,8 +168,11 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
     build_topic(s_ha_state_rssi, sizeof(s_ha_state_rssi), main_topic, MQTT_TOPIC_SUFFIX_RSSI);
     build_topic(s_ha_state_ntp, sizeof(s_ha_state_ntp), main_topic, MQTT_TOPIC_SUFFIX_NTP_STATUS);
     build_topic(s_ha_state_status, sizeof(s_ha_state_status), main_topic, MQTT_TOPIC_SUFFIX_STATUS);
+    snprintf(s_ha_expire_fragment, sizeof(s_ha_expire_fragment), "\"expire_after\":%u,",
+             (unsigned)MQTT_HA_EXPIRE_AFTER_SEC);
+    /* Kein führendes Komma: json_body endet bereits mit "," vor %s (sonst ",," → ungültiges JSON). */
     snprintf(s_ha_avail_fragment, sizeof(s_ha_avail_fragment),
-             ",\"availability_topic\":\"%s\",\"payload_available\":\"%s\",\"payload_not_available\":\"%s\"",
+             "\"availability_topic\":\"%s\",\"payload_available\":\"%s\",\"payload_not_available\":\"%s\"",
              s_ha_state_status, MQTT_AVAIL_PAYLOAD_ONLINE, MQTT_AVAIL_PAYLOAD_OFFLINE);
 
     snprintf(s_ha_ident, sizeof(s_ha_ident), "%s_%s", MQTT_HA_DEVICE_TOPIC_PREFIX, s_ha_slug);
@@ -178,8 +182,9 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
         snprintf(s_ha_device_tail, sizeof(s_ha_device_tail), ",\"sw_version\":\"%s\"", fw_version);
     }
 
+    /* Führendes Komma: wird direkt nach s_ha_avail_fragment eingefügt (…"offline",<hier>device…). */
     snprintf(s_ha_device_json, sizeof(s_ha_device_json),
-             "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\",\"manufacturer\":\"%s\",\"model\":\"%s\"%s}",
+             ",\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\",\"manufacturer\":\"%s\",\"model\":\"%s\"%s}",
              s_ha_ident, dev_name, MQTT_HA_MANUFACTURER, MQTT_HA_MODEL, s_ha_device_tail);
 
     char* const state_topic_data = s_ha_state_data;
@@ -194,40 +199,40 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
     } entries[] = {
         {"sensor",
          "gas",
-         "{\"name\":\"Gas Counter\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
+         "{\"name\":\"Gas Counter\",\"unique_id\":\"%s\",\"state_topic\":\"%s\",%s"
          "\"value_template\":\"{{ value_json.gas }}\",\"unit_of_measurement\":\"m\\u00b3\","
          "\"device_class\":\"gas\",\"state_class\":\"total_increasing\",\"icon\":\"mdi:meter-gas\",%s%s}"},
         {"sensor",
          "battery",
-         "{\"name\":\"Battery\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
+         "{\"name\":\"Battery\",\"unique_id\":\"%s\",\"state_topic\":\"%s\",%s"
          "\"value_template\":\"{{ value_json.battery }}\",\"unit_of_measurement\":\"%%\","
          "\"device_class\":\"battery\",\"state_class\":\"measurement\",\"icon\":\"mdi:battery\",%s%s}"},
         {"sensor",
          "voltage",
-         "{\"name\":\"Battery Voltage\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
+         "{\"name\":\"Battery Voltage\",\"unique_id\":\"%s\",\"state_topic\":\"%s\",%s"
          "\"value_template\":\"{{ value_json.battery_voltage }}\",\"unit_of_measurement\":\"V\","
          "\"device_class\":\"voltage\",\"state_class\":\"measurement\",\"icon\":\"mdi:flash\",%s%s}"},
         {"binary_sensor",
          "battery_low",
-         "{\"name\":\"Battery Low\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
+         "{\"name\":\"Battery Low\",\"unique_id\":\"%s\",\"state_topic\":\"%s\",%s"
          "\"value_template\":\"{%% if value_json.battery_low %%}ON{%% else %%}OFF{%% endif %%}\","
          "\"payload_on\":\"ON\",\"payload_off\":\"OFF\",\"device_class\":\"battery\","
          "\"icon\":\"mdi:battery-alert\",%s%s}"},
         {"sensor",
          "firmware",
-         "{\"name\":\"Firmware\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
+         "{\"name\":\"Firmware\",\"unique_id\":\"%s\",\"state_topic\":\"%s\",%s"
          "\"value_template\":\"{{ value_json.firmware_version }}\",\"icon\":\"mdi:information\","
          "\"entity_category\":\"diagnostic\",%s%s}"},
         {"sensor",
          "rssi",
-         "{\"name\":\"RSSI\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
+         "{\"name\":\"RSSI\",\"unique_id\":\"%s\",\"state_topic\":\"%s\",%s"
          "\"value_template\":\"{{ value | int }}\",\"unit_of_measurement\":\"dBm\","
          "\"device_class\":\"signal_strength\",\"state_class\":\"measurement\","
          "\"entity_category\":\"diagnostic\",%s%s}"},
         {"sensor",
          "ntp_status",
-         "{\"name\":\"Last NTP Sync\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-         "\"value_template\":\"{{ value | int }}\",\"unit_of_measurement\":\"epoch_s\","
+         "{\"name\":\"Last NTP Sync\",\"unique_id\":\"%s\",\"state_topic\":\"%s\",%s"
+         "\"device_class\":\"timestamp\",\"value_template\":\"{{ as_datetime(value) }}\","
          "\"entity_category\":\"diagnostic\",%s%s}"},
     };
 
@@ -266,8 +271,13 @@ static void transfer_mqtt_publish_ha_discovery(esp_mqtt_client_handle_t client, 
         snprintf(s_ha_topic, sizeof(s_ha_topic), "homeassistant/%s/%s/config", entries[i].component,
                  s_ha_unique_id);
 
-        snprintf(s_ha_payload, sizeof(s_ha_payload), entries[i].json_body, s_ha_unique_id, state_topics[i],
-                 s_ha_avail_fragment, device_json);
+        int payload_len = snprintf(s_ha_payload, sizeof(s_ha_payload), entries[i].json_body, s_ha_unique_id,
+                                   state_topics[i], s_ha_expire_fragment, s_ha_avail_fragment, device_json);
+        if (payload_len < 0 || (size_t)payload_len >= sizeof(s_ha_payload)) {
+            ESP_LOGW(TAG, "MQTT HA Auto-Discovery Payload zu lang (%d/%u): %s", payload_len,
+                     (unsigned)sizeof(s_ha_payload), s_ha_topic);
+            continue;
+        }
 
         if (mqtt_publish_with_retry(client, s_ha_topic, s_ha_payload)) {
             ESP_LOGI(TAG, "MQTT HA Auto-Discovery gesendet: %s", s_ha_topic);
@@ -437,9 +447,11 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
     build_topic(s_mqtt_topic, sizeof(s_mqtt_topic), mqtt_main_topic, MQTT_TOPIC_SUFFIX_FIRMWARE_VERSION);
     ok &= mqtt_publish_with_retry(client, s_mqtt_topic, s_payload_firmware_version);
 
-    if (!mqtt_publish_with_retry(client, s_mqtt_status_topic, MQTT_AVAIL_PAYLOAD_OFFLINE)) {
-        ESP_LOGW(TAG, "MQTT availability offline fehlgeschlagen: %s", s_mqtt_status_topic);
-        ok = false;
+    /* Nach erfolgreichem Zyklus online retained lassen (Deep Sleep). offline nur bei Fehler; LWT bei Abbruch. */
+    if (!ok) {
+        if (!mqtt_publish_with_retry(client, s_mqtt_status_topic, MQTT_AVAIL_PAYLOAD_OFFLINE)) {
+            ESP_LOGW(TAG, "MQTT availability offline fehlgeschlagen: %s", s_mqtt_status_topic);
+        }
     }
 
     /* PUBACK pro Publish bereits abgewartet; kurze Pause vor sauberem Disconnect. */

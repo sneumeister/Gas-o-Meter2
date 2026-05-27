@@ -12,12 +12,15 @@
 #define MQTT_TOPIC_SUFFIX_NTP_STATUS "ntp_status"
 #define MQTT_TOPIC_SUFFIX_STATUS "status"
 
-/** ntp_status-Payload: noch nie per NTP synchronisiert (Integer-Topic, HA epoch_s). */
+/** ntp_status-Payload: noch nie per NTP synchronisiert (Sentinel -1; HA device_class timestamp). */
 #define MQTT_NTP_STATUS_NEVER_SYNCED "-1"
 
-/** Home Assistant availability (LWT + explizites offline vor Disconnect). */
+/** Home Assistant availability: LWT bei ungraceful Disconnect; kein explizites offline nach erfolgreichem Send. */
 #define MQTT_AVAIL_PAYLOAD_ONLINE "online"
 #define MQTT_AVAIL_PAYLOAD_OFFLINE "offline"
+
+/** HA Discovery: Entität unavailable, wenn länger kein State-Update (Sekunden). Default 120 min. */
+#define MQTT_HA_EXPIRE_AFTER_SEC (120u * 60u)
 
 #define MQTT_HOST_MAX_LEN 63
 #define MQTT_USERNAME_MAX_LEN 63
