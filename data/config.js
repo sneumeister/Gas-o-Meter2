@@ -566,9 +566,9 @@ function saveConfig() {
     const bleTxPowerDbm = parseInt(document.getElementById('ble_tx_power_dbm').value);
     const zigbeeTxPowerDbm = parseInt(document.getElementById('zigbee_tx_power_dbm').value);
     
-    // Validierung: Hostname (max. 26 Zeichen = BLE-Limit)
+    // Validierung: Hostname (max. 26 Zeichen, HOSTNAME_MAX_LEN / BLE-Stack)
     if (hostname.length === 0 || hostname.length > 26) {
-        alert("Hostname muss 1-26 Zeichen lang sein (BLE-Limit).");
+        alert("Hostname muss 1-26 Zeichen lang sein (Limit für BLE, mDNS und MQTT/HA).");
         document.getElementById('hostname').focus();
         return;
     }
