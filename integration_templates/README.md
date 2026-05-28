@@ -1,42 +1,40 @@
 # Integration Templates und Konfigurationen
 
-Dieses Verzeichnis enthält Templates und Konfigurationsdateien für die Integration des Gas-O-Meter2 mit externen Systemen.
+Templates für die Anbindung des Gas-O-Meter2 an externe Systeme.
 
 ## Struktur
 
 ```text
 integration_templates/
-├── zigbee2mqtt/          # Zigbee2MQTT Device Definitions
+├── zigbee2mqtt/
 │   ├── README.md
-│   └── gas-o-meter2.yaml
-├── nodered/              # Node-RED Flows und Templates
+│   ├── external_converters/gas-o-meter2.js
+│   └── device_icons/gas-o-meter2.png
+├── nodered/
 │   ├── README.md
 │   └── gas-o-meter2-ble-flow.json
-└── README.md            # Diese Datei
+└── README.md
 ```
 
 ## Verwendung
 
-## [Zigbee2MQTT](./zigbee2mqtt/README.md)
+### [Zigbee2MQTT](./zigbee2mqtt/README.md)
 
-1. Kopiere `zigbee2mqtt/gas-o-meter2.yaml` nach:
+1. `zigbee2mqtt/external_converters/gas-o-meter2.js` nach `<data_path>/external_converters/` kopieren
+2. Zigbee2MQTT neu starten (Log: `Loaded external converter: gas-o-meter2`)
+3. ESP: `transfer_mode` Zigbee, Pairing starten → Z2M **Permit join**
 
-   ```text
-   <zigbee2mqtt-installation>/data/devices/custom/gas-o-meter2.yaml
-   ```
+Details, Exposes und Troubleshooting: [zigbee2mqtt/README.md](./zigbee2mqtt/README.md)
 
-2. Starte Zigbee2MQTT neu
+### [Node-RED (BLE)](./nodered/README.md)
 
-3. Device wird automatisch erkannt (wenn `model_id` im ESP-Code übereinstimmt)
+1. `nodered/gas-o-meter2-ble-flow.json` in Node-RED importieren
+2. BLE-Config (MAC), MQTT-Broker und **PRESETS** anpassen
+3. Deploy
 
-## [Node-RED (BLE)](./nodered/README.md)
-
-1. Importiere `nodered/gas-o-meter2-ble-flow.json` in Node-RED
-2. Passe die Konfiguration an (BLE-Device-Name, etc.)
-3. Flow aktivieren
+Details: [nodered/README.md](./nodered/README.md)
 
 ## Hinweise
 
-- Diese Dateien sind **Templates** und müssen an die jeweilige Installation angepasst werden
-- Pfade und Konfigurationen können je nach Setup variieren
-- Siehe jeweilige README-Dateien in den Unterverzeichnissen für Details
+- Templates müssen an die lokale Installation angepasst werden (Pfade, Broker, Topics)
+- **Zigbee** und **BLE→MQTT** sind getrennte Übertragungswege; nicht parallel dieselben MQTT-Topics ohne Absprache nutzen
