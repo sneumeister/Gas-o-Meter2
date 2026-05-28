@@ -4,24 +4,54 @@
         "type": "tab",
         "label": "Gas-O-Meter2 BLE",
         "disabled": false,
-        "info": "BLE Flow für Gas-O-Meter2 (node-red-contrib-generic-ble, BlueZ D-Bus).\n\n**MQTT/HA Presets:** Beim Deploy setzt „MQTT/HA Presets anwenden“ `flow`-Kontext (`mqtt_main_topic`, `ha_device_name`, Slug, …). Nur **PRESETS** im Node **Set flow: MQTT & HA Presets** anpassen (= ESP `config.json`). Siehe Kommentar-Node und README.\n\n**Datenempfang:** Beim Deploy startet einmal „BLE Scanning starten“ (scanStart) → Scanning läuft. Inject alle 2 s triggert Connect + Subscribe nur wenn Gerät sichtbar (Status ≠ missing), sonst keine „Not yet connected“-Logs.\n\n**Zeitsync:** Bei jedem Notify wird die aktuelle UTC-Zeit per Write auf 0x2A2B (Current Time) an den ESP32 gesendet.\n\n**Ersteinrichtung (Pairing):**\n1. ESP32C6: config.html → 'BLE Pairing starten'\n2. Node-RED: Generic BLE Config → BLE Scanning → Gas-O-Meter2 wählen → Apply → Done → Deploy\n3. MAC gespeichert – danach automatische Verbindung bei jedem Wake-up\n\n**Voraussetzungen:** node-red-contrib-generic-ble, bluetoothd, Node-RED-User in Gruppe bluetooth.\n\nSiehe integration_templates/nodered/README.md.",
+        "info": "## MQTT/HA Kurzanleitung\n\n### MQTT & Home Assistant (wie ESP WiFi/MQTT)\n\n1. **ESP:** `transfer_mode` auf **BLE** (dieser Flow nur bei BLE; der ESP sendet kein MQTT selbst).\n2. **BLE-Node:** Config öffnen (Stift) → **MAC** eintragen (wird im Config-Menü angezeigt). **Alternativ:** Am ESP „BLE Pairing starten“, im Config **BLE Scanning** aktivieren → **Gas-O-Meter2** in der Liste wählen → Apply.\n3. **PRESETS** im Node „Set flow: MQTT & HA Presets“ anpassen:\n   - `mqtt_main_topic` = ESP `config.json` → `mqtt_main_topic`\n   - `ha_device_name` = ESP `hostname` (max. 26 Zeichen)\n4. **Deploy** → Inject **„MQTT/HA Presets anwenden“** → **„HA Discovery AN“**\n5. Nach PRESETS-Änderung: Discovery erneut (AN/AUS).\n\nDetails: `integration_templates/nodered/README.md`\n\n---\n\nBLE Flow für Gas-O-Meter2 (node-red-contrib-generic-ble, BlueZ D-Bus).\n\n**MQTT/HA Presets:** Beim Deploy setzt „MQTT/HA Presets anwenden“ `flow`-Kontext (`mqtt_main_topic`, `ha_device_name`, Slug, …). Nur **PRESETS** im Node **Set flow: MQTT & HA Presets** anpassen (= ESP `config.json`). Siehe Kommentar-Node und README.\n\n**Datenempfang:** Beim Deploy startet einmal „BLE Scanning starten“ (scanStart) → Scanning läuft. Inject alle 2 s triggert Connect + Subscribe nur wenn Gerät sichtbar (Status ≠ missing), sonst keine „Not yet connected“-Logs.\n\n**Zeitsync:** Bei jedem Notify wird die aktuelle UTC-Zeit per Write auf 0x2A2B (Current Time) an den ESP32 gesendet.\n\n**Ersteinrichtung (Pairing):**\n1. ESP32C6: config.html → 'BLE Pairing starten'\n2. Node-RED: Generic BLE Config → BLE Scanning → Gas-O-Meter2 wählen → Apply → Done → Deploy\n3. MAC gespeichert – danach automatische Verbindung bei jedem Wake-up\n\n**Voraussetzungen:** node-red-contrib-generic-ble, bluetoothd, Node-RED-User in Gruppe bluetooth.\n\nSiehe integration_templates/nodered/README.md.",
         "env": []
+    },
+    {
+        "id": "a1mqtt_ha_group01",
+        "type": "group",
+        "z": "e1ad6b94a5c9cb11",
+        "name": "MQTT/HA Setup – Comment = Kurzanleitung",
+        "style": {
+            "stroke": "#ff8c00",
+            "fill": "#ffefbf",
+            "fill-opacity": "0.45",
+            "label": true,
+            "label-position": "n",
+            "color": "#7c4a00"
+        },
+        "nodes": [
+            "a1mqtt_ha_comment01",
+            "a1mqttpresetinj01",
+            "a1mqttpresetfn01",
+            "41b57a5c0d8c4fae",
+            "124f91a6acd62da9",
+            "4b4c7903cc982446",
+            "5c617f5b3f06ab91",
+            "c277aa39dd00d2d2"
+        ],
+        "x": 34,
+        "y": 19,
+        "w": 912,
+        "h": 282,
+        "info": "Hier ist die Kurzanleitung..."
     },
     {
         "id": "a1mqtt_ha_comment01",
         "type": "comment",
         "z": "e1ad6b94a5c9cb11",
-        "name": "MQTT/HA – Kurzanleitung",
-        "info": "### MQTT & Home Assistant (wie ESP WiFi/MQTT)\n\n1. **PRESETS** im Node „Set flow: MQTT & HA Presets“ anpassen:\n   - `mqtt_main_topic` = ESP `config.json` → `mqtt_main_topic`\n   - `ha_device_name` = ESP `hostname` (max. 26 Zeichen)\n2. **Deploy** → Inject **„MQTT/HA Presets anwenden“** → **„HA Discovery AN“**\n3. Nur **eine** Datenquelle: ESP `transfer_mode: mqtt` **oder** dieser BLE-Flow (gleiches Topic).\n4. Nach PRESETS-Änderung: Discovery erneut (AN/AUS). Alte falsche `homeassistant/.../config` ggf. am Broker leeren.\n5. Hersteller/Modell sind fest (`Custom` / `Gas-O-Meter2`, wie `mqtt_config.h`) – kommen nicht per BLE.\n\nDetails: `integration_templates/nodered/README.md`",
-        "x": 180,
-        "y": -140,
-        "width": 520,
-        "height": 200
+        "g": "a1mqtt_ha_group01",
+        "name": "MQTT/HA Kurzanleitung (Doppelklick)",
+        "info": "### MQTT & Home Assistant (wie ESP WiFi/MQTT)\n\n1. **ESP:** `transfer_mode` auf **BLE** (dieser Flow nur bei BLE; der ESP sendet kein MQTT selbst).\n2. **BLE-Node:** Config öffnen (Stift) → **MAC** eintragen (wird im Config-Menü angezeigt). \n   **Alternativ:** Am ESP „BLE Pairing starten“, im Config **BLE Scanning** aktivieren → **Gas-O-Meter2** in der Liste wählen → Apply.\n3. **PRESETS** im Node „Set flow: MQTT & HA Presets“ anpassen:\n   - `mqtt_main_topic` = ESP `config.json` → `mqtt_main_topic`\n   - `ha_device_name` = ESP `hostname` (max. 26 Zeichen)\n4. **Deploy** → Inject **„MQTT/HA Presets anwenden“** → **„HA Discovery AN“**\n5. Nach PRESETS-Änderung: Discovery erneut (AN/AUS).\n\nDetails: `integration_templates/nodered/README.md`",
+        "x": 230,
+        "y": 60,
+        "wires": []
     },
     {
         "id": "a1mqttpresetinj01",
         "type": "inject",
         "z": "e1ad6b94a5c9cb11",
+        "g": "a1mqtt_ha_group01",
         "name": "MQTT/HA Presets anwenden (einmal)",
         "props": [
             {
@@ -35,8 +65,8 @@
         "once": true,
         "onceDelay": 0.2,
         "topic": "",
-        "x": 200,
-        "y": 0,
+        "x": 230,
+        "y": 120,
         "wires": [
             [
                 "a1mqttpresetfn01"
@@ -47,12 +77,17 @@
         "id": "a1mqttpresetfn01",
         "type": "function",
         "z": "e1ad6b94a5c9cb11",
+        "g": "a1mqtt_ha_group01",
         "name": "Set flow: MQTT & HA Presets",
         "func": "// PRESETS = Werte aus ESP config.json (mqtt_main_topic, hostname)\n// Projekt-Konstanten = mqtt_config.h (nicht ändern, außer Firmware/Zigbee auch)\nconst HA_DEVICE_PREFIX = 'gas_o_meter2';\nconst HA_MANUFACTURER = 'Custom';\nconst HA_MODEL = 'Gas-O-Meter2';\nconst EXPIRE_AFTER_SEC = 120 * 60;\n\nconst PRESETS = {\n    mqtt_main_topic: 'gas-o-meter2',\n    ha_device_name: 'gas-o-meter2'\n};\n\nfunction mqttTopicSlug(mainTopic) {\n    let s = String(mainTopic || '').replace(/\\//g, '_').replace(/-/g, '_').replace(/ /g, '');\n    return s.length ? s : 'device';\n}\n\nflow.set('mqtt_main_topic', PRESETS.mqtt_main_topic);\nflow.set('ha_device_name', PRESETS.ha_device_name);\nflow.set('mqtt_topic_slug', mqttTopicSlug(PRESETS.mqtt_main_topic));\nflow.set('ha_expire_after_sec', EXPIRE_AFTER_SEC);\n\nnode.status({ fill: 'green', shape: 'dot', text: PRESETS.mqtt_main_topic });\nreturn null;",
         "outputs": 1,
+        "timeout": "",
         "noerr": 0,
-        "x": 460,
-        "y": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 770,
+        "y": 120,
         "wires": [
             []
         ]
@@ -61,11 +96,10 @@
         "id": "a0b0c0d0e0f00001",
         "type": "inject",
         "z": "e1ad6b94a5c9cb11",
-        "name": "BLE Scanning starten (einmal)",
+        "name": "BLE Auto-Scanning starten (1x automatisch)",
         "props": [
             {
                 "p": "topic",
-                "v": "scanStart",
                 "vt": "str"
             }
         ],
@@ -74,13 +108,14 @@
         "once": true,
         "onceDelay": 0.5,
         "topic": "scanStart",
-        "x": 150,
-        "y": 40,
+        "x": 210,
+        "y": 360,
         "wires": [
             [
                 "47168c72c063c625"
             ]
-        ]
+        ],
+        "info": "Wird automatisch einmalig nach Start ausgeführt.\r\nWill be executed once after startup."
     },
     {
         "id": "b0e0f0a0c0d0e0f0",
@@ -106,8 +141,8 @@
         "topic": "fff1",
         "payload": "{\"notify\":true}",
         "payloadType": "json",
-        "x": 140,
-        "y": 100,
+        "x": 160,
+        "y": 400,
         "wires": [
             [
                 "ble-trigger-only-when-visible"
@@ -118,17 +153,22 @@
         "id": "ble-trigger-only-when-visible",
         "type": "function",
         "z": "e1ad6b94a5c9cb11",
-        "name": "Nur bei sichtbarem Gerät triggern",
+        "name": "Nur bei sichtbarem Gerät",
         "func": "// Bei sichtbarem Gerät: Connect auslösen wenn nicht verbunden, Subscribe nur wenn connected → weniger \"Not yet connected\".\nvar status = flow.get('bleNotifyStatus') || '';\nif (!status || status === 'generic-ble.status.missing') return null;\nif (status === 'generic-ble.status.connected') {\n    return msg;\n}\nreturn { topic: 'connect', payload: {} };",
         "outputs": 1,
+        "timeout": "",
         "noerr": 0,
-        "x": 320,
-        "y": 160,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 410,
+        "y": 400,
         "wires": [
             [
                 "47168c72c063c625"
             ]
-        ]
+        ],
+        "info": "Filter: Nur bei sichtbarem Gerät trigger durchlassen"
     },
     {
         "id": "status-ble-notify",
@@ -138,13 +178,14 @@
         "scope": [
             "47168c72c063c625"
         ],
-        "x": 70,
-        "y": 220,
+        "x": 110,
+        "y": 480,
         "wires": [
             [
                 "ble-status-store"
             ]
-        ]
+        ],
+        "info": "Liest den BLE status....\r\nIst unser \"Gas-o-Meter 2\" Connected?"
     },
     {
         "id": "ble-status-store",
@@ -153,12 +194,17 @@
         "name": "BLE-Status speichern",
         "func": "var t = (msg.status && msg.status.text) ? String(msg.status.text) : '';\nflow.set('bleNotifyStatus', t);\nreturn null;",
         "outputs": 1,
+        "timeout": "",
         "noerr": 0,
-        "x": 300,
-        "y": 220,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 340,
+        "y": 480,
         "wires": [
             []
-        ]
+        ],
+        "info": "Speicher den BLE Status unseres \"Gas-o-Meter 2\"...\r\nConnected/Disconnected/... und schreibt Status in floe-variable.\r\nDient damit zur Filterung durch Node \"Nur bei sichtbarem Gerät\"."
     },
     {
         "id": "47168c72c063c625",
@@ -168,8 +214,8 @@
         "genericBle": "6fb805cae803ac05",
         "useString": true,
         "notification": true,
-        "x": 540,
-        "y": 60,
+        "x": 660,
+        "y": 360,
         "wires": [
             [
                 "c3d4e5f600020102"
@@ -184,8 +230,8 @@
         "func": "// Nur bei Notify 0xFFF1: Nachricht zwischenspeichern, Read 0x2A26 anfordern.\nconst pl = typeof msg.payload === 'string' ? JSON.parse(msg.payload) : (msg.payload || {});\nconst ch = pl.characteristics || {};\nif (ch.fff1 === undefined) return null;\nflow.set('lastNotifyMsg', msg);\nreturn { topic: '2a26', payload: {} };",
         "outputs": 1,
         "noerr": 0,
-        "x": 750,
-        "y": 60,
+        "x": 870,
+        "y": 360,
         "wires": [
             [
                 "b2c3d4e5f6000201"
@@ -200,8 +246,8 @@
         "genericBle": "6fb805cae803ac05",
         "useString": true,
         "notification": false,
-        "x": 660,
-        "y": 160,
+        "x": 1100,
+        "y": 360,
         "wires": [
             [
                 "d4e5f60002010203"
@@ -216,8 +262,8 @@
         "func": "// Nur bei Read-Resultat 0x2A26: Firmware an gespeicherte Notify-Nachricht anhängen, an Parse/CTS/Raw weiterreichen.\nconst pl = typeof msg.payload === 'string' ? JSON.parse(msg.payload) : (msg.payload || {});\nconst ch = pl.characteristics || {};\nif (ch['2a26'] === undefined) return null;\nlet fw = ch['2a26'];\nif (Buffer.isBuffer(fw)) fw = fw.toString('utf8').trim();\nelse if (fw && fw.type === 'Buffer' && Array.isArray(fw.data)) fw = Buffer.from(fw.data).toString('utf8').trim();\nelse if (typeof fw !== 'string') fw = 'unknown';\nconst last = flow.get('lastNotifyMsg');\nflow.set('lastNotifyMsg', null);\nif (!last) return null;\nlast.firmware = fw;\nreturn last;",
         "outputs": 1,
         "noerr": 0,
-        "x": 810,
-        "y": 220,
+        "x": 610,
+        "y": 460,
         "wires": [
             [
                 "48548b727982ed5f",
@@ -234,8 +280,8 @@
         "func": "// Current Time 0x2A2B: Exact Time 256 (10 Bytes UTC) → ESP32 time_sync_set_hard()\n// Wird nur bei echtem BLE-Notify ausgeführt (nicht bei BLE Mock).\nconst now = new Date();\nconst buf = Buffer.alloc(10);\nbuf.writeUInt16LE(now.getUTCFullYear(), 0);\nbuf[2] = now.getUTCMonth() + 1;\nbuf[3] = now.getUTCDate();\nbuf[4] = now.getUTCHours();\nbuf[5] = now.getUTCMinutes();\nbuf[6] = now.getUTCSeconds();\nbuf[7] = (now.getUTCDay() === 0) ? 7 : now.getUTCDay();\nbuf[8] = 0;\nbuf[9] = 0;\n// Generic-ble erwartet Key = Characteristic-UUID wie im Config (kurz: 2a2b)\nmsg.payload = { '2a2b': buf.toString('hex') };\nreturn msg;",
         "outputs": 1,
         "noerr": 0,
-        "x": 1020,
-        "y": 140,
+        "x": 880,
+        "y": 460,
         "wires": [
             [
                 "81956e7e52c59929"
@@ -248,8 +294,8 @@
         "z": "e1ad6b94a5c9cb11",
         "name": "BLE Zeit schreiben (0x2A2B)",
         "genericBle": "6fb805cae803ac05",
-        "x": 1280,
-        "y": 140,
+        "x": 1120,
+        "y": 460,
         "wires": []
     },
     {
@@ -269,15 +315,15 @@
         "topic": "",
         "payload": "{\"p\":12345,\"bv\":3910,\"bp\":85,\"bl\":0}",
         "payloadType": "str",
-        "x": 100,
-        "y": 520,
+        "x": 140,
+        "y": 620,
         "wires": [
             [
                 "48548b727982ed5f",
                 "3050693931b94a90"
             ]
         ],
-        "info": "Test ohne BLE-Hardware: Sendet Mock-Daten direkt an den Data Parser.\nManuell auslösen (kein Auto-Repeat).\nFormat entspricht Custom Characteristic 0xFFF1."
+        "info": "Test ohne BLE-Hardware: \nSendet Mock-Daten direkt an den Data Parser.\nManuell auslösen (kein Auto-Repeat).\nFormat entspricht Custom Characteristic 0xFFF1."
     },
     {
         "id": "3050693931b94a90",
@@ -292,8 +338,8 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 480,
-        "y": 520,
+        "x": 340,
+        "y": 660,
         "wires": []
     },
     {
@@ -309,8 +355,8 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 1300,
-        "y": 200,
+        "x": 880,
+        "y": 500,
         "wires": []
     },
     {
@@ -321,8 +367,8 @@
         "func": "// Parse Gas-O-Meter2 Custom Characteristic 0xFFF1 → Format wie Zigbee2MQTT\n// bv vom ESP in mV (transfer_ble) → V für MQTT/HA wie WiFi\n// Rohformat: {\"p\":12345,\"bv\":3910,\"bp\":85,\"bl\":0}\n\nlet data = {};\n\ntry {\n    let raw = msg.payload;\n    if (typeof raw === 'object' && raw.characteristics && raw.characteristics.fff1) {\n        raw = raw.characteristics.fff1;\n    } else if (typeof raw === 'object' && raw.fff1) {\n        raw = raw.fff1;\n    }\n    if (raw && typeof raw === 'object' && raw.type === 'Buffer' && Array.isArray(raw.data)) {\n        raw = Buffer.from(raw.data).toString('utf8');\n    }\n    if (Buffer.isBuffer(raw)) {\n        raw = raw.toString('utf8');\n    }\n    if (typeof raw === 'string') {\n        data = JSON.parse(raw);\n        // Generic BLE in (useString: true): Nutzdaten in characteristics.fff1 (Buffer)\n        if (data && data.characteristics && data.characteristics.fff1) {\n            const fff1 = data.characteristics.fff1;\n            if (fff1.type === 'Buffer' && Array.isArray(fff1.data)) {\n                data = JSON.parse(Buffer.from(fff1.data).toString('utf8'));\n            } else if (Buffer.isBuffer(fff1)) {\n                data = JSON.parse(fff1.toString('utf8'));\n            }\n        }\n    } else if (typeof raw === 'object' && raw !== null && !Buffer.isBuffer(raw)) {\n        data = raw;\n    }\n    \n    const p = data.p || 0;\n    const bv = data.bv || 0;\n    const bp = data.bp || 0;\n    // Null-Abfrage: periodische BLE-Reads (z. B. alle 2 s) liefern oft 0/0/0 – nicht weitergeben\n    if (p === 0 && bv === 0 && bp === 0) {\n        return null;\n    }\n    \n    const gasM3 = p / 100;\n    msg.payload = {\n        gas: gasM3,\n        battery: bp,\n        battery_voltage: Math.round(bv) / 1000,\n        battery_low: (data.bl || 0) === 1,\n        firmware_version: msg.firmware || 'unknown',\n        timestamp: new Date().toISOString()  // UTC ISO (lesbar); ntp_status separat als Epoch/-1\n    };\n    \n    return msg;\n} catch (error) {\n    node.error('Parse Error: ' + error.message, msg);\n    return null;\n}",
         "outputs": 1,
         "noerr": 0,
-        "x": 780,
-        "y": 380,
+        "x": 620,
+        "y": 620,
         "wires": [
             [
                 "e73e0b81c7963fdb",
@@ -338,12 +384,16 @@
         "id": "71d52aa0cbb3ae41",
         "type": "function",
         "z": "e1ad6b94a5c9cb11",
-        "name": "Einzeltopics für MQTT",
+        "name": "Einzeltopics MQTT",
         "func": "// Pro Feld eigene Ausgabe (wie ESP transfer_mqtt)\n// BLE: kein NTP am ESP → ntp_status=-1; timestamp=ISO vom Gateway\nconst base = flow.get('mqtt_main_topic') || 'gas-o-meter2';\nconst p = msg.payload;\nif (typeof p !== 'object' || p === null) return null;\nconst str = (v) => (typeof v === 'object' ? JSON.stringify(v) : String(v));\nconst low = p.battery_low ? 'true' : 'false';\nnode.send([\n  [{ topic: base + '/gas', payload: str(p.gas) }],\n  [{ topic: base + '/battery', payload: str(p.battery) }],\n  [{ topic: base + '/battery_voltage', payload: str(p.battery_voltage) }],\n  [{ topic: base + '/battery_low', payload: low }],\n  [{ topic: base + '/firmware_version', payload: str(p.firmware_version) }],\n  [{ topic: base + '/timestamp', payload: str(p.timestamp) }],\n  [{ topic: base + '/rssi', payload: '0' }],\n  [{ topic: base + '/ntp_status', payload: '-1' }],\n  [{ topic: base + '/status', payload: 'online' }]\n]);\nreturn null;",
         "outputs": 9,
+        "timeout": "",
         "noerr": 0,
-        "x": 1060,
-        "y": 380,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 930,
+        "y": 740,
         "wires": [
             [
                 "a9e15c007a820242"
@@ -388,8 +438,8 @@
         "correl": "",
         "expiry": "",
         "broker": "ba7b128702f022b0",
-        "x": 1270,
-        "y": 380,
+        "x": 1150,
+        "y": 740,
         "wires": []
     },
     {
@@ -405,8 +455,8 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 1290,
-        "y": 240,
+        "x": 890,
+        "y": 540,
         "wires": []
     },
     {
@@ -417,8 +467,8 @@
         "func": "const base = flow.get('mqtt_main_topic') || 'gas-o-meter2';\nmsg.topic = base + '/data';\nreturn msg;",
         "outputs": 1,
         "noerr": 0,
-        "x": 1120,
-        "y": 300,
+        "x": 930,
+        "y": 640,
         "wires": [
             [
                 "d6218f2f244a3a20"
@@ -439,29 +489,34 @@
         "correl": "",
         "expiry": "",
         "broker": "ba7b128702f022b0",
-        "x": 1300,
-        "y": 300,
+        "x": 1160,
+        "y": 640,
         "wires": []
     },
     {
         "id": "a3caebcd970d92c8",
         "type": "function",
         "z": "e1ad6b94a5c9cb11",
-        "name": "Database Writer",
+        "name": "Opt.:Database Writer",
         "func": "// Optional: Datenbank-Integration\n// TODO: node-red-node-sqlite oder node-red-contrib-influxdb\nreturn msg;",
         "outputs": 1,
+        "timeout": "",
         "noerr": 0,
-        "x": 1280,
-        "y": 440,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1140,
+        "y": 600,
         "wires": [
             []
-        ]
+        ],
+        "info": "Optionaler Datenbank write konfigurieren..."
     },
     {
         "id": "585f25ae91980517",
         "type": "change",
         "z": "e1ad6b94a5c9cb11",
-        "name": "Gas → Gauge",
+        "name": "UI: Gas → Gauge",
         "rules": [
             {
                 "t": "set",
@@ -476,8 +531,8 @@
         "from": "",
         "to": "",
         "reg": false,
-        "x": 1040,
-        "y": 500,
+        "x": 970,
+        "y": 880,
         "wires": [
             [
                 "4c5ccbb40631cae6"
@@ -488,7 +543,7 @@
         "id": "2a7ad3ae739f1578",
         "type": "change",
         "z": "e1ad6b94a5c9cb11",
-        "name": "Battery → Gauge",
+        "name": "UI: Battery → Gauge",
         "rules": [
             {
                 "t": "set",
@@ -503,8 +558,8 @@
         "from": "",
         "to": "",
         "reg": false,
-        "x": 1030,
-        "y": 560,
+        "x": 980,
+        "y": 920,
         "wires": [
             [
                 "5c62d20cde662394"
@@ -533,8 +588,8 @@
         ],
         "seg1": "",
         "seg2": "",
-        "x": 1290,
-        "y": 500,
+        "x": 1170,
+        "y": 880,
         "wires": []
     },
     {
@@ -559,14 +614,15 @@
         ],
         "seg1": "",
         "seg2": "",
-        "x": 1300,
-        "y": 560,
+        "x": 1180,
+        "y": 920,
         "wires": []
     },
     {
         "id": "41b57a5c0d8c4fae",
         "type": "inject",
         "z": "e1ad6b94a5c9cb11",
+        "g": "a1mqtt_ha_group01",
         "name": "HA Discovery AN",
         "props": [
             {
@@ -579,8 +635,8 @@
         "crontab": "",
         "once": false,
         "onceDelay": 0,
-        "x": 120,
-        "y": 640,
+        "x": 160,
+        "y": 180,
         "wires": [
             [
                 "4b4c7903cc982446"
@@ -591,6 +647,7 @@
         "id": "124f91a6acd62da9",
         "type": "inject",
         "z": "e1ad6b94a5c9cb11",
+        "g": "a1mqtt_ha_group01",
         "name": "HA Discovery AUS",
         "props": [
             {
@@ -603,8 +660,8 @@
         "crontab": "",
         "once": false,
         "onceDelay": 0,
-        "x": 130,
-        "y": 700,
+        "x": 170,
+        "y": 260,
         "wires": [
             [
                 "4b4c7903cc982446"
@@ -615,12 +672,13 @@
         "id": "4b4c7903cc982446",
         "type": "function",
         "z": "e1ad6b94a5c9cb11",
+        "g": "a1mqtt_ha_group01",
         "name": "HA Discovery Config",
         "func": "var enable = msg.payload === true;\nconst HA_DEVICE_PREFIX = 'gas_o_meter2';\nconst HA_MANUFACTURER = 'Custom';\nconst HA_MODEL = 'Gas-O-Meter2';\nconst EXPIRE_AFTER_SEC = flow.get('ha_expire_after_sec') || (120 * 60);\n\nvar main = flow.get('mqtt_main_topic') || 'gas-o-meter2';\nvar slug = flow.get('mqtt_topic_slug');\nif (!slug) {\n    slug = String(main).replace(/\\//g, '_').replace(/-/g, '_').replace(/ /g, '');\n    if (!slug.length) { slug = 'device'; }\n}\nvar stateData = main + '/data';\nvar stateRssi = main + '/rssi';\nvar stateNtp = main + '/ntp_status';\nvar stateStatus = main + '/status';\nvar devId = HA_DEVICE_PREFIX + '_' + slug;\nvar deviceName = flow.get('ha_device_name') || main;\n\nfunction uniqueId(tail) {\n    return HA_DEVICE_PREFIX + '_' + slug + '_' + tail;\n}\nfunction haPath(comp, tail) {\n    return 'homeassistant/' + comp + '/' + uniqueId(tail) + '/config';\n}\nfunction devBlock() {\n    return {\n        identifiers: [devId],\n        name: deviceName,\n        manufacturer: HA_MANUFACTURER,\n        model: HA_MODEL\n    };\n}\nfunction availFields() {\n    return {\n        expire_after: EXPIRE_AFTER_SEC,\n        availability_topic: stateStatus,\n        payload_available: 'online',\n        payload_not_available: 'offline'\n    };\n}\nfunction entity(comp, tail, fields, stateTopic) {\n    var payload = Object.assign({}, availFields(), fields, {\n        unique_id: uniqueId(tail),\n        state_topic: stateTopic || stateData,\n        device: devBlock()\n    });\n    return { topic: haPath(comp, tail), payload: payload };\n}\n\nvar configs = [\n    entity('sensor', 'gas', {\n        name: 'Gas Counter',\n        value_template: '{{ value_json.gas }}',\n        unit_of_measurement: 'm\\u00b3',\n        device_class: 'gas',\n        state_class: 'total_increasing',\n        icon: 'mdi:meter-gas'\n    }),\n    entity('sensor', 'battery', {\n        name: 'Battery',\n        value_template: '{{ value_json.battery }}',\n        unit_of_measurement: '%',\n        device_class: 'battery',\n        state_class: 'measurement',\n        icon: 'mdi:battery'\n    }),\n    entity('sensor', 'voltage', {\n        name: 'Battery Voltage',\n        value_template: '{{ value_json.battery_voltage }}',\n        unit_of_measurement: 'V',\n        device_class: 'voltage',\n        state_class: 'measurement',\n        icon: 'mdi:flash'\n    }),\n    entity('binary_sensor', 'battery_low', {\n        name: 'Battery Low',\n        value_template: '{% if value_json.battery_low %}ON{% else %}OFF{% endif %}',\n        payload_on: 'ON',\n        payload_off: 'OFF',\n        device_class: 'battery',\n        icon: 'mdi:battery-alert'\n    }),\n    entity('sensor', 'firmware', {\n        name: 'Firmware',\n        value_template: '{{ value_json.firmware_version }}',\n        icon: 'mdi:information',\n        entity_category: 'diagnostic'\n    }),\n    entity('sensor', 'rssi', {\n        name: 'RSSI',\n        value_template: '{{ value | int }}',\n        unit_of_measurement: 'dBm',\n        device_class: 'signal_strength',\n        state_class: 'measurement',\n        entity_category: 'diagnostic'\n    }, stateRssi),\n    entity('sensor', 'ntp_status', {\n        name: 'Last NTP Sync',\n        device_class: 'timestamp',\n        value_template: '{{ as_datetime(value) }}',\n        entity_category: 'diagnostic'\n    }, stateNtp)\n];\n\nvar messages = [];\nfor (var i = 0; i < configs.length; i++) {\n    messages.push({\n        topic: configs[i].topic,\n        payload: enable ? JSON.stringify(configs[i].payload) : '',\n        retain: true\n    });\n}\nnode.status({ text: enable ? ('AN (' + configs.length + ')') : 'AUS' });\nreturn [messages];",
         "outputs": 1,
         "noerr": 0,
-        "x": 420,
-        "y": 660,
+        "x": 440,
+        "y": 220,
         "wires": [
             [
                 "5c617f5b3f06ab91",
@@ -632,6 +690,7 @@
         "id": "5c617f5b3f06ab91",
         "type": "mqtt out",
         "z": "e1ad6b94a5c9cb11",
+        "g": "a1mqtt_ha_group01",
         "name": "HA Discovery",
         "topic": "",
         "qos": "1",
@@ -642,14 +701,15 @@
         "correl": "",
         "expiry": "",
         "broker": "ba7b128702f022b0",
-        "x": 1280,
-        "y": 640,
+        "x": 820,
+        "y": 180,
         "wires": []
     },
     {
         "id": "c277aa39dd00d2d2",
         "type": "debug",
         "z": "e1ad6b94a5c9cb11",
+        "g": "a1mqtt_ha_group01",
         "name": "HA Discovery Debug",
         "active": true,
         "tosidebar": true,
@@ -659,8 +719,8 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 1260,
-        "y": 700,
+        "x": 800,
+        "y": 240,
         "wires": []
     },
     {
@@ -797,7 +857,7 @@
         "hidden": false
     },
     {
-        "id": "a6920e6b97a3fc11",
+        "id": "95e599512e2fee7e",
         "type": "global-config",
         "env": [],
         "modules": {

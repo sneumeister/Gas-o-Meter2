@@ -115,7 +115,7 @@ Einmaliger Setup-Prozess, um Node-RED mit dem Gas-O-Meter2 zu verbinden. Es hand
 2. `gas-o-meter2-ble-flow.json` auswählen
 3. **Generic BLE Config** öffnen → BLE Scanning aktivieren → Gas-O-Meter2 wählen → Apply
 4. MQTT-Broker konfigurieren (falls verwendet)
-5. **MQTT/HA:** Im Node **„Set flow: MQTT & HA Presets“** nur **`PRESETS`** anpassen (`mqtt_main_topic`, `ha_device_name` = ESP-`hostname`). Nach Deploy: Inject **„MQTT/HA Presets anwenden“** → **„HA Discovery AN“** (siehe Abschnitt **Konfiguration: PRESETS & HA**).
+5. **MQTT/HA:** Im Flow **nach unten scrollen** → orangefarbene **Group „MQTT/HA Setup“** mit gelbem **Comment** (Kurzanleitung). Alternativ: Tab **ℹ️** (Gas-O-Meter2 BLE) öffnen. **„Set flow: MQTT & HA Presets“** → nur **`PRESETS`** anpassen. Nach Deploy: **Presets anwenden** → **HA Discovery AN** (siehe **Konfiguration: PRESETS & HA**).
 6. Deploy
 
 Alle BLE-Nodes („BLE Notify (0xFFF1)“, „BLE Read (0x2A26)“, „BLE Zeit schreiben (0x2A2B)“) verwenden **dieselbe** Generic-BLE-Config (gleiche MAC).
@@ -139,7 +139,7 @@ Alle BLE-Nodes („BLE Notify (0xFFF1)“, „BLE Read (0x2A26)“, „BLE Zeit 
 
 Es gibt **keine** offizielle Node-RED-Vorschrift für MQTT-Topic-Namen. Die Firmware trennt bewusst: **Haupt-Topic** (oft mit Bindestrich, DNS-artig) für MQTT-State-Topics versus **Präfix + Slug** (`gas_o_meter2` + aus dem Haupt-Topic abgeleiteter Slug: `/` und `-` → `_`) für die **Discovery-Object-IDs** (`homeassistant/<component>/gas_o_meter2_<slug>_<tail>/config`). Der BLE-Flow folgt derselben Logik wie WiFi-MQTT (`transfer_mqtt.cpp`); anpassbar über **`PRESETS`** bzw. `flow.mqtt_main_topic` / `flow.ha_device_name`.
 
-**Eine Quelle:** ESP `transfer_mode: mqtt` **oder** dieser BLE-Flow – nicht parallel auf dem **gleichen** `mqtt_main_topic`.
+**ESP-Modus:** `transfer_mode` auf **BLE** – dieser Node-RED-Flow ist nur für BLE. Der ESP publiziert dann kein MQTT selbst; Node-RED übernimmt MQTT/HA aus den BLE-Daten (`mqtt_main_topic` wie in der ESP-Config).
 
 **Hinweis BLE:** RSSI und NTP gibt es am ESP nur im WiFi/MQTT-Pfad. Im BLE-Flow: **`…/ntp_status`** = Platzhalter **`-1`** (Epoch, nie synchronisiert), **`…/timestamp`** = ISO-UTC vom Gateway (Parse BLE Data). WiFi-Firmware: **`ntp_status`** = Unix-Epoch des letzten NTP-Syncs, **`…/timestamp`** = dieselbe Zeit als ISO-UTC.
 
@@ -178,10 +178,12 @@ So erscheint in den geparsten Daten und in MQTT die echte Firmware-Version statt
 
 **Schritte nach Import oder PRESETS-Änderung:**
 
-1. `PRESETS` setzen → **Deploy**
-2. Inject **„MQTT/HA Presets anwenden“** (läuft auch einmal beim Deploy)
-3. Inject **„HA Discovery AN“**
-4. In HA: MQTT-Integration → Geräte neu laden
+1. ESP `transfer_mode` auf **BLE**
+2. **BLE-Node:** Generic BLE Config (Stift) → **MAC** eintragen (Anzeige im Menü). **Alternativ:** ESP „BLE Pairing starten“, **BLE Scanning** an → Gerät wählen → Apply (siehe Abschnitt **Ersteinrichtung**)
+3. `PRESETS` setzen → **Deploy**
+4. Inject **„MQTT/HA Presets anwenden“** (läuft auch einmal beim Deploy)
+5. Inject **„HA Discovery AN“**
+6. In HA: MQTT-Integration → Geräte neu laden
 
 **Availability:** Wie die Firmware: `availability_topic` = `<mqtt_main_topic>/status`, `payload_available` = `online`, `payload_not_available` = `offline`, `expire_after` = 7200. Der BLE-Flow setzt bei jedem Messwert **`…/status` = `online`** (retain). Die ESP-Firmware sendet nach erfolgreichem MQTT **kein** explizites `offline` (nur LWT bei Fehler).
 
