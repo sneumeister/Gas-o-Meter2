@@ -17,7 +17,7 @@ integration_templates/
 
 ## Verwendung
 
-### Zigbee2MQTT
+## [Zigbee2MQTT](./zigbee2mqtt/README.md)
 
 1. Kopiere `zigbee2mqtt/gas-o-meter2.yaml` nach:
 
@@ -29,7 +29,7 @@ integration_templates/
 
 3. Device wird automatisch erkannt (wenn `model_id` im ESP-Code übereinstimmt)
 
-### Node-RED (BLE)
+## [Node-RED (BLE)](./nodered/README.md)
 
 1. Importiere `nodered/gas-o-meter2-ble-flow.json` in Node-RED
 2. Passe die Konfiguration an (BLE-Device-Name, etc.)
