@@ -266,9 +266,9 @@
         "y": 460,
         "wires": [
             [
+                "aa7fbbc73a86a759",
                 "48548b727982ed5f",
-                "633402b8dc849099",
-                "aa7fbbc73a86a759"
+                "633402b8dc849099"
             ]
         ]
     },
@@ -277,7 +277,7 @@
         "type": "function",
         "z": "e1ad6b94a5c9cb11",
         "name": "CTS Write (Zeit-Sync)",
-        "func": "// Current Time 0x2A2B: Exact Time 256 (10 Bytes UTC) → ESP32 time_sync_set_hard()\n// Wird nur bei echtem BLE-Notify ausgeführt (nicht bei BLE Mock).\nconst now = new Date();\nconst buf = Buffer.alloc(10);\nbuf.writeUInt16LE(now.getUTCFullYear(), 0);\nbuf[2] = now.getUTCMonth() + 1;\nbuf[3] = now.getUTCDate();\nbuf[4] = now.getUTCHours();\nbuf[5] = now.getUTCMinutes();\nbuf[6] = now.getUTCSeconds();\nbuf[7] = (now.getUTCDay() === 0) ? 7 : now.getUTCDay();\nbuf[8] = 0;\nbuf[9] = 0;\n// Generic-ble erwartet Key = Characteristic-UUID wie im Config (kurz: 2a2b)\nmsg.payload = { '2a2b': buf.toString('hex') };\nreturn msg;",
+        "func": "// Current Time 0x2A2B: Exact Time 256 (10 Bytes UTC) → ESP32 time_sync_set_hard()\n// Wird nur bei echtem BLE-Notify ausgeführt (nicht bei BLE Mock).\nconst now = new Date();\nconst epoch = Math.floor(now.getTime() / 1000);\nflow.set('ble_time_sync_epoch', epoch);\n\nconst buf = Buffer.alloc(10);\nbuf.writeUInt16LE(now.getUTCFullYear(), 0);\nbuf[2] = now.getUTCMonth() + 1;\nbuf[3] = now.getUTCDate();\nbuf[4] = now.getUTCHours();\nbuf[5] = now.getUTCMinutes();\nbuf[6] = now.getUTCSeconds();\nbuf[7] = (now.getUTCDay() === 0) ? 7 : now.getUTCDay();\nbuf[8] = 0;\nbuf[9] = 0;\nmsg.payload = { '2a2b': buf.toString('hex') };\nreturn msg;",
         "outputs": 1,
         "noerr": 0,
         "x": 880,
@@ -385,7 +385,7 @@
         "type": "function",
         "z": "e1ad6b94a5c9cb11",
         "name": "Einzeltopics MQTT",
-        "func": "// Pro Feld eigene Ausgabe (wie ESP transfer_mqtt)\n// BLE: kein NTP am ESP → ntp_status=-1; timestamp=ISO vom Gateway\nconst base = flow.get('mqtt_main_topic') || 'gas-o-meter2';\nconst p = msg.payload;\nif (typeof p !== 'object' || p === null) return null;\nconst str = (v) => (typeof v === 'object' ? JSON.stringify(v) : String(v));\nconst low = p.battery_low ? 'true' : 'false';\nnode.send([\n  [{ topic: base + '/gas', payload: str(p.gas) }],\n  [{ topic: base + '/battery', payload: str(p.battery) }],\n  [{ topic: base + '/battery_voltage', payload: str(p.battery_voltage) }],\n  [{ topic: base + '/battery_low', payload: low }],\n  [{ topic: base + '/firmware_version', payload: str(p.firmware_version) }],\n  [{ topic: base + '/timestamp', payload: str(p.timestamp) }],\n  [{ topic: base + '/rssi', payload: '0' }],\n  [{ topic: base + '/ntp_status', payload: '-1' }],\n  [{ topic: base + '/status', payload: 'online' }]\n]);\nreturn null;",
+        "func": "// Pro Feld eigene Ausgabe (wie ESP transfer_mqtt)\n// ntp_status: flow.ble_time_sync_epoch nach „CTS Write (Zeit-Sync)“ / „BLE Zeit schreiben“\nconst base = flow.get('mqtt_main_topic') || 'gas-o-meter2';\nconst p = msg.payload;\nif (typeof p !== 'object' || p === null) return null;\nconst str = (v) => (typeof v === 'object' ? JSON.stringify(v) : String(v));\nconst low = p.battery_low ? 'true' : 'false';\nlet ntpEpoch = flow.get('ble_time_sync_epoch');\nif (typeof ntpEpoch !== 'number' || !Number.isFinite(ntpEpoch) || ntpEpoch < 1) {\n  ntpEpoch = -1;\n} else {\n  ntpEpoch = Math.floor(ntpEpoch);\n}\nnode.send([\n  [{ topic: base + '/gas', payload: str(p.gas) }],\n  [{ topic: base + '/battery', payload: str(p.battery) }],\n  [{ topic: base + '/battery_voltage', payload: str(p.battery_voltage) }],\n  [{ topic: base + '/battery_low', payload: low }],\n  [{ topic: base + '/firmware_version', payload: str(p.firmware_version) }],\n  [{ topic: base + '/timestamp', payload: str(p.timestamp) }],\n  [{ topic: base + '/rssi', payload: '0' }],\n  [{ topic: base + '/ntp_status', payload: String(ntpEpoch) }],\n  [{ topic: base + '/status', payload: 'online' }]\n]);\nreturn null;",
         "outputs": 9,
         "timeout": "",
         "noerr": 0,

@@ -115,7 +115,7 @@ Einmaliger Setup-Prozess, um Node-RED mit dem Gas-O-Meter2 zu verbinden. Es hand
 2. `gas-o-meter2-ble-flow.json` auswählen
 3. **Generic BLE Config** öffnen → BLE Scanning aktivieren → Gas-O-Meter2 wählen → Apply
 4. MQTT-Broker konfigurieren (falls verwendet)
-5. **MQTT/HA:** Im Flow **nach unten scrollen** → orangefarbene **Group „MQTT/HA Setup“** mit gelbem **Comment** (Kurzanleitung). Alternativ: Tab **ℹ️** (Gas-O-Meter2 BLE) öffnen. **„Set flow: MQTT & HA Presets“** → nur **`PRESETS`** anpassen. Nach Deploy: **Presets anwenden** → **HA Discovery AN** (siehe **Konfiguration: PRESETS & HA**).
+5. **MQTT/HA:** Oben im Flow die orangefarbene **Group „MQTT/HA Setup – Comment = Kurzanleitung“** mit **„MQTT/HA Kurzanleitung (Doppelklick)“**. Alternativ: Tab **ℹ️** (Gas-O-Meter2 BLE) öffnen. **„Set flow: MQTT & HA Presets“** → nur **`PRESETS`** anpassen. Nach Deploy: **„MQTT/HA Presets anwenden (einmal)“** → **„HA Discovery AN“** (siehe **Konfiguration: PRESETS & HA**).
 6. Deploy
 
 Alle BLE-Nodes („BLE Notify (0xFFF1)“, „BLE Read (0x2A26)“, „BLE Zeit schreiben (0x2A2B)“) verwenden **dieselbe** Generic-BLE-Config (gleiche MAC).
@@ -130,37 +130,49 @@ Alle BLE-Nodes („BLE Notify (0xFFF1)“, „BLE Read (0x2A26)“, „BLE Zeit 
 
 ### Ablauf (vereinfacht)
 
-1. **Beim Deploy:** „BLE Scanning starten“ (einmal) startet das Scanning.
-2. **Alle 2 s:** „BLE Notify Trigger“ schickt je nach Status entweder **Connect** oder **Subscribe 0xFFF1** an „BLE Notify (0xFFF1)“ (siehe BLE-Status-Handling).
-3. **Bei Notify:** „BLE Notify“ liefert die Messdaten → **On Notify (0xFFF1)** speichert die Nachricht und löst einen Read 0x2A26 aus → **BLE Read (0x2A26)** führt den Read aus → **On Read Result (0x2A26)** hängt die Firmware an und schickt an Parse BLE Data, Raw BLE und CTS Write.
-4. **Parse BLE Data** erzeugt das einheitliche Payload (gas, battery, …) → MQTT, Dashboard, optional HA Discovery.
+1. **Beim Deploy – automatisch, ohne Klick:** Der Inject **„BLE Auto-Scanning starten (1x automatisch)“** löst sich **einmal** ca. 0,5 s nach jedem Deploy selbst aus (hochgestellte **1** = „Inject once after deploy“). Er sendet `scanStart` an **„BLE Notify (0xFFF1)“** und startet damit das BLE-Scanning – **du musst den Node nicht manuell anklicken.**
+2. **Alle 2 s:** **„BLE Notify Trigger (alle 2 s)“** → **„Nur bei sichtbarem Gerät“** schickt je nach Status entweder **Connect** oder **Subscribe 0xFFF1** an **„BLE Notify (0xFFF1)“** (siehe BLE-Status-Handling).
+3. **Bei Notify:** **„BLE Notify (0xFFF1)“** liefert die Messdaten → **„On Notify (0xFFF1)“** speichert die Nachricht und löst einen Read 0x2A26 aus → **„BLE Read (0x2A26)“** → **„On Read Result (0x2A26)“** hängt die Firmware an und schickt an **„Parse BLE Data“**, **„Raw BLE“** und **„CTS Write (Zeit-Sync)“** (**„BLE Zeit schreiben (0x2A2B)“**).
+4. **„Parse BLE Data“** erzeugt das einheitliche Payload (gas, battery, …) → **„MQTT Publisher“** / **„Einzeltopics MQTT“**, Dashboard, optional HA Discovery.
 
-### MQTT-Topics und „Node-RED-Konvention“
+### MQTT-Topics
 
-Es gibt **keine** offizielle Node-RED-Vorschrift für MQTT-Topic-Namen. Die Firmware trennt bewusst: **Haupt-Topic** (oft mit Bindestrich, DNS-artig) für MQTT-State-Topics versus **Präfix + Slug** (`gas_o_meter2` + aus dem Haupt-Topic abgeleiteter Slug: `/` und `-` → `_`) für die **Discovery-Object-IDs** (`homeassistant/<component>/gas_o_meter2_<slug>_<tail>/config`). Der BLE-Flow folgt derselben Logik wie WiFi-MQTT (`transfer_mqtt.cpp`); anpassbar über **`PRESETS`** bzw. `flow.mqtt_main_topic` / `flow.ha_device_name`.
+**Namensschema** (wie `transfer_mqtt.cpp`, Werte aus **`PRESETS`**):
 
-**ESP-Modus:** `transfer_mode` auf **BLE** – dieser Node-RED-Flow ist nur für BLE. Der ESP publiziert dann kein MQTT selbst; Node-RED übernimmt MQTT/HA aus den BLE-Daten (`mqtt_main_topic` wie in der ESP-Config).
+- Live-Daten: `<mqtt_main_topic>/data`, `<mqtt_main_topic>/gas`, … sowie `<mqtt_main_topic>/status`
+- HA Discovery: `homeassistant/<typ>/gas_o_meter2_<slug>_<name>/config` — der Slug kommt aus `mqtt_main_topic` (`/` und `-` → `_`)
 
-**Hinweis BLE:** RSSI und NTP gibt es am ESP nur im WiFi/MQTT-Pfad. Im BLE-Flow: **`…/ntp_status`** = Platzhalter **`-1`** (Epoch, nie synchronisiert), **`…/timestamp`** = ISO-UTC vom Gateway (Parse BLE Data). WiFi-Firmware: **`ntp_status`** = Unix-Epoch des letzten NTP-Syncs, **`…/timestamp`** = dieselbe Zeit als ISO-UTC.
+**Was kommt wohin?** Der ESP liefert per BLE nur Zählerstand und Batterie (`0xFFF1`). **Node-RED** schreibt den Rest auf MQTT, damit Home Assistant dieselben Entitäten wie bei direktem ESP-MQTT findet:
+
+| MQTT-Topic (Auszug) | Quelle im BLE-Flow |
+| ------------------- | ------------------ |
+| `…/gas`, `…/battery`, `…/battery_voltage`, `…/battery_low` | aus BLE-Notify → **„Parse BLE Data“** |
+| `…/firmware_version` | GATT-Read **0x2A26** (nach jedem Notify) |
+| `…/timestamp` | **Uhrzeit des Gateways** (ISO-UTC in **„Parse BLE Data“**), nicht vom ESP |
+| `…/rssi` | fest **`0`** (wird per BLE nicht übertragen) |
+| `…/ntp_status` | Unix-Epoch der zuletzt per **„CTS Write (Zeit-Sync)“** / **„BLE Zeit schreiben (0x2A2B)“** gesendeten Zeit (`flow.ble_time_sync_epoch`), sonst **`-1`** |
+| `…/status` | **`online`** bei jedem erfolgreichen Durchlauf (**„Einzeltopics MQTT“**) |
+
+**`ntp_status`** bedeutet hier: „Gateway hat zuletzt per BLE-Zeit-Write eine UTC-Zeit an den ESP geschickt“ (nicht NTP/WiFi am ESP). **`timestamp`** bleibt die ISO-Zeit beim Parsen am Gateway.
 
 ### BLE-Status-Handling (weniger Debug-Meldungen)
 
 Die Library `node-red-contrib-generic-ble` wirft **„Not yet connected“**, wenn ein **Subscribe** ausgelöst wird, obwohl noch keine Verbindung besteht. Um diese Meldungen zu reduzieren, macht der Flow Folgendes:
 
-- **„Nur bei sichtbarem Gerät triggern“** (alle 2 s):
+- **„Nur bei sichtbarem Gerät“** (nach **„BLE Notify Trigger (alle 2 s)“**):
   - Status **missing** → es wird nichts gesendet.
-  - Status **disconnected** oder **connecting** → es wird nur **Connect** an den BLE-Node geschickt (kein Subscribe → kein „Not yet connected“).
+  - Status **disconnected** oder **connecting** → es wird nur **Connect** an **„BLE Notify (0xFFF1)“** geschickt (kein Subscribe → kein „Not yet connected“).
   - Status **connected** → es wird **Subscribe 0xFFF1** geschickt; dann ist die Verbindung bereits da, der Subscribe gelingt.
 
-Ein **Status-Node** liest den aktuellen Status von „BLE Notify (0xFFF1)“ und speichert ihn in `flow.bleNotifyStatus`. Die Function entscheidet daran, ob Connect oder Subscribe gesendet wird. So entstehen deutlich weniger „Not yet connected“-Meldungen im Debug.
+**„BLE-Status“** liest den aktuellen Status von **„BLE Notify (0xFFF1)“**; **„BLE-Status speichern“** schreibt ihn nach `flow.bleNotifyStatus`. **„Nur bei sichtbarem Gerät“** entscheidet daran, ob Connect oder Subscribe gesendet wird. So entstehen deutlich weniger „Not yet connected“-Meldungen im Debug.
 
 ### Firmware-Abfrage (0x2A26)
 
 Die Firmware-Version steht in der Characteristic **0x2A26** (Read only). Der Flow holt sie **nach** jedem Notify:
 
-1. **On Notify (0xFFF1):** Erkennt Notify-Daten (0xFFF1), speichert die Nachricht in `flow.lastNotifyMsg` und gibt eine Nachricht `{ topic: '2a26' }` aus.
-2. **BLE Read (0x2A26):** Erhält diese Nachricht, führt den GATT-Read 0x2A26 aus und gibt das Ergebnis aus.
-3. **On Read Result (0x2A26):** Liest den Firmware-String aus dem Payload, holt die gespeicherte Notify-Nachricht, setzt `msg.firmware` und reicht die Nachricht an Parse BLE Data, Raw BLE und CTS Write weiter.
+1. **„On Notify (0xFFF1)“:** Erkennt Notify-Daten (0xFFF1), speichert die Nachricht in `flow.lastNotifyMsg` und gibt eine Nachricht `{ topic: '2a26' }` aus.
+2. **„BLE Read (0x2A26)“:** Erhält diese Nachricht, führt den GATT-Read 0x2A26 aus und gibt das Ergebnis aus.
+3. **„On Read Result (0x2A26)“:** Liest den Firmware-String aus dem Payload, holt die gespeicherte Notify-Nachricht, setzt `msg.firmware` und reicht die Nachricht an **„Parse BLE Data“**, **„Raw BLE“** und **„CTS Write (Zeit-Sync)“** weiter.
 
 So erscheint in den geparsten Daten und in MQTT die echte Firmware-Version statt „unknown“.
 
@@ -181,7 +193,7 @@ So erscheint in den geparsten Daten und in MQTT die echte Firmware-Version statt
 1. ESP `transfer_mode` auf **BLE**
 2. **BLE-Node:** Generic BLE Config (Stift) → **MAC** eintragen (Anzeige im Menü). **Alternativ:** ESP „BLE Pairing starten“, **BLE Scanning** an → Gerät wählen → Apply (siehe Abschnitt **Ersteinrichtung**)
 3. `PRESETS` setzen → **Deploy**
-4. Inject **„MQTT/HA Presets anwenden“** (läuft auch einmal beim Deploy)
+4. Inject **„MQTT/HA Presets anwenden (einmal)“** (läuft auch einmal beim Deploy)
 5. Inject **„HA Discovery AN“**
 6. In HA: MQTT-Integration → Geräte neu laden
 
@@ -189,15 +201,15 @@ So erscheint in den geparsten Daten und in MQTT die echte Firmware-Version statt
 
 **Migration:** Alte Discovery mit falschem `unique_id` (z. B. `…_gas` statt `gas_o_meter2_<slug>_gas`) oder ohne `expire_after`/`availability_topic` am Broker unter `homeassistant/.../config` löschen, dann Discovery erneut AN.
 
-**BLE-Besonderheiten:** `ntp_status` = `-1` (kein NTP am ESP), `rssi` = `0`, `timestamp` = ISO-UTC vom Gateway (Parse BLE Data). Spannung in **V** (`bv` vom ESP in mV ÷ 1000).
+**Spannung:** Der ESP sendet `bv` in **mV**; **„Parse BLE Data“** rechnet in **V** um (wie ESP-MQTT).
 
 ### Home Assistant Auto-Discovery
 
 - **HA Discovery AN / AUS:** Zwei Inject-Nodes schalten die Discovery ein oder aus (Payload `true` / `false`).
-- **HA Discovery Config:** Sieben Entities wie `transfer_mqtt.cpp`: Gas, Battery, Spannung (**V**), Battery Low (ON/OFF-Template), Firmware (`unique_id`-Tail `firmware`), RSSI, NTP-Status (`device_class: timestamp`, `as_datetime(value)`). Discovery-Topics: `homeassistant/<component>/gas_o_meter2_<slug>_<tail>/config`; **`unique_id`** = `gas_o_meter2_<slug>_<tail>`. Pro Entity: **`expire_after`**, **`availability_topic`** → `<mqtt_main_topic>/status`. Nach **PRESETS**-Änderung: **Presets anwenden** → **HA Discovery AN** (ggf. vorher AUS).
-- **HA Discovery** (MQTT out): Sendet retained QoS-1-Configs an den Broker.
+- **„HA Discovery Config“:** Sieben Entities wie `transfer_mqtt.cpp`: Gas, Battery, Spannung (**V**), Battery Low (ON/OFF-Template), Firmware (`unique_id`-Tail `firmware`), RSSI, NTP-Status (`device_class: timestamp`, `as_datetime(value)`). Discovery-Topics: `homeassistant/<component>/gas_o_meter2_<slug>_<tail>/config`; **`unique_id`** = `gas_o_meter2_<slug>_<tail>`. Pro Entity: **`expire_after`**, **`availability_topic`** → `<mqtt_main_topic>/status`. Nach **PRESETS**-Änderung: **„MQTT/HA Presets anwenden (einmal)“** → **„HA Discovery AN“** (ggf. vorher **„HA Discovery AUS“**).
+- **„HA Discovery“** (MQTT out): Sendet retained QoS-1-Configs an den Broker.
 
-Nach „HA Discovery AN“ erscheinen die Entities in Home Assistant. Aggregiertes JSON: `<mqtt_main_topic>/data`; Einzeltopics inkl. `<mqtt_main_topic>/status` = `online` bei jedem BLE-Update.
+Nach **„HA Discovery AN“** erscheinen die Entities in Home Assistant. Aggregiertes JSON über **„MQTT Publisher“** / **„Topic: `<main>/data`“**; Einzeltopics über **„Einzeltopics MQTT“** → **„MQTT Einzeltopics“** inkl. `<mqtt_main_topic>/status` = `online` bei jedem BLE-Update.
 
 ---
 
