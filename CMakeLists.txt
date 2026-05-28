@@ -55,10 +55,5 @@ message(NOTICE " ")
 message(NOTICE "==> include($ENV{IDF_PATH}/tools/cmake/project.cmake)")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
-# Für Littlefs gemaess https://github.com/joltwallet/esp_littlefs
-#get_filename_component(configName "${CMAKE_BINARY_DIR}" NAME)
-#list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_SOURCE_DIR}/.pio/libdeps/${configName}/esp_littlefs")
-#message(NOTICE "==> LittelFS ${CMAKE_SOURCE_DIR}/.pio/libdeps/${configName}/esp_littlefs")
-
 # 6. Projekt definieren
 project(${extracted_name} VERSION "${extracted_version}")
