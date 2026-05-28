@@ -115,7 +115,7 @@ Einmaliger Setup-Prozess, um Node-RED mit dem Gas-O-Meter2 zu verbinden. Es hand
 2. `gas-o-meter2-ble-flow.json` auswählen
 3. **Generic BLE Config** öffnen → BLE Scanning aktivieren → Gas-O-Meter2 wählen → Apply
 4. MQTT-Broker konfigurieren (falls verwendet)
-5. **Optional:** Im Flow den Node **„Set flow: MQTT & HA Presets“** öffnen und oben im Code das Objekt **`PRESETS`** anpassen (`mqtt_main_topic`, `ha_device_prefix`, Gerätename/Hersteller/Modell). Beim Deploy setzt der Inject **„MQTT/HA Presets anwenden (einmal)“** die Werte in `flow.*` (inkl. `mqtt_topic_slug` für HA-Topic-Pfade). So entspricht die BLE-Route der gleichen Topic-/Discovery-Struktur wie **MQTT via WiFi** in der Firmware (`transfer_mqtt.cpp` / `mqtt_config.h`).
+5. **MQTT/HA:** Im Node **„Set flow: MQTT & HA Presets“** nur **`PRESETS`** anpassen (`mqtt_main_topic`, `ha_device_name` = ESP-`hostname`). Nach Deploy: Inject **„MQTT/HA Presets anwenden“** → **„HA Discovery AN“** (siehe Abschnitt **Konfiguration: PRESETS & HA**).
 6. Deploy
 
 Alle BLE-Nodes („BLE Notify (0xFFF1)“, „BLE Read (0x2A26)“, „BLE Zeit schreiben (0x2A2B)“) verwenden **dieselbe** Generic-BLE-Config (gleiche MAC).
@@ -137,7 +137,9 @@ Alle BLE-Nodes („BLE Notify (0xFFF1)“, „BLE Read (0x2A26)“, „BLE Zeit 
 
 ### MQTT-Topics und „Node-RED-Konvention“
 
-Es gibt **keine** offizielle Node-RED-Vorschrift für MQTT-Topic-Namen. Die frühere feste Verdrahtung (`gas-o-meter2/data`, `gas_o_meter2_*` in HA-Discovery) stammte aus diesem Projektbeispiel und gängigen HA-Discovery-Mustern (`homeassistant/<component>/<object_id>/config`). Die Firmware trennt bewusst: **Haupt-Topic** (oft mit Bindestrich, DNS-artig) für MQTT-State-Topics versus **Präfix + Slug** (`MQTT_HA_DEVICE_TOPIC_PREFIX` + aus dem Haupt-Topic abgeleiteter Slug mit Unterstrichen) für die **Discovery-Object-IDs**. Der BLE-Flow folgt jetzt derselben Logik wie WiFi-MQTT; anpassbar über **`PRESETS`** bzw. `flow.mqtt_main_topic` / `flow.ha_device_prefix`.
+Es gibt **keine** offizielle Node-RED-Vorschrift für MQTT-Topic-Namen. Die Firmware trennt bewusst: **Haupt-Topic** (oft mit Bindestrich, DNS-artig) für MQTT-State-Topics versus **Präfix + Slug** (`gas_o_meter2` + aus dem Haupt-Topic abgeleiteter Slug: `/` und `-` → `_`) für die **Discovery-Object-IDs** (`homeassistant/<component>/gas_o_meter2_<slug>_<tail>/config`). Der BLE-Flow folgt derselben Logik wie WiFi-MQTT (`transfer_mqtt.cpp`); anpassbar über **`PRESETS`** bzw. `flow.mqtt_main_topic` / `flow.ha_device_name`.
+
+**Eine Quelle:** ESP `transfer_mode: mqtt` **oder** dieser BLE-Flow – nicht parallel auf dem **gleichen** `mqtt_main_topic`.
 
 **Hinweis BLE:** RSSI und NTP gibt es am ESP nur im WiFi/MQTT-Pfad. Im BLE-Flow: **`…/ntp_status`** = Platzhalter **`-1`** (Epoch, nie synchronisiert), **`…/timestamp`** = ISO-UTC vom Gateway (Parse BLE Data). WiFi-Firmware: **`ntp_status`** = Unix-Epoch des letzten NTP-Syncs, **`…/timestamp`** = dieselbe Zeit als ISO-UTC.
 
@@ -162,13 +164,38 @@ Die Firmware-Version steht in der Characteristic **0x2A26** (Read only). Der Flo
 
 So erscheint in den geparsten Daten und in MQTT die echte Firmware-Version statt „unknown“.
 
+### Konfiguration: PRESETS & HA
+
+| Was | Wo | Anpassen? |
+| --- | --- | --- |
+| **`mqtt_main_topic`** | Node **Set flow: MQTT & HA Presets** → `PRESETS` | Ja (= ESP `config.json` → `mqtt_main_topic`) |
+| **`ha_device_name`** | dort → `PRESETS` | Ja (= ESP `hostname`, max. 26 Zeichen) |
+| **`HA_DEVICE_PREFIX`** (`gas_o_meter2`) | Function-Code (Presets + HA Discovery) | Nein – wie `MQTT_HA_DEVICE_TOPIC_PREFIX` in `mqtt_config.h` |
+| **`HA_MANUFACTURER`** / **`HA_MODEL`** | dort | Nein – wie `MQTT_HA_MANUFACTURER` / `MQTT_HA_MODEL` (Zigbee-Converter: `vendor`/`model`) |
+| **`EXPIRE_AFTER_SEC`** (7200) | dort | Nein – wie `MQTT_HA_EXPIRE_AFTER_SEC` |
+
+**Slug:** Aus `mqtt_main_topic` werden `/`, `-` und Leerzeichen zu `_` (z. B. `gas-o-meter2` → `gas_o_meter2`).
+
+**Schritte nach Import oder PRESETS-Änderung:**
+
+1. `PRESETS` setzen → **Deploy**
+2. Inject **„MQTT/HA Presets anwenden“** (läuft auch einmal beim Deploy)
+3. Inject **„HA Discovery AN“**
+4. In HA: MQTT-Integration → Geräte neu laden
+
+**Availability:** Wie die Firmware: `availability_topic` = `<mqtt_main_topic>/status`, `payload_available` = `online`, `payload_not_available` = `offline`, `expire_after` = 7200. Der BLE-Flow setzt bei jedem Messwert **`…/status` = `online`** (retain). Die ESP-Firmware sendet nach erfolgreichem MQTT **kein** explizites `offline` (nur LWT bei Fehler).
+
+**Migration:** Alte Discovery mit falschem `unique_id` (z. B. `…_gas` statt `gas_o_meter2_<slug>_gas`) oder ohne `expire_after`/`availability_topic` am Broker unter `homeassistant/.../config` löschen, dann Discovery erneut AN.
+
+**BLE-Besonderheiten:** `ntp_status` = `-1` (kein NTP am ESP), `rssi` = `0`, `timestamp` = ISO-UTC vom Gateway (Parse BLE Data). Spannung in **V** (`bv` vom ESP in mV ÷ 1000).
+
 ### Home Assistant Auto-Discovery
 
 - **HA Discovery AN / AUS:** Zwei Inject-Nodes schalten die Discovery ein oder aus (Payload `true` / `false`).
-- **HA Discovery Config:** Baut die MQTT-Config-Nachrichten wie die Firmware: sieben Entities (Gas, Battery, Spannung, Battery Low mit ON/OFF-Template, Firmware, RSSI, NTP-Status). Discovery-Topics haben die Form `homeassistant/<component>/<ha_device_prefix>_<slug>_<tail>/config`; `unique_id` und `state_topic` nutzen **`flow.mqtt_main_topic`** (Slug für Pfade kommt aus den Presets). Nach **Presets ändern** zuerst **„MQTT/HA Presets anwenden“** triggern (oder neu deployen), dann **HA Discovery AN**.
-- **HA Discovery** (MQTT out): Sendet die Nachrichten an den konfigurierten MQTT-Broker.
+- **HA Discovery Config:** Sieben Entities wie `transfer_mqtt.cpp`: Gas, Battery, Spannung (**V**), Battery Low (ON/OFF-Template), Firmware (`unique_id`-Tail `firmware`), RSSI, NTP-Status (`device_class: timestamp`, `as_datetime(value)`). Discovery-Topics: `homeassistant/<component>/gas_o_meter2_<slug>_<tail>/config`; **`unique_id`** = `gas_o_meter2_<slug>_<tail>`. Pro Entity: **`expire_after`**, **`availability_topic`** → `<mqtt_main_topic>/status`. Nach **PRESETS**-Änderung: **Presets anwenden** → **HA Discovery AN** (ggf. vorher AUS).
+- **HA Discovery** (MQTT out): Sendet retained QoS-1-Configs an den Broker.
 
-Nach „HA Discovery AN“ erscheinen die Entities in Home Assistant, sofern der MQTT-Broker mit HA verbunden ist. Aggregiertes JSON geht an `<mqtt_main_topic>/data`; RSSI/NTP nutzen im BLE-Fall die separaten Topics mit Platzhalter-Payloads (siehe oben).
+Nach „HA Discovery AN“ erscheinen die Entities in Home Assistant. Aggregiertes JSON: `<mqtt_main_topic>/data`; Einzeltopics inkl. `<mqtt_main_topic>/status` = `online` bei jedem BLE-Update.
 
 ---
 
