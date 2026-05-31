@@ -2862,7 +2862,7 @@ static int read_post_data(httpd_req_t *req, char* buffer, size_t max_len) {
     return received;
 }
 
-static const size_t HTTP_ACTION_POST_MAX = 512;
+static const size_t HTTP_ACTION_POST_MAX = 1024;
 
 static esp_err_t http_send_401_unauthorized(httpd_req_t* req) {
     httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"GasOMeterKonfiguration\"");

@@ -880,8 +880,11 @@ function saveConfig() {
                 }
             }
 
-            // Nach Save: keine Parameter-Sektionen mehr bis zum Neuladen (Verwechslung vermeiden)
-            configJustSaved = true;
+            // Gespeicherten Modus synchronisieren, damit die passende Parameter-Sektion sichtbar bleibt
+            const transferModeSel = document.getElementById('transfer_mode');
+            if (transferModeSel) {
+                savedTransferMode = transferModeSel.value;
+            }
             toggleTransferConfig();
         } else {
             throw new Error(data.message || 'Unbekannter Fehler');
@@ -1237,10 +1240,9 @@ function showRebootProgress(hostnameChanged, wifiChanged, newHostname) {
     setTimeout(tryReload, initialCountdown * 1000);
 }
 
-// Transfer-Konfiguration: Sektion nur für den beim Laden gespeicherten Modus;
-// nach Dropdown-Änderung (ohne Save) keine Parameter-Sektion; nach Save beide aus.
-var savedTransferMode = '';   // beim DOMContentLoaded = Dropdown-Wert (gespeicherter Modus)
-var configJustSaved = false;  // nach erfolgreichem Save true → beide Sektionen aus bis Reload
+// Transfer-Konfiguration: Sektion nur für den gespeicherten Modus;
+// nach Dropdown-Änderung (ohne Save) keine Parameter-Sektion.
+var savedTransferMode = '';   // beim DOMContentLoaded bzw. nach Save = Dropdown-Wert (gespeicherter Modus)
 
 function toggleTransferConfig() {
     const transferMode = document.getElementById('transfer_mode').value;
@@ -1286,12 +1288,6 @@ function toggleTransferConfig() {
         }
     }
 
-    if (configJustSaved) {
-        hideZigbee();
-        hideBle();
-        hideMqtt();
-        return;
-    }
     if (transferMode === savedTransferMode) {
         if (transferMode === 'zigbee') {
             zigbeeSection.style.display = 'block';
@@ -1594,16 +1590,17 @@ function getConfigAuthHeader() {
 }
 
 function postTransferAction(url, fields) {
-    const formData = new FormData();
+    const params = new URLSearchParams();
     Object.keys(fields).forEach(function(key) {
-        formData.append(key, fields[key]);
+        params.append(key, fields[key]);
     });
     return fetch(url, {
         method: 'POST',
         headers: {
-            'Authorization': getConfigAuthHeader()
+            'Authorization': getConfigAuthHeader(),
+            'Content-Type': 'application/x-www-form-urlencoded'
         },
-        body: formData
+        body: params.toString()
     });
 }
 
@@ -1767,7 +1764,6 @@ function blePairing() {
 document.addEventListener('DOMContentLoaded', function() {
     const sel = document.getElementById('transfer_mode');
     if (sel) savedTransferMode = sel.value;
-    configJustSaved = false;
     toggleTransferConfig();
     applyMqttTestButtonState();
 });
