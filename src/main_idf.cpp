@@ -35,6 +35,7 @@
 #include "transfer_ble.h"
 #include "ble_config.h"
 #include "mqtt_config.h"
+#include "transfer_mqtt.h"
 #include "wifi_scan_config.h"
 #include "wifi_manager.h"
 #include "time_sync.h"
@@ -2598,6 +2599,9 @@ const char* processor_get_value(const char* var) {
     if (strcmp(var, "wifi_status") == 0) {
         return wifi_is_connected() ? "Verbunden" : "Nicht verbunden";
     }
+    if (strcmp(var, "wifi_sta_connected") == 0) {
+        return wifi_is_connected() ? "1" : "0";
+    }
     
     // Unbekannte Variable - leeren String zurückgeben
     return "";
@@ -2856,6 +2860,47 @@ static int read_post_data(httpd_req_t *req, char* buffer, size_t max_len) {
     
     buffer[received] = '\0';
     return received;
+}
+
+static const size_t HTTP_ACTION_POST_MAX = 512;
+
+static esp_err_t http_send_401_unauthorized(httpd_req_t* req) {
+    httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"GasOMeterKonfiguration\"");
+    httpd_resp_set_status(req, "401 Unauthorized");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_FAIL;
+}
+
+static bool http_require_config_auth(httpd_req_t* req) {
+    return check_basic_auth(req, "admin", config_rtc.adminpass);
+}
+
+static int http_read_post_form(httpd_req_t* req, char* post_data, size_t post_cap) {
+    if (req->content_len == 0 || req->content_len >= post_cap) {
+        return -1;
+    }
+    return read_post_data(req, post_data, post_cap);
+}
+
+/** true, wenn config_rtc.transfer_mode dem erwarteten Modus entspricht (zigbee/ble/mqtt). */
+static bool http_transfer_mode_is(const char* expected_mode) {
+    return expected_mode != nullptr && strcmp(config_rtc.transfer_mode, expected_mode) == 0;
+}
+
+/** 400 JSON, wenn falscher Modus — verhindert Status/Aktionen eines anderen Stacks (kein Crash, aber irreführende RTC-Daten). */
+static esp_err_t http_reject_unless_transfer_mode(httpd_req_t* req, const char* expected_mode,
+                                                    const char* label) {
+    if (http_transfer_mode_is(expected_mode)) {
+        return ESP_OK;
+    }
+    httpd_resp_set_status(req, "400 Bad Request");
+    httpd_resp_set_type(req, "application/json");
+    char json[128];
+    snprintf(json, sizeof(json),
+             "{\"error\":\"%s ist nicht der aktive Uebertragungsmodus (gespeichert: %s)\"}", label,
+             config_rtc.transfer_mode);
+    httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    return ESP_FAIL;
 }
 
 // Hilfsfunktion: URL-dekodieren (vereinfacht)
@@ -3506,12 +3551,7 @@ static esp_err_t pulse_counter_api_handler(httpd_req_t *req) {
 // Handler für /zigbee/status (GET)
 static esp_err_t zigbee_status_handler(httpd_req_t *req) {
     last_web_activity_us = esp_timer_get_time();
-    
-    // Prüfe, ob ZigBee aktiv ist
-    if (strcmp(config_rtc.transfer_mode, "zigbee") != 0) {
-        httpd_resp_set_status(req, "400 Bad Request");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req, "{\"error\":\"ZigBee ist nicht aktiv\"}", HTTPD_RESP_USE_STRLEN);
+    if (http_reject_unless_transfer_mode(req, TRANSFER_MODE_ZIGBEE, "ZigBee") != ESP_OK) {
         return ESP_OK;
     }
     
@@ -3531,33 +3571,20 @@ static esp_err_t zigbee_status_handler(httpd_req_t *req) {
 
 // Handler für /zigbee/action (POST)
 static esp_err_t zigbee_action_handler(httpd_req_t *req) {
+    if (!http_require_config_auth(req)) {
+        return http_send_401_unauthorized(req);
+    }
     last_web_activity_us = esp_timer_get_time();
-    
-    // Prüfe, ob ZigBee aktiv ist
-    if (strcmp(config_rtc.transfer_mode, "zigbee") != 0) {
-        httpd_resp_set_status(req, "400 Bad Request");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_send(req, "Fehler: ZigBee ist nicht aktiv", HTTPD_RESP_USE_STRLEN);
+    if (http_reject_unless_transfer_mode(req, TRANSFER_MODE_ZIGBEE, "ZigBee") != ESP_OK) {
         return ESP_OK;
     }
     
-    // POST-Daten lesen
-    const size_t MAX_POST_SIZE = 512;
-    size_t content_len = req->content_len;
-    
-    if (content_len == 0 || content_len > MAX_POST_SIZE) {
-        httpd_resp_set_status(req, "400 Bad Request");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_send(req, "Fehler: POST-Daten ungültig", HTTPD_RESP_USE_STRLEN);
-        return ESP_OK;
-    }
-    
-    char post_data[512];
-    int len = read_post_data(req, post_data, sizeof(post_data));
+    char post_data[HTTP_ACTION_POST_MAX];
+    int len = http_read_post_form(req, post_data, sizeof(post_data));
     if (len < 0) {
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_set_type(req, "text/plain");
-        httpd_resp_send(req, "Fehler: POST-Daten konnten nicht gelesen werden", HTTPD_RESP_USE_STRLEN);
+        httpd_resp_send(req, "Fehler: POST-Daten ungültig", HTTPD_RESP_USE_STRLEN);
         return ESP_OK;
     }
     
@@ -3617,12 +3644,90 @@ static esp_err_t zigbee_action_handler(httpd_req_t *req) {
     }
 }
 
+// Handler für /mqtt/action (POST)
+static esp_err_t mqtt_action_handler(httpd_req_t* req) {
+    if (!http_require_config_auth(req)) {
+        return http_send_401_unauthorized(req);
+    }
+    last_web_activity_us = esp_timer_get_time();
+    if (http_reject_unless_transfer_mode(req, TRANSFER_MODE_MQTT, "MQTT") != ESP_OK) {
+        return ESP_OK;
+    }
+
+    char post_data[HTTP_ACTION_POST_MAX];
+    int len = http_read_post_form(req, post_data, sizeof(post_data));
+    if (len < 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"POST-Daten ungueltig\"}",
+                        HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    char cmd[32] = "";
+    if (!get_post_param(post_data, len, "cmd", cmd, sizeof(cmd)) || strcmp(cmd, "servertest") != 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"Parameter cmd=servertest erforderlich\"}",
+                        HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    char host[MQTT_HOST_MAX_LEN + 1] = "";
+    char port_str[8] = "";
+    char username[MQTT_USERNAME_MAX_LEN + 1] = "";
+    char password[MQTT_PASSWORD_MAX_LEN + 1] = "";
+
+    if (!get_post_param(post_data, len, "host", host, sizeof(host))) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"Parameter host erforderlich\"}",
+                        HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+    if (!get_post_param(post_data, len, "port", port_str, sizeof(port_str))) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"Parameter port erforderlich\"}",
+                        HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    get_post_param(post_data, len, "username", username, sizeof(username));
+    get_post_param(post_data, len, "password", password, sizeof(password));
+
+    int port_val = atoi(port_str);
+    if (port_val < 1 || port_val > 65535) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"MQTT Port ungueltig (1-65535)\"}",
+                        HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    char json_response[256];
+    transfer_mqtt_test_connection(host, (uint16_t)port_val, username, password, json_response,
+                                  sizeof(json_response));
+
+    httpd_resp_set_type(req, "application/json");
+    if (strstr(json_response, "\"status\":\"ok\"") != nullptr) {
+        httpd_resp_send(req, json_response, HTTPD_RESP_USE_STRLEN);
+    } else {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_send(req, json_response, HTTPD_RESP_USE_STRLEN);
+    }
+    return ESP_OK;
+}
+
 // ============================================
 // BLE-HTTP-Handler
 // ============================================
 
 static esp_err_t ble_status_handler(httpd_req_t *req) {
     last_web_activity_us = esp_timer_get_time();
+    if (http_reject_unless_transfer_mode(req, TRANSFER_MODE_BLE, "BLE") != ESP_OK) {
+        return ESP_OK;
+    }
     httpd_resp_set_type(req, "application/json");
     char json_buf[128];
     transfer_ble_get_status_json(json_buf, sizeof(json_buf));
@@ -3638,8 +3743,35 @@ static void ble_pairing_task(void *pv) {
     vTaskDelete(NULL);
 }
 
-static esp_err_t ble_pairing_handler(httpd_req_t *req) {
+static esp_err_t ble_action_handler(httpd_req_t *req) {
+    if (!http_require_config_auth(req)) {
+        return http_send_401_unauthorized(req);
+    }
     last_web_activity_us = esp_timer_get_time();
+    if (http_reject_unless_transfer_mode(req, TRANSFER_MODE_BLE, "BLE") != ESP_OK) {
+        return ESP_OK;
+    }
+
+    char post_data[HTTP_ACTION_POST_MAX];
+    int len = http_read_post_form(req, post_data, sizeof(post_data));
+    if (len < 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"POST-Daten ungueltig\"}",
+                        HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    char cmd[32] = "";
+    if (!get_post_param(post_data, len, "cmd", cmd, sizeof(cmd)) ||
+        strcmp(cmd, "start-pairing") != 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"Parameter cmd=start-pairing erforderlich\"}",
+                        HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
     httpd_resp_set_type(req, "application/json");
 
     BaseType_t created = xTaskCreate(ble_pairing_task, "ble_pair", 4096, NULL, 5, NULL);
@@ -3944,7 +4076,7 @@ void setupWebServer() {
     // HTTP-Server konfigurieren
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     // API + Static-Wildcard; keine separaten Captive-Probe-URIs nötig (AP: fehlende Datei → Redirect)
-    config.max_uri_handlers = 28;
+    config.max_uri_handlers = 30;
     config.max_resp_headers = 8;
     config.lru_purge_enable = true;
     config.uri_match_fn = httpd_uri_match_wildcard;  // Wildcard-Matching für statische Dateien aktivieren
@@ -4104,13 +4236,21 @@ void setupWebServer() {
     };
     httpd_register_uri_handler(server, &ble_status_uri);
 
-    httpd_uri_t ble_pairing_uri = {
-        .uri       = "/ble/pairing",
+    httpd_uri_t ble_action_uri = {
+        .uri       = "/ble/action",
         .method    = HTTP_POST,
-        .handler   = ble_pairing_handler,
+        .handler   = ble_action_handler,
         .user_ctx  = NULL
     };
-    httpd_register_uri_handler(server, &ble_pairing_uri);
+    httpd_register_uri_handler(server, &ble_action_uri);
+
+    httpd_uri_t mqtt_action_uri = {
+        .uri       = "/mqtt/action",
+        .method    = HTTP_POST,
+        .handler   = mqtt_action_handler,
+        .user_ctx  = NULL
+    };
+    httpd_register_uri_handler(server, &mqtt_action_uri);
     
     // Wildcard-Handler für alle statischen Dateien (muss als letzter registriert werden)
     // Spezifische Handler (oben) haben Vorrang vor dem Wildcard-Handler

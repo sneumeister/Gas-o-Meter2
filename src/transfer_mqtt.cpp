@@ -466,3 +466,146 @@ transfer_status_t transfer_mqtt_send_data(const transfer_data_t* data) {
 void transfer_mqtt_deinit(void) {
     mqtt_initialized = false;
 }
+
+#define MQTT_TEST_SYS_VERSION_TOPIC "$SYS/broker/version"
+#define MQTT_TEST_SYS_WAIT_MS 2000
+
+struct mqtt_test_ctx {
+    volatile bool connected;
+    volatile bool version_received;
+    char broker_version[64];
+};
+
+static void mqtt_test_event_handler(void* handler_args, esp_event_base_t base, int32_t event_id,
+                                    void* event_data) {
+    (void)base;
+    mqtt_test_ctx* ctx = static_cast<mqtt_test_ctx*>(handler_args);
+    esp_mqtt_event_handle_t event = static_cast<esp_mqtt_event_handle_t>(event_data);
+
+    switch ((esp_mqtt_event_id_t)event_id) {
+        case MQTT_EVENT_CONNECTED:
+            ctx->connected = true;
+            if (event->client != nullptr) {
+                esp_mqtt_client_subscribe(event->client, MQTT_TEST_SYS_VERSION_TOPIC, 0);
+            }
+            break;
+        case MQTT_EVENT_DATA: {
+            if (event->topic_len <= 0 || event->data_len <= 0) {
+                break;
+            }
+            const size_t topic_len = (size_t)event->topic_len;
+            const size_t ver_topic_len = strlen(MQTT_TEST_SYS_VERSION_TOPIC);
+            if (topic_len != ver_topic_len) {
+                break;
+            }
+            if (strncmp(event->topic, MQTT_TEST_SYS_VERSION_TOPIC, topic_len) != 0) {
+                break;
+            }
+            size_t copy_len = (size_t)event->data_len;
+            if (copy_len >= sizeof(ctx->broker_version)) {
+                copy_len = sizeof(ctx->broker_version) - 1;
+            }
+            memcpy(ctx->broker_version, event->data, copy_len);
+            ctx->broker_version[copy_len] = '\0';
+            ctx->version_received = true;
+            break;
+        }
+        case MQTT_EVENT_DISCONNECTED:
+            ctx->connected = false;
+            break;
+        default:
+            break;
+    }
+}
+
+static void mqtt_test_write_error(char* json_out, size_t json_out_len, const char* message) {
+    snprintf(json_out, json_out_len, "{\"status\":\"error\",\"message\":\"%s\"}", message);
+}
+
+bool transfer_mqtt_test_connection(const char* host, uint16_t port, const char* username,
+                                     const char* password, char* json_out, size_t json_out_len) {
+    if (json_out == nullptr || json_out_len < 32) {
+        return false;
+    }
+    json_out[0] = '\0';
+
+    if (!wifi_is_connected()) {
+        mqtt_test_write_error(json_out, json_out_len,
+                              "MQTT-Test nur im Heim-WLAN (STA), nicht im Konfigurations-Hotspot");
+        return false;
+    }
+    if (host == nullptr || host[0] == '\0') {
+        mqtt_test_write_error(json_out, json_out_len, "MQTT Host fehlt");
+        return false;
+    }
+    if (strcmp(host, MQTT_DUMMY_HOST) == 0) {
+        mqtt_test_write_error(json_out, json_out_len, "Dummy-Host ist kein gueltiger MQTT-Server");
+        return false;
+    }
+    if (port == 0) {
+        mqtt_test_write_error(json_out, json_out_len, "MQTT Port ungueltig");
+        return false;
+    }
+
+    static char s_test_uri[128];
+    snprintf(s_test_uri, sizeof(s_test_uri), "mqtt://%s:%u", host, (unsigned int)port);
+
+    mqtt_test_ctx ctx = {};
+    esp_mqtt_client_config_t cfg = {};
+    cfg.broker.address.uri = s_test_uri;
+    cfg.session.keepalive = 30;
+    cfg.network.timeout_ms = MQTT_CONNECT_TIMEOUT_MS;
+    if (username != nullptr && username[0] != '\0') {
+        cfg.credentials.username = username;
+        cfg.credentials.authentication.password = (password != nullptr) ? password : "";
+    }
+
+    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&cfg);
+    if (client == nullptr) {
+        mqtt_test_write_error(json_out, json_out_len, "MQTT Client Init fehlgeschlagen");
+        return false;
+    }
+
+    esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, mqtt_test_event_handler, &ctx);
+    if (esp_mqtt_client_start(client) != ESP_OK) {
+        esp_mqtt_client_destroy(client);
+        mqtt_test_write_error(json_out, json_out_len, "MQTT Client Start fehlgeschlagen");
+        return false;
+    }
+
+    uint32_t waited_ms = 0;
+    const uint32_t poll_ms = 50;
+    while (!ctx.connected && waited_ms < MQTT_CONNECT_TIMEOUT_MS) {
+        vTaskDelay(pdMS_TO_TICKS(poll_ms));
+        waited_ms += poll_ms;
+    }
+
+    if (!ctx.connected) {
+        esp_mqtt_client_stop(client);
+        vTaskDelay(pdMS_TO_TICKS(MQTT_DISCONNECT_TIMEOUT_MS));
+        esp_mqtt_client_destroy(client);
+        mqtt_test_write_error(json_out, json_out_len, "MQTT-Server connect: Timeout");
+        return false;
+    }
+
+    waited_ms = 0;
+    while (!ctx.version_received && waited_ms < MQTT_TEST_SYS_WAIT_MS) {
+        vTaskDelay(pdMS_TO_TICKS(poll_ms));
+        waited_ms += poll_ms;
+    }
+
+    esp_mqtt_client_stop(client);
+    vTaskDelay(pdMS_TO_TICKS(MQTT_DISCONNECT_TIMEOUT_MS));
+    esp_mqtt_client_destroy(client);
+
+    if (ctx.version_received && ctx.broker_version[0] != '\0') {
+        snprintf(json_out, json_out_len,
+                 "{\"status\":\"ok\",\"message\":\"MQTT-Server connect: OK\","
+                 "\"broker_version\":\"%s\"}",
+                 ctx.broker_version);
+    } else {
+        snprintf(json_out, json_out_len,
+                 "{\"status\":\"ok\",\"message\":\"MQTT-Server connect: OK\"}");
+    }
+    return true;
+}

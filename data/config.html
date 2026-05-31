@@ -322,7 +322,18 @@
                                 HomeAssistant Auto-Discovery
                             </label>
                         </div>
-                        <small class="text-muted">Hinweis: Ohne echten MQTT Host wird der Dummy-Host gespeichert und MQTT-Transfer übersprungen.</small>
+                        <input type="hidden" id="wifi_sta_connected" value="`wifi_sta_connected`">
+                        <div class="mb-2 mt-3">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="mqttTestBtn" onclick="mqttTestServer()">
+                                MQTT-Server testen
+                            </button>
+                            <span id="mqttTestStatus" class="ms-2 text-muted"></span>
+                        </div>
+                        <small class="text-muted" id="mqttTestHint" style="display: none;">
+                            MQTT-Test erst nach Verbindung mit Ihrem WLAN möglich (nicht nur im Konfigurations-Hotspot).
+                            Nach Speichern der WiFi-Daten Gerät neu starten.
+                        </small>
+                        <small class="text-muted d-block mt-2">Hinweis: Ohne echten MQTT Host wird der Dummy-Host gespeichert und MQTT-Transfer übersprungen.</small>
                     </div>
                 </div>
             </div>

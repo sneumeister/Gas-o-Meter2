@@ -1331,6 +1331,7 @@ function toggleMqttConfigPanel() {
     if (collapse.style.display === 'none') {
         collapse.style.display = 'block';
         toggleBtn.textContent = '📶 MQTT-Einstellungen... (ausblenden)';
+        applyMqttTestButtonState();
     } else {
         collapse.style.display = 'none';
         toggleBtn.textContent = '📶 MQTT-Einstellungen...';
@@ -1437,19 +1438,7 @@ function zigbeeFactoryReset() {
     }
     
     // Aktuelles Admin-Passwort für Basic-Auth
-    const currentAdminPass = document.getElementById('adminpass').value;
-    const authHeader = 'Basic ' + btoa('admin:' + currentAdminPass);
-    
-    const formData = new FormData();
-    formData.append('cmd', 'factory-reset');
-    
-    fetch('/zigbee/action', {
-        method: 'POST',
-        headers: {
-            'Authorization': authHeader
-        },
-        body: formData
-    })
+    postTransferAction('/zigbee/action', { cmd: 'factory-reset' })
     .then(response => {
         if (!response.ok) {
             if (response.status === 401) {
@@ -1595,6 +1584,94 @@ function zigbeeStartPairing() {
 }
 
 // ============================================
+// Transfer-Actions (POST + Basic Auth)
+// ============================================
+
+function getConfigAuthHeader() {
+    const adminpassEl = document.getElementById('adminpass');
+    const pass = adminpassEl ? adminpassEl.value : '';
+    return 'Basic ' + btoa('admin:' + pass);
+}
+
+function postTransferAction(url, fields) {
+    const formData = new FormData();
+    Object.keys(fields).forEach(function(key) {
+        formData.append(key, fields[key]);
+    });
+    return fetch(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': getConfigAuthHeader()
+        },
+        body: formData
+    });
+}
+
+function applyMqttTestButtonState() {
+    const hidden = document.getElementById('wifi_sta_connected');
+    const btn = document.getElementById('mqttTestBtn');
+    const hint = document.getElementById('mqttTestHint');
+    const staOk = hidden && hidden.value === '1';
+    if (btn) {
+        btn.disabled = !staOk;
+    }
+    if (hint) {
+        hint.style.display = staOk ? 'none' : 'block';
+    }
+}
+
+function mqttTestServer() {
+    const statusEl = document.getElementById('mqttTestStatus');
+    const btn = document.getElementById('mqttTestBtn');
+    const host = (document.getElementById('mqtt_host') || {}).value || '';
+    const port = (document.getElementById('mqtt_port') || {}).value || '';
+    const username = (document.getElementById('mqtt_username') || {}).value || '';
+    const password = (document.getElementById('mqtt_password') || {}).value || '';
+
+    if (btn) btn.disabled = true;
+    if (statusEl) {
+        statusEl.innerHTML = '<span class="text-info">Teste Verbindung...</span>';
+    }
+
+    postTransferAction('/mqtt/action', {
+        cmd: 'servertest',
+        host: host,
+        port: port,
+        username: username,
+        password: password
+    })
+    .then(function(response) {
+        return response.json().then(function(data) {
+            if (!response.ok) {
+                throw new Error(data.message || ('HTTP ' + response.status));
+            }
+            return data;
+        });
+    })
+    .then(function(data) {
+        if (!statusEl) return;
+        let text = data.message || 'MQTT-Server connect: OK';
+        if (data.broker_version) {
+            text += ' (' + data.broker_version + ')';
+        }
+        statusEl.innerHTML = '<span class="text-success">' + text + '</span>';
+    })
+    .catch(function(error) {
+        if (statusEl) {
+            const msg = error.message || 'Unbekannter Fehler';
+            if (msg.indexOf('401') >= 0 || msg.indexOf('Authentifizierung') >= 0) {
+                statusEl.innerHTML = '<span class="text-danger">Authentifizierung fehlgeschlagen. Seite neu laden.</span>';
+            } else {
+                statusEl.innerHTML = '<span class="text-danger">' + msg + '</span>';
+            }
+        }
+    })
+    .finally(function() {
+        applyMqttTestButtonState();
+    });
+}
+
+// ============================================
 // BLE-Konfiguration
 // ============================================
 
@@ -1644,8 +1721,11 @@ function blePairing() {
     if (btn) btn.disabled = true;
     if (statusSpan) statusSpan.innerHTML = '<span class="text-info">Starte Advertising...</span>';
 
-    fetch('/ble/pairing', { method: 'POST' })
+    postTransferAction('/ble/action', { cmd: 'start-pairing' })
     .then(response => {
+        if (response.status === 401) {
+            throw new Error('Authentifizierung fehlgeschlagen. Bitte Seite neu laden.');
+        }
         if (!response.ok) throw new Error('HTTP ' + response.status);
         return response.json();
     })
@@ -1689,4 +1769,5 @@ document.addEventListener('DOMContentLoaded', function() {
     if (sel) savedTransferMode = sel.value;
     configJustSaved = false;
     toggleTransferConfig();
+    applyMqttTestButtonState();
 });
