@@ -2664,10 +2664,20 @@ bool transfer_zigbee_sync_time(void) {
     return true;
 }
 
+void transfer_zigbee_persist_config_to_nvs(void) {
+    if (zigbee_initialized && zigbee_is_joined_with_valid_network()) {
+        zigbee_update_rtc_from_stack();
+        zigbee_nvs_save_pending = true;
+    }
+    zigbee_process_pending_nvs_save();
+}
+
 void transfer_zigbee_deinit(void) {
     if (!zigbee_initialized) {
         return;
     }
+
+    transfer_zigbee_persist_config_to_nvs();
     
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "ZigBee beenden (Main Loop stoppen)");
@@ -2720,6 +2730,41 @@ bool transfer_zigbee_get_status_json(char* buffer, size_t buffer_size) {
         status_str = "not-joined";
     }
 
+    /* Anzeige: bei laufendem Stack Live-Daten (joined kann vor RTC/NVS-Update true sein). */
+    uint16_t network_addr = zigbee_rtc.network_addr;
+    uint16_t pan_id = zigbee_rtc.pan_id;
+    uint8_t channel = zigbee_rtc.channel;
+    uint64_t extended_addr = zigbee_rtc.extended_addr;
+
+    if (zigbee_initialized) {
+        zigbee_network_info_t live = zigbee_read_network_info_locked();
+        if (live.joined) {
+            network_addr = live.network_addr;
+            pan_id = live.pan_id;
+            channel = live.channel;
+        }
+        esp_zb_ieee_addr_t ieee_addr = {};
+        esp_zb_lock_acquire(portMAX_DELAY);
+        esp_zb_get_long_address(ieee_addr);
+        esp_zb_lock_release();
+        uint64_t live_ext = 0;
+        for (int i = 0; i < 8; i++) {
+            live_ext |= ((uint64_t)ieee_addr[i]) << (i * 8);
+        }
+        if (live_ext != 0) {
+            extended_addr = live_ext;
+        }
+        if (live.joined && zigbee_network_info_valid(&live)) {
+            const bool rtc_stale = !zigbee_rtc.joined
+                || zigbee_rtc.network_addr != live.network_addr
+                || zigbee_rtc.pan_id != live.pan_id
+                || zigbee_rtc.channel != live.channel;
+            if (rtc_stale) {
+                transfer_zigbee_persist_config_to_nvs();
+            }
+        }
+    }
+
     // JSON-Response erstellen
     int written = snprintf(buffer, buffer_size,
         "{"
@@ -2736,10 +2781,10 @@ bool transfer_zigbee_get_status_json(char* buffer, size_t buffer_size) {
         is_factory_new ? "true" : "false",
         is_joined ? "true" : "false",
         is_pairing ? "true" : "false",
-        zigbee_rtc.network_addr,
-        zigbee_rtc.pan_id,
-        zigbee_rtc.channel,
-        (unsigned long long)zigbee_rtc.extended_addr
+        network_addr,
+        pan_id,
+        channel,
+        (unsigned long long)extended_addr
     );
     
     if (written < 0 || (size_t)written >= buffer_size) {

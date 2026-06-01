@@ -47,6 +47,14 @@ bool transfer_zigbee_sync_time(void);
 void transfer_zigbee_deinit(void);
 
 /**
+ * @brief Schreibt zigbee_rtc aus dem laufenden Stack in NVS (wenn zigbee_nvs_save_pending).
+ *
+ * Wird von transfer_zigbee_deinit() und bei veraltetem /zigbee/status aufgerufen.
+ * Reboot/Deep-Sleep: kein Extra-Aufruf noetig (shutdown_resources -> deinit).
+ */
+void transfer_zigbee_persist_config_to_nvs(void);
+
+/**
  * @brief Gibt den aktuellen ZigBee-Status als JSON-String zurück
  * 
  * @param buffer Buffer für JSON-String (mindestens 512 Bytes)

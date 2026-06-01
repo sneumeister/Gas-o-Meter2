@@ -450,6 +450,7 @@ static void persist_pulse_counter_before_deep_sleep(void) {
 
 static void enter_deep_sleep_after_wakeup(bool enable_timer_wakeup) {
     persist_pulse_counter_before_deep_sleep();
+    // ZigBee-NVS-Flush: enter_deep_sleep_with_gpio_and_timer_wakeup() -> shutdown_resources()
     enter_deep_sleep_with_gpio_and_timer_wakeup(enable_timer_wakeup);
 }
 
@@ -1121,7 +1122,7 @@ void perform_reboot(const char* reason) {
     ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher vor Reboot...");
     write_ulp_pulse_counter_to_ring_buffer();
     
-    // Ressourcen sauber beenden
+    // Ressourcen sauber beenden (ZigBee-NVS-Flush in transfer_zigbee_deinit)
     shutdown_resources();
     
     ESP_LOGI(TAG, "Starte Reboot...");
