@@ -2513,10 +2513,10 @@ const char* processor_get_value(const char* var) {
         
         if (strcmp(config_rtc.transfer_mode, "zigbee") != 0) {
             snprintf(buffer, sizeof(buffer), "Nicht aktiv");
-        } else if (is_factory_new) {
-            snprintf(buffer, sizeof(buffer), "Factory-New (nicht gepaart)");
         } else if (is_joined) {
             snprintf(buffer, sizeof(buffer), "Gepaart");
+        } else if (is_factory_new) {
+            snprintf(buffer, sizeof(buffer), "Factory-New (nicht gepaart)");
         } else {
             snprintf(buffer, sizeof(buffer), "Nicht gepaart");
         }

@@ -82,6 +82,9 @@ const definition = {
     
     // Beschreibung des Geräts
     description: 'Custom Gas Meter with Battery (ESP32C6)',
+
+    // Z2M/herdsman: Semver 0.0.<patch> (Default 0.0.0). Patch erhoehen → Geraet wird neu konfiguriert.
+    version: '0.0.1',
     
     // WICHTIG: Power Source muss explizit definiert werden für das Battery-Icon!
     // Ohne diese Property zeigt Z2M ein "?" statt des Battery-Icons

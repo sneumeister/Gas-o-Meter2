@@ -153,6 +153,8 @@ Vom Converter veröffentlichte **State-Keys** (friendly name kann abweichen):
 | `batteryVoltage` | (Preset Z2M) | | |
 | `batteryAlarmState` | 3600 s | 86400 s | 0 |
 
+`version` in der Definition (aktuell `0.0.1`, Format `0.0.<patch>`): bei Erhöhung des Patch-Werts löst Z2M ein erneutes `configure()` aus (Log: `definition v0.0.1`). Nicht die Firmware-Version.
+
 `configureKey` in `meta` (aktuell `4`): bei Änderung ruft Z2M `configure()` erneut auf – ohne Re-Pair.
 
 ### Home Assistant
