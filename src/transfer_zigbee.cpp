@@ -2664,11 +2664,16 @@ bool transfer_zigbee_sync_time(void) {
     return true;
 }
 
-void transfer_zigbee_persist_config_to_nvs(void) {
+/** RTC aus Stack fuellen und NVS-Save fuer Main-Loop/Deinit anfordern (kein sofortiges NVS aus HTTP). */
+static void zigbee_schedule_rtc_nvs_sync_from_stack(void) {
     if (zigbee_initialized && zigbee_is_joined_with_valid_network()) {
         zigbee_update_rtc_from_stack();
         zigbee_nvs_save_pending = true;
     }
+}
+
+void transfer_zigbee_persist_config_to_nvs(void) {
+    zigbee_schedule_rtc_nvs_sync_from_stack();
     zigbee_process_pending_nvs_save();
 }
 
@@ -2758,9 +2763,11 @@ bool transfer_zigbee_get_status_json(char* buffer, size_t buffer_size) {
             const bool rtc_stale = !zigbee_rtc.joined
                 || zigbee_rtc.network_addr != live.network_addr
                 || zigbee_rtc.pan_id != live.pan_id
-                || zigbee_rtc.channel != live.channel;
+                || zigbee_rtc.channel != live.channel
+                || (live_ext != 0 && zigbee_rtc.extended_addr != live_ext);
             if (rtc_stale) {
-                transfer_zigbee_persist_config_to_nvs();
+                /* RAM + pending nur – NVS in Main-Loop (Wear), Deinit flusht synchron. */
+                zigbee_schedule_rtc_nvs_sync_from_stack();
             }
         }
     }

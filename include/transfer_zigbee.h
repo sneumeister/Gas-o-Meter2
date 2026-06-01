@@ -49,7 +49,7 @@ void transfer_zigbee_deinit(void);
 /**
  * @brief Schreibt zigbee_rtc aus dem laufenden Stack in NVS (wenn zigbee_nvs_save_pending).
  *
- * Wird von transfer_zigbee_deinit() und bei veraltetem /zigbee/status aufgerufen.
+ * Synchroner NVS-Flush (Deinit/Reboot). /zigbee/status stellt nur pending + RTC-RAM nach.
  * Reboot/Deep-Sleep: kein Extra-Aufruf noetig (shutdown_resources -> deinit).
  */
 void transfer_zigbee_persist_config_to_nvs(void);
