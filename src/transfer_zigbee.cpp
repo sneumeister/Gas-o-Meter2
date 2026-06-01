@@ -2682,7 +2682,12 @@ void transfer_zigbee_deinit(void) {
         return;
     }
 
-    transfer_zigbee_persist_config_to_nvs();
+    /* Factory-Reset: RTC/NVS bereits geleert – Stack darf joined-Werte nicht zurueckschreiben. */
+    if (!factory_reset_in_progress) {
+        transfer_zigbee_persist_config_to_nvs();
+    } else {
+        zigbee_nvs_save_pending = false;
+    }
     
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "ZigBee beenden (Main Loop stoppen)");
@@ -2859,6 +2864,7 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode) {
     zigbee_rtc.channel = ZIGBEE_DEFAULT_CHANNEL;
     zigbee_rtc.extended_addr = ZIGBEE_DEFAULT_EXTENDED_ADDR;
     web_steering_requested = false;
+    zigbee_nvs_save_pending = false;
 
     if (zigbee_config_save_to_nvs()) {
         ESP_LOGI(TAG, "  → Zurueckgesetzte zigbee_rtc in NVS gespeichert");
