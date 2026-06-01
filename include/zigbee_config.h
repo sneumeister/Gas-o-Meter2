@@ -252,8 +252,9 @@ bool zigbee_config_load_from_nvs(bool is_power_on);
  * Wird nach erfolgreichem Pairing aufgerufen.
  * 
  * @return true bei Erfolg, false bei Fehler
+ * @param wrote_flash optional: true wenn tatsächlich in NVS geschrieben (false = unverändert)
  */
-bool zigbee_config_save_to_nvs(void);
+bool zigbee_config_save_to_nvs(bool* wrote_flash);
 
 #ifdef __cplusplus
 }

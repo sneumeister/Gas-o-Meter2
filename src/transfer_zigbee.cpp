@@ -225,7 +225,10 @@ bool zigbee_config_load_from_nvs(bool is_power_on) {
  * 
  * @return true bei Erfolg, false bei Fehler
  */
-bool zigbee_config_save_to_nvs(void) {
+bool zigbee_config_save_to_nvs(bool* wrote_flash) {
+    if (wrote_flash != nullptr) {
+        *wrote_flash = false;
+    }
     nvs_handle_t nvs_handle;
     esp_err_t err;
     
@@ -249,8 +252,11 @@ bool zigbee_config_save_to_nvs(void) {
     if (err == ESP_OK && stored_size == sizeof(zigbee_rtc_t) &&
         memcmp(&stored, &zigbee_rtc, sizeof(zigbee_rtc_t)) == 0) {
         nvs_close(nvs_handle);
-        ESP_LOGI(TAG, "zigbee_config_save_to_nvs: Config unverändert → kein NVS-Schreibvorgang (Wear-Leveling)");
+        ESP_LOGD(TAG, "zigbee_config_save_to_nvs: Config unverändert → kein NVS-Schreibvorgang (Wear-Leveling)");
         return true;
+    }
+    if (wrote_flash != nullptr) {
+        *wrote_flash = true;
     }
     
     // Speichere gesamte Config-Struktur als Blob
@@ -536,10 +542,16 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 ESP_LOGI(TAG, "ZigBee Signal: PRODUCTION_CONFIG_READY (Keine Production Configuration vorhanden - normal für End Devices)");
             }
             break;
+
+        case ESP_ZB_COMMON_SIGNAL_CAN_SLEEP:
+            /* Sleepy ED: Stack idle – kein esp_zb_sleep_now() in Config-Modus (Deep-Sleep via main_idf). */
+            ESP_LOGD(TAG, "ZigBee Signal: CAN_SLEEP (Status: %s)", esp_err_to_name(err_status));
+            break;
             
         default:
-            ESP_LOGI(TAG, "ZigBee Signal: Unknown (Type: 0x%X, Status: %s)", 
-                     sig_type, esp_err_to_name(err_status));
+            ESP_LOGD(TAG, "ZigBee Signal: %s (0x%X, Status: %s)",
+                     esp_zb_zdo_signal_to_string(sig_type), (unsigned)sig_type,
+                     esp_err_to_name(err_status));
             break;
     }
 }
@@ -623,10 +635,18 @@ static void zigbee_process_pending_nvs_save(void) {
     if (!zigbee_nvs_save_pending) {
         return;
     }
+    bool wrote = false;
     // Flag erst nach erfolgreichem Save loeschen – bei Fehler Retry naechste Iteration
-    if (zigbee_config_save_to_nvs()) {
+    if (zigbee_config_save_to_nvs(&wrote)) {
         zigbee_nvs_save_pending = false;
-        ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (deferred)");
+        if (wrote) {
+            ESP_LOGI(TAG,
+                     "        → ZigBee-Config in NVS gespeichert (deferred, joined=%s, addr=0x%04X, pan=0x%04X, ch=%u)",
+                     zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id,
+                     (unsigned)zigbee_rtc.channel);
+        } else {
+            ESP_LOGD(TAG, "        → ZigBee-Config bereits in NVS (deferred, unveraendert)");
+        }
     } else {
         ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config NVS-Speichern fehlgeschlagen – Retry naechste Iteration");
     }
@@ -1618,7 +1638,7 @@ static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairin
                 rejoin_successful = true;
             }
             zigbee_push_cluster_vals_to_stack_if_joined();
-            if (zigbee_config_save_to_nvs()) {
+            if (zigbee_config_save_to_nvs(NULL)) {
                 ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (nach DEVICE_REBOOT Poll)");
             }
             if (for_pairing) {
@@ -1725,7 +1745,7 @@ static bool zigbee_try_direct_bdb_rejoin(uint32_t timeout_ms, uint32_t *elapsed_
                 rejoin_successful = true;
                 zigbee_push_cluster_vals_to_stack_if_joined();
                 zigbee_maybe_send_device_annce_on_rejoin("direct_bdb_rejoin");
-                if (zigbee_config_save_to_nvs()) {
+                if (zigbee_config_save_to_nvs(NULL)) {
                     ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (direkter Rejoin)");
                 }
             }
@@ -1766,7 +1786,7 @@ static bool zigbee_wait_stack_ready_after_failed_direct_rejoin(uint32_t max_wait
                 rejoin_successful = true;
                 zigbee_push_cluster_vals_to_stack_if_joined();
                 zigbee_maybe_send_device_annce_on_rejoin("direct_rejoin_post_fail");
-                if (zigbee_config_save_to_nvs()) {
+                if (zigbee_config_save_to_nvs(NULL)) {
                     ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (Join nach INIT-Timeout)");
                 }
             }
@@ -1890,7 +1910,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 ESP_LOGI(TAG, "        → Netzwerk geaendert (Addr 0x%04X -> 0x%04X, PAN 0x%04X, Ch %u)",
                          prev_addr, zigbee_rtc.network_addr, zigbee_rtc.pan_id,
                          (unsigned)zigbee_rtc.channel);
-                if (zigbee_config_save_to_nvs()) {
+                if (zigbee_config_save_to_nvs(NULL)) {
                     ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (passiver Rejoin)");
                 }
             }
@@ -1934,7 +1954,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             first_pairing_after_join = true;
             
             // In NVS speichern
-            if (zigbee_config_save_to_nvs()) {
+            if (zigbee_config_save_to_nvs(NULL)) {
                 ESP_LOGI(TAG, "        → zigbee_rtc erfolgreich synchronisiert und in NVS gespeichert");
             } else {
                 ESP_LOGE(TAG, "        → FEHLER: zigbee_rtc synchronisiert, aber konnte nicht in NVS gespeichert werden!");
@@ -2087,7 +2107,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                         zigbee_update_rtc_from_stack();
                         zigbee_send_device_annce_if_needed("pairing_direct_check");
                         
-                        if (zigbee_config_save_to_nvs()) {
+                        if (zigbee_config_save_to_nvs(NULL)) {
                             ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (manuell nach direkter Prüfung)");
                         } else {
                             ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config konnte nicht in NVS gespeichert werden!");
@@ -2148,7 +2168,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 zigbee_update_rtc_from_stack();
                 zigbee_send_device_annce_if_needed("pairing_timeout_fallback");
                 
-                if (zigbee_config_save_to_nvs()) {
+                if (zigbee_config_save_to_nvs(NULL)) {
                     ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (nachträglich nach fehlgeschlagenem Pairing)");
                 } else {
                     ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config konnte nicht in NVS gespeichert werden!");
@@ -2360,7 +2380,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                         rejoin_successful = true;
                         zigbee_update_rtc_from_stack();
                         zigbee_maybe_send_device_annce_on_rejoin("rejoin_direct_check");
-                        if (zigbee_config_save_to_nvs()) {
+                        if (zigbee_config_save_to_nvs(NULL)) {
                             ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (manuell nach direkter Prüfung, Rejoin)");
                         } else {
                             ESP_LOGW(TAG, "        → Warnung: ZigBee-Config konnte nicht in NVS gespeichert werden (Rejoin)");
@@ -2866,7 +2886,7 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode) {
     web_steering_requested = false;
     zigbee_nvs_save_pending = false;
 
-    if (zigbee_config_save_to_nvs()) {
+    if (zigbee_config_save_to_nvs(NULL)) {
         ESP_LOGI(TAG, "  → Zurueckgesetzte zigbee_rtc in NVS gespeichert");
     } else {
         ESP_LOGW(TAG, "  → Zurueckgesetzte zigbee_rtc konnte nicht in NVS gespeichert werden");
@@ -2901,7 +2921,11 @@ transfer_status_t transfer_zigbee_start_pairing(void) {
     esp_err_t comm_err = esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
     if (comm_err == ESP_OK) {
         web_steering_requested = true;
+        pairing_successful = false;
+        steering_successful = false;
+        steering_failed = false;
         ESP_LOGI(TAG, "transfer_zigbee_start_pairing: Network Steering gestartet");
+        ESP_LOGI(TAG, "        → Z2M: Permit Join aktivieren; warte auf STEERING / DEVICE_ANNCE / Rejoin …");
         return TRANSFER_STATUS_OK;
     }
     ESP_LOGE(TAG, "transfer_zigbee_start_pairing: Fehler beim Starten von Network Steering: %s",

@@ -1056,7 +1056,10 @@ void init_ring_buffer_and_ulp_pulse_counter(bool is_power_on) {
 // ============================================
 // Ressourcen sauber beenden (Web-Server, WiFi, LittleFS)
 // ============================================
-void shutdown_resources() {
+void shutdown_resources(bool for_imminent_restart) {
+    const bool zigbee_was_active =
+        (strcmp(config_rtc.transfer_mode, TRANSFER_MODE_ZIGBEE) == 0);
+
     // Transfer-Modus deinitialisieren
     transfer_deinit();
     
@@ -1089,9 +1092,17 @@ void shutdown_resources() {
     vTaskDelay(pdMS_TO_TICKS(50));
 
     // 4. WiFi trennen und stoppen (STA und/oder AP)
+    // ZigBee-Stack hat keinen esp_zb_deinit(): esp_wifi_stop() waehrend laufendem Stack
+    // fuehrt auf ESP32-C6 zu sys_evt Stack-Protection-Fault (Coex). Vor esp_restart/Deep-Sleep
+    // ueberspringen – Radio wird ohnehin zurueckgesetzt.
     if (wifi_manager_is_initialized()) {
-        wifi_manager_session_end();
-        vTaskDelay(pdMS_TO_TICKS(100));
+        if (for_imminent_restart && zigbee_was_active) {
+            ESP_LOGI(TAG,
+                     "WiFi-Stop uebersprungen (ZigBee ohne vollen Teardown; Radio-Reset bei Neustart/Sleep)");
+        } else {
+            wifi_manager_session_end();
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
     }
     
     // 5. LittleFS unmounten (sichert alle ausstehenden Schreibvorgänge)
@@ -1123,7 +1134,7 @@ void perform_reboot(const char* reason) {
     write_ulp_pulse_counter_to_ring_buffer();
     
     // Ressourcen sauber beenden (ZigBee-NVS-Flush in transfer_zigbee_deinit)
-    shutdown_resources();
+    shutdown_resources(true);
     
     ESP_LOGI(TAG, "Starte Reboot...");
     fflush(stdout);
@@ -1340,7 +1351,7 @@ void enter_deep_sleep_with_gpio_and_timer_wakeup(bool enable_timer = true) {
     
     // Ressourcen sauber beenden (nur wenn Wake-up konfiguriert wurde)
     // LED wird hier zentral in shutdown_resources() ausgeschaltet
-    shutdown_resources();
+    shutdown_resources(true);
     
     // Finale Deep-Sleep-Ausgabe (dynamisch basierend auf aktivierten Wake-up-Quellen)
     ESP_LOGI(TAG, "=== Gehe in Deep-Sleep ===");
