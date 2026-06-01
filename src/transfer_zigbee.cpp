@@ -54,11 +54,16 @@ static volatile bool first_pairing_after_join = false;  // Flag: Erstes Pairing 
 static volatile bool steering_failed = false;  // Flag: Network Steering fehlgeschlagen
 static volatile bool steering_successful = false;  // Flag: Network Steering erfolgreich (für Timing-Verzögerung)
 static volatile bool web_steering_requested = false;  // Network Steering per Web „Start Pairing“
+static uint32_t web_steering_request_ms = 0;  // esp_timer ms; Grace nach Start bis BDB-Mode gesetzt
 static uint32_t last_device_annce_sent_ms = 0;  // Debounce fuer esp_zb_zdo_device_announcement_req()
 static volatile bool zigbee_time_sync_response_received = false;
 static volatile bool zigbee_stack_device_annce_received = false;
 static volatile bool zigbee_nvs_save_pending = false;  // NVS-Schreiben aus Signal-Handler deferren
 
+static void zigbee_web_steering_clear_request(void);
+static void zigbee_web_steering_mark_requested(void);
+static bool zigbee_bdb_network_steering_active(void);
+static void zigbee_web_steering_reconcile_stale_flag(void);
 static void zigbee_send_device_annce_if_needed(const char* reason);
 static void zigbee_maybe_send_device_annce_on_rejoin(const char* reason);
 static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairing,
@@ -463,7 +468,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             } else {
                 ESP_LOGW(TAG, "ZigBee Signal: STEERING fehlgeschlagen (Status: %s)", esp_err_to_name(err_status));
                 steering_failed = true;  // Flag setzen, damit Warte-Schleife sofort abbricht
-                web_steering_requested = false;
+                zigbee_web_steering_clear_request();
                 steering_successful = false;
             }
             break;
@@ -487,7 +492,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                     // Device war vorher nicht joined -> Pairing
                     ESP_LOGI(TAG, "        → Pairing erfolgreich abgeschlossen");
                     pairing_successful = true;
-                    web_steering_requested = false;
+                    zigbee_web_steering_clear_request();
                     first_pairing_after_join = true;  // Flag setzen für Interview-Wartezeit
                     
                     // rx_on_when_idle wird in ensure_joined vor Steering temporaer aktiviert
@@ -517,7 +522,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 } else {
                     // Device war bereits joined -> Rejoin
                     ESP_LOGI(TAG, "        → Rejoin erfolgreich abgeschlossen");
-                    web_steering_requested = false;
+                    zigbee_web_steering_clear_request();
                     rejoin_successful = true;
                     // RTC-Status aktualisieren (falls sich etwas geändert hat)
                     zigbee_rtc.network_addr = network_addr;
@@ -2730,12 +2735,59 @@ void transfer_zigbee_deinit(void) {
     
     zigbee_initialized = false;
     stack_ready_signal_received = false;  // Flag zurücksetzen
-    web_steering_requested = false;
+    zigbee_web_steering_clear_request();
 }
 
 // ============================================
 // Wrapper-Funktionen für Web-Interface
 // ============================================
+
+#define WEB_STEERING_STALE_GRACE_MS 2500U
+
+static void zigbee_web_steering_clear_request(void) {
+    web_steering_requested = false;
+    web_steering_request_ms = 0;
+}
+
+static void zigbee_web_steering_mark_requested(void) {
+    web_steering_requested = true;
+    web_steering_request_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+}
+
+static bool zigbee_bdb_network_steering_active(void) {
+    if (!zigbee_initialized) {
+        return false;
+    }
+    if (!esp_zb_lock_acquire(portMAX_DELAY)) {
+        return false;
+    }
+    const esp_zb_bdb_commissioning_mode_mask_t mode = esp_zb_get_bdb_commissioning_mode();
+    esp_zb_lock_release();
+    return (mode & ESP_ZB_BDB_NETWORK_STEERING) != 0;
+}
+
+/** Entfernt veraltetes web_steering_requested, wenn der Stack nicht mehr steuert. */
+static void zigbee_web_steering_reconcile_stale_flag(void) {
+    if (!web_steering_requested) {
+        return;
+    }
+    if (zigbee_pairing_in_progress) {
+        return;
+    }
+    if (zigbee_bdb_network_steering_active()) {
+        return;
+    }
+    if (steering_failed) {
+        zigbee_web_steering_clear_request();
+        return;
+    }
+    const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    if (web_steering_request_ms != 0 &&
+        (now_ms - web_steering_request_ms) < WEB_STEERING_STALE_GRACE_MS) {
+        return;
+    }
+    zigbee_web_steering_clear_request();
+}
 
 bool transfer_zigbee_get_status_json(char* buffer, size_t buffer_size) {
     if (buffer == NULL || buffer_size < 512) {
@@ -2747,6 +2799,7 @@ bool transfer_zigbee_get_status_json(char* buffer, size_t buffer_size) {
     // Diese prüfen automatisch den Stack-Status (wenn initialisiert) oder fallen auf zigbee_rtc zurück
     bool is_joined = transfer_zigbee_is_joined();
     bool is_factory_new = transfer_zigbee_is_factory_new();
+    zigbee_web_steering_reconcile_stale_flag();
     bool is_pairing = web_steering_requested && !is_joined;
 
     const char* status_str;
@@ -2883,7 +2936,7 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode) {
     zigbee_rtc.pan_id = ZIGBEE_DEFAULT_PAN_ID;
     zigbee_rtc.channel = ZIGBEE_DEFAULT_CHANNEL;
     zigbee_rtc.extended_addr = ZIGBEE_DEFAULT_EXTENDED_ADDR;
-    web_steering_requested = false;
+    zigbee_web_steering_clear_request();
     zigbee_nvs_save_pending = false;
 
     if (zigbee_config_save_to_nvs(NULL)) {
@@ -2913,6 +2966,7 @@ transfer_status_t transfer_zigbee_start_pairing(void) {
         // Stack initialisieren (falls noch nicht geschehen)
         if (!transfer_zigbee_init()) {
             ESP_LOGE(TAG, "transfer_zigbee_start_pairing: ZigBee-Initialisierung fehlgeschlagen");
+            zigbee_web_steering_clear_request();
             return TRANSFER_STATUS_INIT_FAILED;
         }
     }
@@ -2920,7 +2974,7 @@ transfer_status_t transfer_zigbee_start_pairing(void) {
     // Versuche Network Steering zu starten
     esp_err_t comm_err = esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
     if (comm_err == ESP_OK) {
-        web_steering_requested = true;
+        zigbee_web_steering_mark_requested();
         pairing_successful = false;
         steering_successful = false;
         steering_failed = false;
@@ -2930,6 +2984,11 @@ transfer_status_t transfer_zigbee_start_pairing(void) {
     }
     ESP_LOGE(TAG, "transfer_zigbee_start_pairing: Fehler beim Starten von Network Steering: %s",
              esp_err_to_name(comm_err));
+    if (!zigbee_bdb_network_steering_active()) {
+        zigbee_web_steering_clear_request();
+    } else {
+        ESP_LOGW(TAG, "transfer_zigbee_start_pairing: Steering laeuft bereits – web_steering_requested bleibt gesetzt");
+    }
     return TRANSFER_STATUS_CONNECTION_FAILED;
 }
 

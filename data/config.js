@@ -1657,9 +1657,6 @@ function zigbeeStartPairing() {
     if (statusDiv) {
         statusDiv.innerHTML = '<p class="text-info">Pairing wird gestartet...</p>';
     }
-    if (statusCell) {
-        statusCell.textContent = 'Pairing läuft…';
-    }
 
     postTransferAction('/zigbee/action', { cmd: 'start-pairing' })
     .then(response => {
@@ -1674,6 +1671,9 @@ function zigbeeStartPairing() {
         return response.json();
     })
     .then(data => {
+        if (statusCell) {
+            statusCell.textContent = 'Pairing läuft…';
+        }
         if (statusDiv) {
             statusDiv.innerHTML = '<p class="text-info">Pairing gestartet. Warten auf Coordinator (bis ca. 2 Min.)…</p>';
         }
@@ -1684,6 +1684,11 @@ function zigbeeStartPairing() {
         if (statusDiv) {
             statusDiv.innerHTML = '<p class="text-danger">Fehler: ' + error.message + '</p>';
         }
+        fetchZigbeeStatusJson().then(function(data) {
+            if (data) {
+                applyZigbeeStatusTable(data);
+            }
+        });
     });
 }
 
