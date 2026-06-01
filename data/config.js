@@ -333,12 +333,13 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// Passwort-Feld zwischen Klartext und versteckt umschalten
-function togglePassword(inputId, buttonId) {
+// Passwort-Feld zwischen Klartext und versteckt umschalten (iconId = Span mit Augen-Icon)
+function togglePassword(inputId, iconId) {
     const input = document.getElementById(inputId);
-    const button = document.getElementById(buttonId);
-    const icon = document.getElementById(buttonId + 'Icon');
-    
+    const icon = document.getElementById(iconId);
+    if (!input || !icon) {
+        return;
+    }
     if (input.type === 'password') {
         input.type = 'text';
         icon.textContent = '🙈';
@@ -452,7 +453,7 @@ function renderWifiCredentials() {
                     <label for="wifi_password_${index}" class="form-label">Passwort</label>
                     <div class="input-group">
                         <input type="password" class="form-control" id="wifi_password_${index}" name="wifi_password_${index}" value="${cred.password || ''}" required>
-                        <button class="btn btn-outline-secondary" type="button" id="toggleWifiPass_${index}" onclick="togglePassword('wifi_password_${index}', 'toggleWifiPass_${index}')">
+                        <button class="btn btn-outline-secondary" type="button" id="toggleWifiPass_${index}" onclick="togglePassword('wifi_password_${index}', 'toggleWifiPass_${index}Icon')">
                             <span id="toggleWifiPass_${index}Icon">👁️</span>
                         </button>
                     </div>

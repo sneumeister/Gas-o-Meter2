@@ -91,7 +91,7 @@
                         <label for="adminpass_new" class="form-label">Neues Admin-Passwort</label>
                         <div class="input-group">
                             <input type="password" class="form-control" id="adminpass_new" name="adminpass_new" placeholder="Neues Passwort eingeben">
-                            <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('adminpass_new', 'toggleAdminPassNew')">
+                            <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('adminpass_new', 'toggleAdminPassNewIcon')">
                                 <span id="toggleAdminPassNewIcon">👁️</span>
                             </button>
                         </div>
@@ -100,7 +100,7 @@
                         <label for="adminpass_confirm" class="form-label">Passwort wiederholen</label>
                         <div class="input-group">
                             <input type="password" class="form-control" id="adminpass_confirm" name="adminpass_confirm" placeholder="Passwort wiederholen">
-                            <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('adminpass_confirm', 'toggleAdminPassConfirm')">
+                            <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('adminpass_confirm', 'toggleAdminPassConfirmIcon')">
                                 <span id="toggleAdminPassConfirmIcon">👁️</span>
                             </button>
                         </div>
@@ -312,7 +312,7 @@
                             <label for="mqtt_password" class="form-label">MQTT Passwort (optional)</label>
                             <div class="input-group">
                                 <input type="password" class="form-control" id="mqtt_password" name="mqtt_password" value="`mqtt_password`" maxlength="63">
-                                <button class="btn btn-outline-secondary" type="button" id="toggleMqttPass" onclick="togglePassword('mqtt_password', 'toggleMqttPass')">
+                                <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('mqtt_password', 'toggleMqttPassIcon')">
                                     <span id="toggleMqttPassIcon">👁️</span>
                                 </button>
                             </div>
