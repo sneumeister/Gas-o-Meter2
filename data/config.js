@@ -1639,12 +1639,15 @@ function mqttTestServer() {
         password: password
     })
     .then(function(response) {
-        return response.json().then(function(data) {
-            if (!response.ok) {
-                throw new Error(data.message || ('HTTP ' + response.status));
+        if (!response.ok) {
+            if (response.status === 401) {
+                throw new Error('Authentifizierung fehlgeschlagen. Bitte Seite neu laden.');
             }
-            return data;
-        });
+            return response.json().then(function(data) {
+                throw new Error(data.message || ('HTTP ' + response.status));
+            });
+        }
+        return response.json();
     })
     .then(function(data) {
         if (!statusEl) return;
