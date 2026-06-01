@@ -547,12 +547,12 @@ bool transfer_mqtt_test_connection(const char* host, uint16_t port, const char* 
         return false;
     }
 
-    static char s_test_uri[128];
-    snprintf(s_test_uri, sizeof(s_test_uri), "mqtt://%s:%u", host, (unsigned int)port);
+    char test_uri[128];
+    snprintf(test_uri, sizeof(test_uri), "mqtt://%s:%u", host, (unsigned int)port);
 
     mqtt_test_ctx ctx = {};
     esp_mqtt_client_config_t cfg = {};
-    cfg.broker.address.uri = s_test_uri;
+    cfg.broker.address.uri = test_uri;
     cfg.session.keepalive = 30;
     cfg.network.timeout_ms = MQTT_CONNECT_TIMEOUT_MS;
     if (username != nullptr && username[0] != '\0') {
