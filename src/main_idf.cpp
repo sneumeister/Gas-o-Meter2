@@ -1092,17 +1092,14 @@ void shutdown_resources(bool for_imminent_restart) {
     vTaskDelay(pdMS_TO_TICKS(50));
 
     // 4. WiFi trennen und stoppen (STA und/oder AP)
-    // ZigBee-Stack hat keinen esp_zb_deinit(): esp_wifi_stop() waehrend laufendem Stack
-    // fuehrt auf ESP32-C6 zu sys_evt Stack-Protection-Fault (Coex). Vor esp_restart/Deep-Sleep
-    // ueberspringen – Radio wird ohnehin zurueckgesetzt.
+    // ZigBee: Main-Loop in transfer_zigbee_deinit gestoppt + esp_coex_ieee802154_status_disable(),
+    // danach esp_wifi_stop (nicht parallel zum laufenden ZBOSS-Main-Loop).
     if (wifi_manager_is_initialized()) {
         if (for_imminent_restart && zigbee_was_active) {
-            ESP_LOGI(TAG,
-                     "WiFi-Stop uebersprungen (ZigBee ohne vollen Teardown; Radio-Reset bei Neustart/Sleep)");
-        } else {
-            wifi_manager_session_end();
-            vTaskDelay(pdMS_TO_TICKS(100));
+            vTaskDelay(pdMS_TO_TICKS(300));
         }
+        wifi_manager_session_end();
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
     
     // 5. LittleFS unmounten (sichert alle ausstehenden Schreibvorgänge)
@@ -1138,7 +1135,11 @@ void perform_reboot(const char* reason) {
     
     ESP_LOGI(TAG, "Starte Reboot...");
     fflush(stdout);
-    vTaskDelay(pdMS_TO_TICKS(200));  // Zusätzliche Verzögerung vor Reboot
+    if (strcmp(config_rtc.transfer_mode, TRANSFER_MODE_ZIGBEE) == 0) {
+        vTaskDelay(pdMS_TO_TICKS(300));
+    } else {
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
     esp_restart();
 }
 

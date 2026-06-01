@@ -29,6 +29,10 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "esp_partition.h"
+#include "esp_coexist.h"
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE && CONFIG_SOC_IEEE802154_SUPPORTED
+#include "esp_coex_i154.h"
+#endif
 #include <ctime>
 #include <cstdio>
 #if CONFIG_ESP_ZB_TRACE_ENABLE
@@ -36,6 +40,10 @@
 #endif
 
 static const char* TAG = "transfer_zigbee";
+
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE && CONFIG_SOC_IEEE802154_SUPPORTED
+static bool zigbee_coex_wifi_i154_enabled = false;
+#endif
 
 // ============================================
 // Globale Variablen
@@ -1265,6 +1273,17 @@ bool transfer_zigbee_init(void) {
     
     // [2/5] Stack initialisieren
     ESP_LOGI(TAG, "  [2/5] Stack wird initialisiert...");
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE && CONFIG_SOC_IEEE802154_SUPPORTED
+    if (!zigbee_coex_wifi_i154_enabled) {
+        esp_err_t coex_err = esp_coex_wifi_i154_enable();
+        if (coex_err == ESP_OK) {
+            zigbee_coex_wifi_i154_enabled = true;
+            ESP_LOGI(TAG, "        → WiFi/802.15.4 Coexistence aktiviert (esp_coex_wifi_i154_enable)");
+        } else {
+            ESP_LOGW(TAG, "        → esp_coex_wifi_i154_enable: %s", esp_err_to_name(coex_err));
+        }
+    }
+#endif
     esp_zb_init(&zb_nwk_cfg);  // Gibt void zurück (keine Fehlerbehandlung möglich)
     ESP_LOGI(TAG, "        → Stack initialisiert");
     
@@ -2733,6 +2752,12 @@ void transfer_zigbee_deinit(void) {
     
     ESP_LOGI(TAG, "========================================");
     
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE && CONFIG_SOC_IEEE802154_SUPPORTED
+    esp_coex_ieee802154_status_disable();
+    ESP_LOGI(TAG, "  → 802.15.4 Coexistence-Status deaktiviert (vor WiFi-Stop/Restart)");
+    vTaskDelay(pdMS_TO_TICKS(200));
+#endif
+
     zigbee_initialized = false;
     stack_ready_signal_received = false;  // Flag zurücksetzen
     zigbee_web_steering_clear_request();
