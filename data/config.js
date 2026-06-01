@@ -1353,64 +1353,184 @@ function toggleZigbeeConfigPanel() {
     }
 }
 
-// ZigBee-Status aktualisieren
-function updateZigbeeStatus() {
-    // Prüfe, ob ZigBee aktiv ist
+var zigbeeStatusPollTimer = null;
+/** Inkrement pro Fetch; nur die neueste Antwort aktualisiert die Tabelle (kein Out-of-Order). */
+var zigbeeStatusFetchSeq = 0;
+
+function zigbeeJsonIsTrue(value) {
+    return value === true || value === 'true';
+}
+
+// ZigBee-Status: Anzeige wie /zigbee/status (joined vor factory_new)
+function zigbeeStatusLabelFromJson(data) {
+    if (!data) {
+        return 'Nicht aktiv';
+    }
+    if (zigbeeJsonIsTrue(data.joined) || data.status === 'joined') {
+        return 'Gepaart';
+    }
+    if (zigbeeJsonIsTrue(data.pairing) || data.status === 'pairing') {
+        return 'Pairing läuft…';
+    }
+    if (zigbeeJsonIsTrue(data.factory_new) || data.status === 'factory-new') {
+        return 'Factory-New (nicht gepaart)';
+    }
+    return 'Nicht gepaart';
+}
+
+function fetchZigbeeStatusJson() {
     const transferMode = document.getElementById('transfer_mode');
     if (!transferMode || transferMode.value !== 'zigbee') {
-        // ZigBee ist nicht aktiv - keine Status-Abfrage nötig
-        const statusDiv = document.getElementById('zigbeeActionStatus');
-        if (statusDiv) {
-            statusDiv.innerHTML = '<p class="text-muted">ZigBee ist nicht aktiv</p>';
-        }
+        return Promise.resolve(null);
+    }
+    return fetch('/zigbee/status', { method: 'GET' })
+        .then(response => {
+            if (!response.ok) {
+                if (response.status === 400) {
+                    return null;
+                }
+                throw new Error('Fehler beim Laden des Status');
+            }
+            return response.json();
+        });
+}
+
+function stopZigbeeStatusPolling() {
+    if (zigbeeStatusPollTimer !== null) {
+        clearInterval(zigbeeStatusPollTimer);
+        zigbeeStatusPollTimer = null;
+    }
+}
+
+/** Nach Start Pairing: Status alle 5 s abfragen (Join dauert oft 20–60 s). */
+function startZigbeeStatusPolling(maxSeconds) {
+    stopZigbeeStatusPolling();
+    const statusDiv = document.getElementById('zigbeeActionStatus');
+    const maxAttempts = Math.max(1, Math.ceil((maxSeconds || 120) / 5));
+    let attempts = 0;
+
+    function pollOnce() {
+        attempts += 1;
+        zigbeeStatusFetchSeq += 1;
+        const seq = zigbeeStatusFetchSeq;
+        return fetchZigbeeStatusJson()
+            .then(data => {
+                if (seq !== zigbeeStatusFetchSeq) {
+                    return;
+                }
+                if (!data) {
+                    return;
+                }
+                applyZigbeeStatusTable(data);
+                const joined = zigbeeJsonIsTrue(data.joined) || data.status === 'joined';
+                if (joined) {
+                    stopZigbeeStatusPolling();
+                    if (statusDiv) {
+                        statusDiv.innerHTML = '<p class="text-success">Gepaart (Coordinator hat Join bestätigt).</p>';
+                    }
+                } else if (attempts >= maxAttempts) {
+                    stopZigbeeStatusPolling();
+                    if (statusDiv) {
+                        statusDiv.innerHTML = '<p class="text-warning">Timeout: Noch kein Join im Gerätestatus. ' +
+                            'Zigbee2MQTT kann bereits „joined“ melden – Reboot oder später erneut prüfen.</p>';
+                    }
+                } else if (statusDiv) {
+                    statusDiv.innerHTML = '<p class="text-info">Pairing läuft… (' + attempts + '/' + maxAttempts + ')</p>';
+                }
+            })
+            .catch(error => {
+                if (seq !== zigbeeStatusFetchSeq) {
+                    return;
+                }
+                stopZigbeeStatusPolling();
+                if (statusDiv) {
+                    statusDiv.innerHTML = '<p class="text-danger">Fehler beim Laden des Status: ' + error.message + '</p>';
+                }
+            });
+    }
+
+    pollOnce();
+    zigbeeStatusPollTimer = setInterval(pollOnce, 5000);
+}
+
+function zigbeeDisplayOrDash(value, emptyValues) {
+    if (value === undefined || value === null) {
+        return '-';
+    }
+    const s = String(value).trim();
+    if (s.length === 0) {
+        return '-';
+    }
+    const upper = s.toUpperCase();
+    if (emptyValues && emptyValues.indexOf(upper) >= 0) {
+        return '-';
+    }
+    return s;
+}
+
+function applyZigbeeStatusTable(data) {
+    const statusCell = document.getElementById('zigbeeStatusCell');
+    const addrCell = document.getElementById('zigbeeNetworkAddrCell');
+    const panCell = document.getElementById('zigbeePanIdCell');
+    const channelCell = document.getElementById('zigbeeChannelCell');
+    const extCell = document.getElementById('zigbeeExtendedAddrCell');
+    if (!statusCell) {
         return;
     }
-    
+    statusCell.textContent = zigbeeStatusLabelFromJson(data);
+    if (addrCell) {
+        addrCell.textContent = zigbeeDisplayOrDash(data.network_addr, ['0XFFFF', '0X0000']);
+    }
+    if (panCell) {
+        panCell.textContent = zigbeeDisplayOrDash(data.pan_id, ['0X0000', '0XFFFF']);
+    }
+    if (channelCell) {
+        const ch = data.channel;
+        if (ch === 0 || ch === '0') {
+            channelCell.textContent = '-';
+        } else {
+            channelCell.textContent = String(ch);
+        }
+    }
+    if (extCell) {
+        extCell.textContent = zigbeeDisplayOrDash(data.extended_addr, [
+            '0X0000000000000000', '0X0'
+        ]);
+    }
+}
+
+// ZigBee-Status aktualisieren (GET /zigbee/status → Tabelle)
+function updateZigbeeStatus() {
+    zigbeeStatusFetchSeq += 1;
+    const seq = zigbeeStatusFetchSeq;
     const statusDiv = document.getElementById('zigbeeActionStatus');
     if (statusDiv) {
         statusDiv.textContent = 'Lade ZigBee-Status...';
     }
-    
-    // Keine Authentifizierung nötig - liefert nur Verbindungsstatus
-    fetch('/zigbee/status', {
-        method: 'GET'
-    })
-    .then(response => {
-        if (!response.ok) {
-            // Prüfe, ob es ein 400-Fehler ist (ZigBee nicht aktiv)
-            if (response.status === 400) {
-                return response.json().then(data => {
-                    // ZigBee ist nicht aktiv
-                    if (statusDiv) {
-                        statusDiv.innerHTML = '<p class="text-muted">ZigBee ist nicht aktiv</p>';
-                    }
-                    return null; // Keine weitere Verarbeitung
-                });
+    fetchZigbeeStatusJson()
+        .then(data => {
+            if (seq !== zigbeeStatusFetchSeq) {
+                return;
             }
-            throw new Error('Fehler beim Laden des Status');
-        }
-        return response.json();
-    })
-    .then(data => {
-        // Wenn data null ist (ZigBee nicht aktiv), nichts weiter tun
-        if (!data) {
-            return;
-        }
-        
-        // Status in der Tabelle aktualisieren (falls vorhanden)
-        if (data.status) {
-            // Status wird bereits über Template-Variablen angezeigt, hier nur Logging
-            console.log('ZigBee-Status:', data);
-        }
-        if (statusDiv) {
-            statusDiv.innerHTML = '<p class="text-success">Status aktualisiert</p>';
-        }
-    })
-    .catch(error => {
-        if (statusDiv) {
-            statusDiv.innerHTML = `<p class="text-danger">Fehler beim Laden des Status: ${error.message}</p>`;
-        }
-    });
+            if (!data) {
+                if (statusDiv) {
+                    statusDiv.innerHTML = '<p class="text-muted">ZigBee ist nicht aktiv</p>';
+                }
+                return;
+            }
+            applyZigbeeStatusTable(data);
+            if (statusDiv) {
+                statusDiv.innerHTML = '';
+            }
+        })
+        .catch(error => {
+            if (seq !== zigbeeStatusFetchSeq) {
+                return;
+            }
+            if (statusDiv) {
+                statusDiv.innerHTML = '<p class="text-danger">Fehler beim Laden des Status: ' + error.message + '</p>';
+            }
+        });
 }
 
 // ZigBee Factory-Reset
@@ -1491,14 +1611,9 @@ function zigbeeFactoryReset() {
         if (statusSpan) {
             statusSpan.innerHTML = '<span class="text-success">✓ OK</span>';
         }
-        if (statusDiv) {
-            statusDiv.innerHTML = '<p class="text-muted">Status wird aktualisiert...</p>';
-        }
-        
-        // Status nach 3 Sekunden aktualisieren, um zu sehen, ob ZigBee jetzt "factory-new" ist
-        setTimeout(() => {
-            updateZigbeeStatus();
-        }, 3000);
+        stopZigbeeStatusPolling();
+        // Ein Fetch nach kurzer Pause (Stack/NVS); kein Doppel-Fetch (Race bei out-of-order Antworten)
+        setTimeout(updateZigbeeStatus, 800);
         
         // Status-Span nach 5 Sekunden wieder leeren
         setTimeout(() => {
@@ -1535,26 +1650,18 @@ function zigbeeStartPairing() {
     if (!confirm("Möchten Sie das ZigBee-Pairing jetzt starten?\n\nStellen Sie sicher, dass der Coordinator im 'Permit Join' Modus ist.")) {
         return;
     }
-    
+
+    stopZigbeeStatusPolling();
     const statusDiv = document.getElementById('zigbeeActionStatus');
+    const statusCell = document.getElementById('zigbeeStatusCell');
     if (statusDiv) {
         statusDiv.innerHTML = '<p class="text-info">Pairing wird gestartet...</p>';
     }
-    
-    // Aktuelles Admin-Passwort für Basic-Auth
-    const currentAdminPass = document.getElementById('adminpass').value;
-    const authHeader = 'Basic ' + btoa('admin:' + currentAdminPass);
-    
-    const formData = new FormData();
-    formData.append('cmd', 'start-pairing');
-    
-    fetch('/zigbee/action', {
-        method: 'POST',
-        headers: {
-            'Authorization': authHeader
-        },
-        body: formData
-    })
+    if (statusCell) {
+        statusCell.textContent = 'Pairing läuft…';
+    }
+
+    postTransferAction('/zigbee/action', { cmd: 'start-pairing' })
     .then(response => {
         if (!response.ok) {
             if (response.status === 401) {
@@ -1568,14 +1675,14 @@ function zigbeeStartPairing() {
     })
     .then(data => {
         if (statusDiv) {
-            statusDiv.innerHTML = '<p class="text-success">Pairing gestartet. Warten auf Coordinator...</p>';
+            statusDiv.innerHTML = '<p class="text-info">Pairing gestartet. Warten auf Coordinator (bis ca. 2 Min.)…</p>';
         }
-        // Status nach 5 Sekunden aktualisieren
-        setTimeout(updateZigbeeStatus, 5000);
+        startZigbeeStatusPolling(120);
     })
     .catch(error => {
+        stopZigbeeStatusPolling();
         if (statusDiv) {
-            statusDiv.innerHTML = `<p class="text-danger">Fehler: ${error.message}</p>`;
+            statusDiv.innerHTML = '<p class="text-danger">Fehler: ' + error.message + '</p>';
         }
     });
 }
