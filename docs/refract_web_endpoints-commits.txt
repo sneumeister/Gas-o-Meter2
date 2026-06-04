@@ -1,0 +1,462 @@
+=== 5962f25 2026-06-04 11:22:00 +0200 ===
+WIP: zigbee wake-rejoin (nicht mergen)
+
+---
+=== d0b2290 2026-06-01 23:59:23 +0200 ===
+fix(mqtt): MQTT-Test-URI thread-lokal statt static (parallele Requests)
+transfer_mqtt_test_connection: test_uri auf dem Stack statt s_test_uri,
+damit parallele /mqtt/action servertest-Aufrufe im HTTP-Thread-Pool
+sich nicht die Broker-URI ├╝berschreiben.
+
+On branch refract_web_endpoints
+Changes to be committed:
+	modified:   src/transfer_mqtt.cpp
+
+---
+=== e4b4279 2026-06-01 23:57:00 +0200 ===
+fix(zigbee): Reboot nach Pairing ÔÇô WiFi/802.15.4-Coex und sys_evt-Stack
+Nach erfolgreichem Web-Pairing crashte esp_restart() in sys_evt (Stack
+protection fault), auch wenn WiFi-Stop zuvor ├╝bersprungen wurde.
+
+- esp_coex_wifi_i154_enable() beim ZigBee-Init (WiFi+802.15.4 auf ESP32-C6)
+- esp_coex_ieee802154_status_disable() in transfer_zigbee_deinit vor WiFi-Stop
+- WiFi-Stop wieder aktiv nach Main-Loop-Stopp und kurzer Pause (kein Skip)
+- sys_evt-Stack 4096 (sdkconfig.defaults + PCB-Env-Konfigs)
+- esp_coex als CMake-Abh├ñngigkeit
+
+On branch refract_web_endpoints
+Changes to be committed:
+	modified:   sdkconfig.PCB_20251022
+	modified:   sdkconfig.PCB_20260523
+	modified:   sdkconfig.defaults
+	modified:   src/CMakeLists.txt
+	modified:   src/main_idf.cpp
+	modified:   src/transfer_zigbee.cpp
+
+---
+=== 9ae56b6 2026-06-01 23:46:20 +0200 ===
+fix(zigbee,config): Pairing-Status nicht h├ñngen lassen bei fehlgeschlagenem Start
+Firmware: web_steering_requested nur bei erfolgreichem Steering-Start setzen;
+bei Fehler zur├╝cksetzen, sofern der Stack nicht bereits steuert. Veraltetes
+Flag in /zigbee/status per BDB-Mode und Grace-Periode bereinigen.
+
+Config-UI: Statuszelle erst nach erfolgreichem POST auf ÔÇ×Pairing l├ñuftÔÇªÔÇ£;
+bei Fehler Tabelle per /zigbee/status aktualisieren (kein Widerspruch zur
+Fehlermeldung).
+
+On branch refract_web_endpoints
+Changes to be committed:
+	modified:   data/config.js
+	modified:   src/transfer_zigbee.cpp
+
+---
+=== c1aca09 2026-06-01 23:35:10 +0200 ===
+fix(config): ZigBee-Status-Fetch gegen veraltete Antworten absichern
+zigbeeStatusFetchSeq: Nur die neueste /zigbee/status-Antwort aktualisiert
+die Tabelle (updateZigbeeStatus und Pairing-Polling).
+
+Nach Factory-Reset nur noch ein Status-Refresh nach 800 ms statt
+zwei paralleler Fetches, die sich gegenseitig mit alten Daten
+├╝berschreiben konnten.
+
+On branch refract_web_endpoints
+Changes to be committed:
+	modified:   data/config.js
+
+---
+=== 6735a16 2026-06-01 23:31:07 +0200 ===
+fix(zigbee): Reboot-Crash nach Pairing ÔÇô WiFi-Stop bei aktivem Stack ├╝berspringen
+transfer_zigbee_deinit() beendet nur die Main Loop, nicht den SDK-Stack.
+esp_wifi_stop() danach l├Âste auf dem ESP32-C6 einen sys_evt Stack-Protection-
+Fault aus (WiFi/ZigBee-Coex). Vor esp_restart() und Deep-Sleep wird WiFi
+bei Modus zigbee nicht mehr gestoppt; das Radio wird ohnehin zur├╝ckgesetzt.
+
+Zus├ñtzlich: CAN_SLEEP (0x16) nur noch DEBUG; NVS-deferred-Log nur bei
+echtem Flash-Schreiben; Config-Web (Status-Polling, MQTT-Test, Auth auf
+Transfer-Actions, joined vor factory-new in der Anzeige).
+
+On branch refract_web_endpoints
+Changes to be committed:
+	modified:   include/zigbee_config.h
+	modified:   src/main_idf.cpp
+	modified:   src/transfer_zigbee.cpp
+
+---
+=== 16c7a61 2026-06-01 23:09:41 +0200 ===
+fix(zigbee): Factory-Reset nicht durch Deinit-Persist ├╝berschreiben
+Nach dem Zur├╝cksetzen von RTC/NVS rief transfer_zigbee_deinit() noch
+persist_config_to_nvs() auf und schrieb den noch ÔÇ×joinedÔÇ£ Stack zur├╝ck.
+W├ñhrend factory_reset_in_progress kein Stack-Sync; pending wird gel├Âscht.
+
+On branch refract_web_endpoints
+Changes to be committed:
+	modified:   src/transfer_zigbee.cpp
+
+---
+=== e81432f 2026-06-01 23:03:59 +0200 ===
+fix(zigbee): NVS-Sync bei /zigbee/status nur anfordern, nicht sofort schreiben
+Veraltetes zigbee_rtc: RTC aus Stack + pending setzen, Flush in Main-Loop.
+Vermeidet wiederholtes NVS aus dem HTTP-Handler (Wear); Deinit flusht weiter synchron.
+
+On branch refract_web_endpoints
+Changes to be committed:
+	modified:   include/transfer_zigbee.h
+	modified:   src/transfer_zigbee.cpp
+
+---
+=== d13a2df 2026-06-01 23:00:08 +0200 ===
+fix(config): togglePassword mit expliziter Icon-Span-ID
+On branch refract_web_endpoints
+Changes to be committed:
+	modified:   data/config.html
+	modified:   data/config.js
+
+---
+=== 66b28cf 2026-06-01 22:55:50 +0200 ===
+fix(config): MQTT-Test bei 401 vor JSON-Parse pr├╝fen
+
+---
+=== 22359aa 2026-06-01 22:48:27 +0200 ===
+fix(zigbee): Pairing-Config beim Deinit und /zigbee/status in NVS sichern
+Nach Join wurde zigbee_rtc nur verz├Âgert in der Main-Loop geschrieben.
+Bei Reboot (esp_restart) ist RTC-RAM weg ÔÇô ohne NVS-Flush wirkte die
+Config-UI wieder ÔÇ×factory-newÔÇ£.
+
+- transfer_zigbee_persist_config_to_nvs(): RTC aus Stack, pending setzen,
+  Save ├╝ber zigbee_process_pending_nvs_save (Wear-Leveling in save_to_nvs)
+- Aufruf in transfer_zigbee_deinit(); Reboot/Deep-Sleep nur ├╝ber shutdown_resources
+- /zigbee/status: Live-Netzdaten anzeigen und bei veraltetem RTC persistieren
+
+On branch refract_web_endpoints
+Changes to be committed:
+	modified:   include/transfer_zigbee.h
+	modified:   src/main_idf.cpp
+	modified:   src/transfer_zigbee.cpp
+
+---
+=== 7047040 2026-06-01 22:27:00 +0200 ===
+fix(zigbee): Live-Status in Config-UI und korrekte Anzeige nach Reset/Pairing
+ZigBee-Statustabelle wird per /zigbee/status aktualisiert (nicht nur
+Server-Template). Nach Factory-Reset sofort ÔÇ×Factory-NewÔÇ£, nach Start
+Pairing Polling bis Join (ÔÇ×Pairing l├ñuftÔÇªÔÇ£ ÔåÆ ÔÇ×GepaartÔÇ£). Firmware:
+joined vor factory_new, Status pairing, NVS nach Reset. Z2M-Converter
+definition version 0.0.1.
+
+On branch refract_web_endpoints
+Changes to be committed:
+	modified:   data/config.html
+	modified:   data/config.js
+	modified:   integration_templates/zigbee2mqtt/README.md
+	modified:   integration_templates/zigbee2mqtt/external_converters/gas-o-meter2.js
+	modified:   src/main_idf.cpp
+	modified:   src/transfer_zigbee.cpp
+
+---
+=== f6c9315 2026-05-31 22:06:10 +0200 ===
+fix(config): MQTT-Test POST, Transfer-Panel nach Save und Passwort-Toggle
+Transfer-Actions senden urlencoded statt multipart (512-Byte-Limit).
+Nach Config-Save bleibt die Modus-Sektion sichtbar; MQTT-Passwort
+bekommt das Auge wie bei WiFi.
+
+On branch refract_web_endpoints
+Changes to be committed:
+	modified:   data/config.html
+	modified:   data/config.js
+	modified:   src/main_idf.cpp
+
+---
+=== 1f96116 2026-05-31 21:21:08 +0200 ===
+feat(web-api): Transfer-Actions vereinheitlichen und MQTT-Servertest
+ZigBee/BLE/MQTT-Endpunkte nutzen gemeinsame Auth-Hilfen und pr├╝fen
+transfer_mode. BLE-Pairing l├ñuft ├╝ber POST /ble/action; MQTT-Test
+(servertest) ohne Speichern inkl. UI-Button nur bei STA-WLAN.
+
+On branch refract_web_endpoints
+Changes to be committed:
+	modified:   data/config.html
+	modified:   data/config.js
+	modified:   include/transfer_mqtt.h
+	modified:   src/main_idf.cpp
+	modified:   src/transfer_mqtt.cpp
+
+---
+commit 5962f250a2ad57afb4a8108428c1b6e122410a2b
+Author: sneumeister <neumi@gmx.net>
+Date:   Thu Jun 4 11:22:00 2026 +0200
+
+    WIP: zigbee wake-rejoin (nicht mergen)
+
+M	include/transfer_zigbee.h
+M	include/zigbee_config.h
+M	sdkconfig.PCB_20251022
+M	sdkconfig.PCB_20260523
+M	sdkconfig.defaults
+M	sdkconfig.espidf
+M	src/CMakeLists.txt
+M	src/main_idf.cpp
+M	src/transfer_zigbee.cpp
+
+commit d0b2290da6152c3eb4f931adea3956d7147bc82e
+Author: sneumeister <neumi@gmx.net>
+Date:   Mon Jun 1 23:59:23 2026 +0200
+
+    fix(mqtt): MQTT-Test-URI thread-lokal statt static (parallele Requests)
+    
+    transfer_mqtt_test_connection: test_uri auf dem Stack statt s_test_uri,
+    damit parallele /mqtt/action servertest-Aufrufe im HTTP-Thread-Pool
+    sich nicht die Broker-URI ├╝berschreiben.
+    
+    On branch refract_web_endpoints
+    Changes to be committed:
+            modified:   src/transfer_mqtt.cpp
+
+M	src/transfer_mqtt.cpp
+
+commit e4b427990fbfecbeb8289d5c59868930b08d9020
+Author: sneumeister <neumi@gmx.net>
+Date:   Mon Jun 1 23:57:00 2026 +0200
+
+    fix(zigbee): Reboot nach Pairing ÔÇô WiFi/802.15.4-Coex und sys_evt-Stack
+    
+    Nach erfolgreichem Web-Pairing crashte esp_restart() in sys_evt (Stack
+    protection fault), auch wenn WiFi-Stop zuvor ├╝bersprungen wurde.
+    
+    - esp_coex_wifi_i154_enable() beim ZigBee-Init (WiFi+802.15.4 auf ESP32-C6)
+    - esp_coex_ieee802154_status_disable() in transfer_zigbee_deinit vor WiFi-Stop
+    - WiFi-Stop wieder aktiv nach Main-Loop-Stopp und kurzer Pause (kein Skip)
+    - sys_evt-Stack 4096 (sdkconfig.defaults + PCB-Env-Konfigs)
+    - esp_coex als CMake-Abh├ñngigkeit
+    
+    On branch refract_web_endpoints
+    Changes to be committed:
+            modified:   sdkconfig.PCB_20251022
+            modified:   sdkconfig.PCB_20260523
+            modified:   sdkconfig.defaults
+            modified:   src/CMakeLists.txt
+            modified:   src/main_idf.cpp
+            modified:   src/transfer_zigbee.cpp
+
+M	sdkconfig.PCB_20251022
+M	sdkconfig.PCB_20260523
+M	sdkconfig.defaults
+M	src/CMakeLists.txt
+M	src/main_idf.cpp
+M	src/transfer_zigbee.cpp
+
+commit 9ae56b65197701c0fdb51012369b655336149401
+Author: sneumeister <neumi@gmx.net>
+Date:   Mon Jun 1 23:46:20 2026 +0200
+
+    fix(zigbee,config): Pairing-Status nicht h├ñngen lassen bei fehlgeschlagenem Start
+    
+    Firmware: web_steering_requested nur bei erfolgreichem Steering-Start setzen;
+    bei Fehler zur├╝cksetzen, sofern der Stack nicht bereits steuert. Veraltetes
+    Flag in /zigbee/status per BDB-Mode und Grace-Periode bereinigen.
+    
+    Config-UI: Statuszelle erst nach erfolgreichem POST auf ÔÇ×Pairing l├ñuftÔÇªÔÇ£;
+    bei Fehler Tabelle per /zigbee/status aktualisieren (kein Widerspruch zur
+    Fehlermeldung).
+    
+    On branch refract_web_endpoints
+    Changes to be committed:
+            modified:   data/config.js
+            modified:   src/transfer_zigbee.cpp
+
+M	data/config.js
+M	src/transfer_zigbee.cpp
+
+commit c1aca097f54c00d4e04b3d222084c4026ff53143
+Author: sneumeister <neumi@gmx.net>
+Date:   Mon Jun 1 23:35:10 2026 +0200
+
+    fix(config): ZigBee-Status-Fetch gegen veraltete Antworten absichern
+    
+    zigbeeStatusFetchSeq: Nur die neueste /zigbee/status-Antwort aktualisiert
+    die Tabelle (updateZigbeeStatus und Pairing-Polling).
+    
+    Nach Factory-Reset nur noch ein Status-Refresh nach 800 ms statt
+    zwei paralleler Fetches, die sich gegenseitig mit alten Daten
+    ├╝berschreiben konnten.
+    
+    On branch refract_web_endpoints
+    Changes to be committed:
+            modified:   data/config.js
+
+M	data/config.js
+
+commit 6735a16733fca6371108a9f3a2e1b18ebcf9b780
+Author: sneumeister <neumi@gmx.net>
+Date:   Mon Jun 1 23:31:07 2026 +0200
+
+    fix(zigbee): Reboot-Crash nach Pairing ÔÇô WiFi-Stop bei aktivem Stack ├╝berspringen
+    
+    transfer_zigbee_deinit() beendet nur die Main Loop, nicht den SDK-Stack.
+    esp_wifi_stop() danach l├Âste auf dem ESP32-C6 einen sys_evt Stack-Protection-
+    Fault aus (WiFi/ZigBee-Coex). Vor esp_restart() und Deep-Sleep wird WiFi
+    bei Modus zigbee nicht mehr gestoppt; das Radio wird ohnehin zur├╝ckgesetzt.
+    
+    Zus├ñtzlich: CAN_SLEEP (0x16) nur noch DEBUG; NVS-deferred-Log nur bei
+    echtem Flash-Schreiben; Config-Web (Status-Polling, MQTT-Test, Auth auf
+    Transfer-Actions, joined vor factory-new in der Anzeige).
+    
+    On branch refract_web_endpoints
+    Changes to be committed:
+            modified:   include/zigbee_config.h
+            modified:   src/main_idf.cpp
+            modified:   src/transfer_zigbee.cpp
+
+M	include/zigbee_config.h
+M	src/main_idf.cpp
+M	src/transfer_zigbee.cpp
+
+commit 16c7a6113f5d023467d85d4ce36d69cc5224dd29
+Author: sneumeister <neumi@gmx.net>
+Date:   Mon Jun 1 23:09:41 2026 +0200
+
+    fix(zigbee): Factory-Reset nicht durch Deinit-Persist ├╝berschreiben
+    
+    Nach dem Zur├╝cksetzen von RTC/NVS rief transfer_zigbee_deinit() noch
+    persist_config_to_nvs() auf und schrieb den noch ÔÇ×joinedÔÇ£ Stack zur├╝ck.
+    W├ñhrend factory_reset_in_progress kein Stack-Sync; pending wird gel├Âscht.
+    
+    On branch refract_web_endpoints
+    Changes to be committed:
+            modified:   src/transfer_zigbee.cpp
+
+M	src/transfer_zigbee.cpp
+
+commit e81432f7d7d53c933b19257356e4a6c4e20d3cff
+Author: sneumeister <neumi@gmx.net>
+Date:   Mon Jun 1 23:03:59 2026 +0200
+
+    fix(zigbee): NVS-Sync bei /zigbee/status nur anfordern, nicht sofort schreiben
+    
+    Veraltetes zigbee_rtc: RTC aus Stack + pending setzen, Flush in Main-Loop.
+    Vermeidet wiederholtes NVS aus dem HTTP-Handler (Wear); Deinit flusht weiter synchron.
+    
+    On branch refract_web_endpoints
+    Changes to be committed:
+            modified:   include/transfer_zigbee.h
+            modified:   src/transfer_zigbee.cpp
+
+M	include/transfer_zigbee.h
+M	src/transfer_zigbee.cpp
+
+commit d13a2df290730dd65d93907f13415dce44b5ddc7
+Author: sneumeister <neumi@gmx.net>
+Date:   Mon Jun 1 23:00:08 2026 +0200
+
+    fix(config): togglePassword mit expliziter Icon-Span-ID
+    
+    On branch refract_web_endpoints
+    Changes to be committed:
+            modified:   data/config.html
+            modified:   data/config.js
+
+M	data/config.html
+M	data/config.js
+
+commit 66b28cfd8b26e32b2f5aa126e08aaf84c49664ee
+Author: sneumeister <neumi@gmx.net>
+Date:   Mon Jun 1 22:55:50 2026 +0200
+
+    fix(config): MQTT-Test bei 401 vor JSON-Parse pr├╝fen
+
+M	data/config.js
+
+commit 22359aa3a865a8c031134d81ebf87741f765c7f3
+Author: sneumeister <neumi@gmx.net>
+Date:   Mon Jun 1 22:48:27 2026 +0200
+
+    fix(zigbee): Pairing-Config beim Deinit und /zigbee/status in NVS sichern
+    
+    Nach Join wurde zigbee_rtc nur verz├Âgert in der Main-Loop geschrieben.
+    Bei Reboot (esp_restart) ist RTC-RAM weg ÔÇô ohne NVS-Flush wirkte die
+    Config-UI wieder ÔÇ×factory-newÔÇ£.
+    
+    - transfer_zigbee_persist_config_to_nvs(): RTC aus Stack, pending setzen,
+      Save ├╝ber zigbee_process_pending_nvs_save (Wear-Leveling in save_to_nvs)
+    - Aufruf in transfer_zigbee_deinit(); Reboot/Deep-Sleep nur ├╝ber shutdown_resources
+    - /zigbee/status: Live-Netzdaten anzeigen und bei veraltetem RTC persistieren
+    
+    On branch refract_web_endpoints
+    Changes to be committed:
+            modified:   include/transfer_zigbee.h
+            modified:   src/main_idf.cpp
+            modified:   src/transfer_zigbee.cpp
+
+M	include/transfer_zigbee.h
+M	src/main_idf.cpp
+M	src/transfer_zigbee.cpp
+
+commit 70470407a5f974d5589ebad7fc82a77de7f70421
+Author: sneumeister <neumi@gmx.net>
+Date:   Mon Jun 1 22:27:00 2026 +0200
+
+    fix(zigbee): Live-Status in Config-UI und korrekte Anzeige nach Reset/Pairing
+    
+    ZigBee-Statustabelle wird per /zigbee/status aktualisiert (nicht nur
+    Server-Template). Nach Factory-Reset sofort ÔÇ×Factory-NewÔÇ£, nach Start
+    Pairing Polling bis Join (ÔÇ×Pairing l├ñuftÔÇªÔÇ£ ÔåÆ ÔÇ×GepaartÔÇ£). Firmware:
+    joined vor factory_new, Status pairing, NVS nach Reset. Z2M-Converter
+    definition version 0.0.1.
+    
+    On branch refract_web_endpoints
+    Changes to be committed:
+            modified:   data/config.html
+            modified:   data/config.js
+            modified:   integration_templates/zigbee2mqtt/README.md
+            modified:   integration_templates/zigbee2mqtt/external_converters/gas-o-meter2.js
+            modified:   src/main_idf.cpp
+            modified:   src/transfer_zigbee.cpp
+
+M	data/config.html
+M	data/config.js
+M	integration_templates/zigbee2mqtt/README.md
+M	integration_templates/zigbee2mqtt/external_converters/gas-o-meter2.js
+M	src/main_idf.cpp
+M	src/transfer_zigbee.cpp
+
+commit f6c9315339067acb90ffe55afa946e61a6b29433
+Author: sneumeister <neumi@gmx.net>
+Date:   Sun May 31 22:06:10 2026 +0200
+
+    fix(config): MQTT-Test POST, Transfer-Panel nach Save und Passwort-Toggle
+    
+    Transfer-Actions senden urlencoded statt multipart (512-Byte-Limit).
+    Nach Config-Save bleibt die Modus-Sektion sichtbar; MQTT-Passwort
+    bekommt das Auge wie bei WiFi.
+    
+    On branch refract_web_endpoints
+    Changes to be committed:
+            modified:   data/config.html
+            modified:   data/config.js
+            modified:   src/main_idf.cpp
+
+M	data/config.html
+M	data/config.js
+M	src/main_idf.cpp
+
+commit 1f961161ce84d949452937912b8d7b5c2b30e6dc
+Author: sneumeister <neumi@gmx.net>
+Date:   Sun May 31 21:21:08 2026 +0200
+
+    feat(web-api): Transfer-Actions vereinheitlichen und MQTT-Servertest
+    
+    ZigBee/BLE/MQTT-Endpunkte nutzen gemeinsame Auth-Hilfen und pr├╝fen
+    transfer_mode. BLE-Pairing l├ñuft ├╝ber POST /ble/action; MQTT-Test
+    (servertest) ohne Speichern inkl. UI-Button nur bei STA-WLAN.
+    
+    On branch refract_web_endpoints
+    Changes to be committed:
+            modified:   data/config.html
+            modified:   data/config.js
+            modified:   include/transfer_mqtt.h
+            modified:   src/main_idf.cpp
+            modified:   src/transfer_mqtt.cpp
+
+M	data/config.html
+M	data/config.js
+M	include/transfer_mqtt.h
+M	src/main_idf.cpp
+M	src/transfer_mqtt.cpp
