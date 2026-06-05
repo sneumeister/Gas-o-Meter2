@@ -14,3 +14,6 @@
 #define WIFI_SCAN_SSID_MAX_LEN 32
 /** Puffergröße inkl. '\0' für C-Strings. */
 #define WIFI_SCAN_SSID_BUF_LEN (WIFI_SCAN_SSID_MAX_LEN + 1)
+
+/** Wartezeit nach esp_wifi_start vor STA-Scan (ESP32-C6: sonst oft 0 APs). */
+#define WIFI_STA_PRE_SCAN_DELAY_MS 1200

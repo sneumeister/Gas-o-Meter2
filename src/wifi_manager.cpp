@@ -1,10 +1,14 @@
 #include "wifi_manager.h"
 #include "hardware.h"
+#include "wifi_scan_config.h"
 
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE && CONFIG_SOC_IEEE802154_SUPPORTED
+#include "esp_coexist.h"    // hat extern "C"-Guard
+#endif
 #include "lwip/ip4_addr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -22,6 +26,24 @@ static esp_event_handler_instance_t s_instance_wifi = nullptr;
 static esp_event_handler_instance_t s_instance_ip = nullptr;
 
 static bool s_wifi_initialized = false;
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE && CONFIG_SOC_IEEE802154_SUPPORTED
+static bool s_coex_wifi_i154_enabled = false;
+#endif
+
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE && CONFIG_SOC_IEEE802154_SUPPORTED
+static void wifi_manager_enable_wifi_i154_coex(void) {
+    if (s_coex_wifi_i154_enabled) {
+        return;
+    }
+    esp_err_t err = esp_coex_wifi_i154_enable();
+    if (err == ESP_OK) {
+        s_coex_wifi_i154_enabled = true;
+        ESP_LOGI(TAG, "WiFi/802.15.4 Coexistence aktiviert (vor esp_wifi_init)");
+    } else {
+        ESP_LOGW(TAG, "esp_coex_wifi_i154_enable: %s", esp_err_to_name(err));
+    }
+}
+#endif
 static bool s_wifi_connected = false;
 static wifi_ap_record_t s_ap_info = {};
 static esp_netif_ip_info_t s_wifi_ip_info = {};
@@ -126,6 +148,10 @@ bool wifi_manager_init(void) {
     esp_netif_create_default_wifi_sta();
     esp_netif_create_default_wifi_ap();
 
+#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE && CONFIG_SOC_IEEE802154_SUPPORTED
+    wifi_manager_enable_wifi_i154_coex();
+#endif
+
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_err_t ret = esp_wifi_init(&cfg);
     if (ret != ESP_OK) {
@@ -198,7 +224,13 @@ bool wifi_connect_sta(void) {
         ESP_LOGI(TAG, "  Kandidat[%u]: SSID=%s", (unsigned)i, s_connect_cfg.ssid[i]);
     }
 
+    /* Radio nach STA-Start stabilisieren (ESP32-C6: sonst oft 0 APs im Scan). */
+    vTaskDelay(pdMS_TO_TICKS(WIFI_STA_PRE_SCAN_DELAY_MS));
+    esp_wifi_scan_stop();
+    vTaskDelay(pdMS_TO_TICKS(100));
+
     wifi_scan_config_t scan_config = {};
+    wifi_manager_fill_scan_config(&scan_config, false);
     uint16_t ap_count = 0;
     const int scan_retries = 3;
     esp_err_t ret = ESP_OK;
@@ -216,7 +248,7 @@ bool wifi_connect_sta(void) {
         if (ap_count > 0) {
             break;
         }
-        vTaskDelay(pdMS_TO_TICKS(300));
+        vTaskDelay(pdMS_TO_TICKS(800));
     }
     if (ap_count == 0) {
         ESP_LOGE(TAG, "Keine Netzwerke gefunden");
@@ -330,10 +362,34 @@ bool wifi_start_access_point(void) {
 
     ESP_LOGI(TAG, "Starte Access Point...");
 
+    wifi_manager_platform_stop_dns_captive();
+    esp_wifi_disconnect();
     esp_wifi_stop();
-    vTaskDelay(pdMS_TO_TICKS(200));
+    vTaskDelay(pdMS_TO_TICKS(300));
 
-    esp_wifi_set_mode(WIFI_MODE_APSTA);
+    /* STA-Interface leeren – sonst Reconnect/Scan im Hintergrund → Windows rm mis am SoftAP. */
+    wifi_config_t sta_clear = {};
+    sta_clear.sta.threshold.authmode = WIFI_AUTH_OPEN;
+    esp_err_t ret = esp_wifi_set_config(WIFI_IF_STA, &sta_clear);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "STA-Config leeren vor AP: %s", esp_err_to_name(ret));
+    }
+
+    ret = esp_wifi_set_mode(WIFI_MODE_NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "WIFI_MODE_NULL vor AP: %s", esp_err_to_name(ret));
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    /*
+     * APSTA mit leerer STA (kein esp_wifi_connect): SoftAP bleibt fuer Konfig-UI,
+     * Scan moeglich ohne AP->APSTA->AP-Flip (sonst bricht Windows-HTTP ab).
+     */
+    ret = esp_wifi_set_mode(WIFI_MODE_APSTA);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "APSTA-Konfig-Modus fehlgeschlagen: %s", esp_err_to_name(ret));
+        return false;
+    }
 
     size_t ssid_len = strlen(cfg.hostname);
     if (ssid_len > 31) {
@@ -343,30 +399,30 @@ bool wifi_start_access_point(void) {
 
     wifi_config_t ap_config = {};
     ap_config.ap.channel = 1;
+    ap_config.ap.beacon_interval = 100;
     ap_config.ap.max_connection = 4;
     ap_config.ap.authmode = WIFI_AUTH_OPEN;
-    ap_config.ap.pmf_cfg.capable = true;
+    ap_config.ap.pairwise_cipher = WIFI_CIPHER_TYPE_NONE;
+    ap_config.ap.pmf_cfg.capable = false;
     ap_config.ap.pmf_cfg.required = false;
     strncpy((char*)ap_config.ap.ssid, cfg.hostname, ssid_len);
     ap_config.ap.ssid[ssid_len] = '\0';
     ap_config.ap.ssid_len = (uint8_t)ssid_len;
     ap_config.ap.password[0] = '\0';
 
-    esp_err_t ret = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+    ret = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "AP-Konfiguration fehlgeschlagen: %s", esp_err_to_name(ret));
         return false;
     }
 
-    wifi_config_t sta_clear = {};
-    sta_clear.sta.ssid[0] = '\0';
-    sta_clear.sta.password[0] = '\0';
-    sta_clear.sta.threshold.authmode = WIFI_AUTH_OPEN;
-    ret = esp_wifi_set_config(WIFI_IF_STA, &sta_clear);
+    ret = esp_wifi_start();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "STA-Config (leer) fehlgeschlagen: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "AP-Start fehlgeschlagen: %s", esp_err_to_name(ret));
         return false;
     }
+
+    vTaskDelay(pdMS_TO_TICKS(200));
 
     esp_netif_t* ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     if (ap_netif != nullptr) {
@@ -379,15 +435,15 @@ bool wifi_start_access_point(void) {
         esp_netif_dhcps_start(ap_netif);
     }
 
-    ret = esp_wifi_start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "AP-Start fehlgeschlagen: %s", esp_err_to_name(ret));
-        return false;
-    }
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20);
+    /* 11b/g: bessere Windows-Kompatibilitaet am offenen Konfig-AP */
+    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G);
 
     wifi_manager_set_tx_power_quarter_dbm((int8_t)(cfg.wifi_tx_power_dbm * 4));
 
-    ESP_LOGI(TAG, "Access Point gestartet (Modus AP+STA, Captive nutzt nur AP): %s", cfg.hostname);
+    ESP_LOGI(TAG, "Konfig-AP gestartet (Modus APSTA, AP-Kanal %u, STA inaktiv): %s",
+             (unsigned)ap_config.ap.channel, cfg.hostname);
     ESP_LOGI(TAG, "AP IP: %d.%d.%d.%d", AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
     ESP_LOGI(TAG, "WLAN ist offen (kein Passwort)");
 
@@ -395,6 +451,43 @@ bool wifi_start_access_point(void) {
         ESP_LOGW(TAG, "DNS Captive konnte nicht gestartet werden (HTTP-Captive-Redirect bleibt aktiv)");
     }
     return true;
+}
+
+bool wifi_manager_prepare_scan_in_ap_mode(void) {
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    if (esp_wifi_get_mode(&mode) != ESP_OK) {
+        return false;
+    }
+    if (mode != WIFI_MODE_AP && mode != WIFI_MODE_APSTA) {
+        return true;
+    }
+
+    /* Legacy: reines AP -> einmalig APSTA (Konfig-AP startet heute schon als APSTA). */
+    if (mode == WIFI_MODE_AP) {
+        ESP_LOGI(TAG, "Konfig-AP: einmalig APSTA fuer Scan (ohne Modus-Rueckschaltung danach)");
+        esp_err_t ret = esp_wifi_set_mode(WIFI_MODE_APSTA);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "APSTA fuer Scan fehlgeschlagen: %s", esp_err_to_name(ret));
+            return false;
+        }
+    }
+
+    wifi_config_t sta_clear = {};
+    sta_clear.sta.ssid[0] = '\0';
+    sta_clear.sta.password[0] = '\0';
+    sta_clear.sta.threshold.authmode = WIFI_AUTH_OPEN;
+    esp_err_t ret = esp_wifi_set_config(WIFI_IF_STA, &sta_clear);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "STA-Config (leer) fuer Scan fehlgeschlagen: %s", esp_err_to_name(ret));
+        return false;
+    }
+    esp_wifi_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(50));
+    return true;
+}
+
+void wifi_manager_restore_ap_after_scan(void) {
+    /* Bewusst leer: Zurueck auf AP-only wuerde Windows-Client trennen und Scan-HTTP abbrechen. */
 }
 
 bool wifi_is_connected(void) {
@@ -407,6 +500,18 @@ const wifi_ap_record_t* wifi_get_ap_info(void) {
 
 const esp_netif_ip_info_t* wifi_get_ip_info(void) {
     return &s_wifi_ip_info;
+}
+
+void wifi_manager_fill_scan_config(wifi_scan_config_t* out, bool passive) {
+    if (out == nullptr) {
+        return;
+    }
+    *out = {};
+    out->ssid = nullptr;
+    out->bssid = nullptr;
+    out->channel = 0;
+    out->show_hidden = false;
+    out->scan_type = passive ? WIFI_SCAN_TYPE_PASSIVE : WIFI_SCAN_TYPE_ACTIVE;
 }
 
 bool wifi_manager_apply_tx_power(void) {

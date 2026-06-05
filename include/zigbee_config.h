@@ -84,12 +84,18 @@
 // Hinweis: 5× STEERING_RETRY + 4× RETRY_TIMER kann theoretisch > CYCLE_TIMEOUT sein – Cycle bricht frueher ab
 #define ZIGBEE_INIT_TIMEOUT_MS        5000    // 5 Sekunden Timeout für Stack-Initialisierung
 #define ZIGBEE_INIT_POLL_INTERVAL_MS  100     // Poll-Intervall für Stack-Initialisierung
+#define ZIGBEE_CAN_SLEEP_WAIT_MS      5000    // Max. Warte auf CAN_SLEEP vor Deinit/WiFi-Stop (Deep-Sleep/Reboot)
+/** /zigbee/status?wait=N Long-Poll (Sekunden, Web-Pairing) */
+#define ZIGBEE_STATUS_WAIT_MAX_SEC        30U
+#define ZIGBEE_STATUS_WAIT_POLL_MS       500U
+#define ZIGBEE_STATUS_ACTIVITY_REFRESH_MS 1000U
 #define ZIGBEE_STEERING_POLL_INTERVAL_MS 500  // Poll-Intervall für Network Steering (500ms = weniger CPU-Last, aber immer noch responsiv)
 #define ZIGBEE_STEERING_RETRY_COUNT   5       // Anzahl Retry-Versuche bei Network Steering FAIL (erhöht von 3 auf 5 für schwaches Netz)
 #define ZIGBEE_STEERING_RETRY_TIMER_MS 5000   // Wartezeit zwischen Retry-Versuchen (erhöht von 3s auf 5s für mehr Zeit bei schwachem Netz)
 // Erstes Pairing: warten auf ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE (max), danach kurzes Post-Announce-Fenster fuer Z2M-Interview
 #define ZIGBEE_INTERVIEW_ANNCE_WAIT_MAX_MS  60000   // Max. Warte auf DEVICE_ANNCE (Fallback ohne Signal)
 #define ZIGBEE_INTERVIEW_POST_ANNCE_MS      30000   // Nach DEVICE_ANNCE: Z2M Interview + Configure Reporting
+#define ZIGBEE_INTERVIEW_POST_ANNCE_WEB_MS  12000   // Web-Pairing: kuerzer, damit /zigbee/status + UI nicht blockieren
 #define ZIGBEE_INTERVIEW_POLL_INTERVAL_MS   200     // Poll-Intervall waehrend Interview-Warte
 #define ZIGBEE_AUTO_REJOIN_PASSIVE_WAIT_MS   300    // Kurze Poll-Warte ob Stack joined (nach Deep-Sleep typ. cold → danach Steering)
 #define ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS  45000  // Poll-Timeout nach DEVICE_REBOOT / in Steering-Warte (nicht passive Phase)

@@ -114,10 +114,10 @@ function rebootDevice() {
                 }
                 
                 // Versuche Seite neu zu laden
-                fetch(window.location.href, { 
-                    method: 'HEAD', 
+                fetch('/', {
+                    method: 'HEAD',
                     cache: 'no-cache',
-                    signal: AbortSignal.timeout(2000)  // 2 Sekunden Timeout
+                    signal: AbortSignal.timeout(2000)
                 })
                     .then(() => {
                         // Server ist wieder online → Seite neu laden

@@ -450,7 +450,7 @@ static void persist_pulse_counter_before_deep_sleep(void) {
 
 static void enter_deep_sleep_after_wakeup(bool enable_timer_wakeup) {
     persist_pulse_counter_before_deep_sleep();
-    // ZigBee-NVS-Flush: enter_deep_sleep_with_gpio_and_timer_wakeup() -> shutdown_resources()
+    // ZigBee: CAN_SLEEP -> deinit -> WiFi in shutdown_resources(true)
     enter_deep_sleep_with_gpio_and_timer_wakeup(enable_timer_wakeup);
 }
 
@@ -1060,7 +1060,18 @@ void shutdown_resources(bool for_imminent_restart) {
     const bool zigbee_was_active =
         (strcmp(config_rtc.transfer_mode, TRANSFER_MODE_ZIGBEE) == 0);
 
-    // Transfer-Modus deinitialisieren
+    // ZigBee: CAN_SLEEP abwarten (Main-Loop laeuft), dann Deinit, danach WiFi-Stop
+    if (for_imminent_restart && zigbee_was_active && transfer_zigbee_is_initialized()) {
+        ESP_LOGI(TAG, "Warte auf ZigBee CAN_SLEEP vor Shutdown (max %d ms)...",
+                 ZIGBEE_CAN_SLEEP_WAIT_MS);
+        if (transfer_zigbee_wait_can_sleep(ZIGBEE_CAN_SLEEP_WAIT_MS)) {
+            ESP_LOGI(TAG, "ZigBee CAN_SLEEP empfangen – Deinit, danach WiFi-Stop");
+        } else {
+            ESP_LOGW(TAG, "ZigBee CAN_SLEEP Timeout – Deinit und WiFi-Stop trotzdem");
+        }
+    }
+
+    // Transfer-Modus deinitialisieren (ZigBee Main Loop + NVS-Flush)
     transfer_deinit();
     
     // LED ausschalten (HP-Core wird beendet)
@@ -1091,13 +1102,8 @@ void shutdown_resources(bool for_imminent_restart) {
     stop_dns_captive_server();
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    // 4. WiFi trennen und stoppen (STA und/oder AP)
-    // ZigBee: Main-Loop in transfer_zigbee_deinit gestoppt + esp_coex_ieee802154_status_disable(),
-    // danach esp_wifi_stop (nicht parallel zum laufenden ZBOSS-Main-Loop).
+    // 4. WiFi trennen und stoppen (nach ZigBee-Deinit; Stack/Main-Loop bereits beendet)
     if (wifi_manager_is_initialized()) {
-        if (for_imminent_restart && zigbee_was_active) {
-            vTaskDelay(pdMS_TO_TICKS(300));
-        }
         wifi_manager_session_end();
         vTaskDelay(pdMS_TO_TICKS(100));
     }
@@ -1135,11 +1141,7 @@ void perform_reboot(const char* reason) {
     
     ESP_LOGI(TAG, "Starte Reboot...");
     fflush(stdout);
-    if (strcmp(config_rtc.transfer_mode, TRANSFER_MODE_ZIGBEE) == 0) {
-        vTaskDelay(pdMS_TO_TICKS(300));
-    } else {
-        vTaskDelay(pdMS_TO_TICKS(200));
-    }
+    vTaskDelay(pdMS_TO_TICKS(200));
     esp_restart();
 }
 
@@ -3561,25 +3563,137 @@ static esp_err_t pulse_counter_api_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Handler für /zigbee/status (GET)
+/** JSON aus get_status_json; optional Long-Poll-Metadaten anhaengen. */
+static bool zigbee_status_format_json(char* out, size_t out_size, uint32_t waited_ms, bool include_wait_meta,
+                                      bool timed_out) {
+    char base[512];
+    if (!transfer_zigbee_get_status_json(base, sizeof(base))) {
+        return false;
+    }
+    if (!include_wait_meta) {
+        snprintf(out, out_size, "%s", base);
+        return true;
+    }
+    const size_t len = strlen(base);
+    if (len < 2 || base[len - 1] != '}') {
+        return false;
+    }
+    base[len - 1] = '\0';
+    const int written = snprintf(out, out_size, "%s,\"waited_ms\":%lu,\"timed_out\":%s}", base,
+                                 (unsigned long)waited_ms, timed_out ? "true" : "false");
+    return written > 0 && (size_t)written < out_size;
+}
+
+// Handler für /zigbee/status (GET); optional ?wait=N Long-Poll (RTC-only, kein esp_zb_lock)
 static esp_err_t zigbee_status_handler(httpd_req_t *req) {
     last_web_activity_us = esp_timer_get_time();
     if (http_reject_unless_transfer_mode(req, TRANSFER_MODE_ZIGBEE, "ZigBee") != ESP_OK) {
         return ESP_OK;
     }
-    
-    // ZigBee-Status über Wrapper-Funktion ermitteln
-    char json_response[512];
-    if (!transfer_zigbee_get_status_json(json_response, sizeof(json_response))) {
+
+    char wait_param[8] = "";
+    uint32_t wait_sec = 0;
+    if (get_query_param(req, "wait", wait_param, sizeof(wait_param))) {
+        wait_sec = (uint32_t)strtoul(wait_param, nullptr, 10);
+        if (wait_sec > ZIGBEE_STATUS_WAIT_MAX_SEC) {
+            wait_sec = ZIGBEE_STATUS_WAIT_MAX_SEC;
+        }
+    }
+
+    uint32_t waited_ms = 0;
+    bool timed_out = false;
+    const bool long_poll = (wait_sec > 0 && !transfer_zigbee_rtc_config_valid());
+
+    if (long_poll) {
+        ESP_LOGI(TAG, "GET /zigbee/status Long-Poll (max %lu s, RTC-only)", (unsigned long)wait_sec);
+        const uint32_t deadline_ms = wait_sec * 1000U;
+        uint32_t since_activity_ms = 0;
+        while (waited_ms < deadline_ms) {
+            last_web_activity_us = esp_timer_get_time();
+            if (transfer_zigbee_rtc_config_valid()) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(ZIGBEE_STATUS_WAIT_POLL_MS));
+            waited_ms += ZIGBEE_STATUS_WAIT_POLL_MS;
+            since_activity_ms += ZIGBEE_STATUS_WAIT_POLL_MS;
+            if (since_activity_ms >= ZIGBEE_STATUS_ACTIVITY_REFRESH_MS) {
+                since_activity_ms = 0;
+                last_web_activity_us = esp_timer_get_time();
+            }
+        }
+        timed_out = !transfer_zigbee_rtc_config_valid();
+        if (timed_out) {
+            waited_ms = deadline_ms;
+        }
+        ESP_LOGI(TAG, "/zigbee/status Long-Poll Ende: waited=%lu ms joined=%s",
+                 (unsigned long)waited_ms, transfer_zigbee_rtc_config_valid() ? "ja" : "nein");
+    } else {
+        ESP_LOGI(TAG, "GET /zigbee/status (RTC-only, kein Stack-Lock)");
+    }
+
+    char json_response[576];
+    const bool include_wait_meta = (wait_sec > 0);
+    if (!zigbee_status_format_json(json_response, sizeof(json_response), waited_ms, include_wait_meta, timed_out)) {
+        ESP_LOGW(TAG, "/zigbee/status: get_status_json fehlgeschlagen");
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, "{\"error\":\"Fehler beim Ermitteln des ZigBee-Status\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_OK;
     }
-    
+
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, json_response, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
+}
+
+static volatile bool zigbee_web_transfer_running = false;
+
+/** Wie Timer-Wake transfer_data(): Zähler/Akku aus Runtime, ensure_joined + Reports. */
+static void refresh_battery_measurements_for_transfer(void) {
+    battery_adc_mv = read_adc_median_mv();
+    battery_voltage = (float)battery_adc_mv / 1000.0f * VOLTAGE_DIVIDER_RATIO * config_rtc.adc_voltage_multiplier;
+    battery_percent = VOLTAGE_TO_PERCENT(battery_voltage);
+    ESP_LOGI(TAG, "Web-ZigBee-Transfer: ADC %lu mV → %.2f V, %.0f%%",
+             (unsigned long)battery_adc_mv, battery_voltage, (float)battery_percent);
+}
+
+static void zigbee_web_transfer_task(void *pv) {
+    (void)pv;
+    if (zigbee_web_transfer_running) {
+        ESP_LOGW(TAG, "zigbee_web_transfer_task: Läuft bereits");
+        vTaskDelete(NULL);
+        return;
+    }
+    zigbee_web_transfer_running = true;
+    transfer_zigbee_set_web_transfer_busy(true);
+    transfer_zigbee_mark_web_pairing_requested();
+
+    refresh_battery_measurements_for_transfer();
+
+    transfer_data_t data_to_transfer = {
+        .pulse_counter = *(volatile uint32_t *)&ulp_pulse_counter,
+        .battery_percent = (float)battery_percent,
+        .battery_voltage = battery_voltage,
+        .firmware_version = PROJECT_VERSION
+    };
+
+    ESP_LOGI(TAG, "Web-ZigBee-Transfer: pulse=%lu, Akku %.1f%% / %.2f V (wie Timer-Wake)",
+             (unsigned long)data_to_transfer.pulse_counter,
+             data_to_transfer.battery_percent, data_to_transfer.battery_voltage);
+
+    transfer_status_t status = transfer_data(&data_to_transfer);
+
+    if (status == TRANSFER_STATUS_OK) {
+        ESP_LOGI(TAG, "Web-ZigBee-Transfer: erfolgreich (Join + Daten an Coordinator)");
+    } else {
+        ESP_LOGW(TAG, "Web-Zigbee-Transfer: %s (Status: %d)",
+                 transfer_status_to_string(status), (int)status);
+    }
+
+    transfer_zigbee_clear_web_pairing_requested();
+    transfer_zigbee_set_web_transfer_busy(false);
+    zigbee_web_transfer_running = false;
+    vTaskDelete(NULL);
 }
 
 // Handler für /zigbee/action (POST)
@@ -3589,6 +3703,14 @@ static esp_err_t zigbee_action_handler(httpd_req_t *req) {
     }
     last_web_activity_us = esp_timer_get_time();
     if (http_reject_unless_transfer_mode(req, TRANSFER_MODE_ZIGBEE, "ZigBee") != ESP_OK) {
+        return ESP_OK;
+    }
+    if (!wifi_is_connected()) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req,
+                        "{\"status\":\"error\",\"message\":\"ZigBee-Aktionen nur im WLAN (STA), nicht im Einrichtungs-AP.\"}",
+                        HTTPD_RESP_USE_STRLEN);
         return ESP_OK;
     }
     
@@ -3633,20 +3755,29 @@ static esp_err_t zigbee_action_handler(httpd_req_t *req) {
         return ESP_OK;
         
     } else if (strcmp(cmd, "start-pairing") == 0) {
-        transfer_status_t pairing_status = transfer_zigbee_start_pairing();
-        if (pairing_status == TRANSFER_STATUS_OK) {
+        if (zigbee_web_transfer_running) {
+            httpd_resp_set_status(req, "409 Conflict");
             httpd_resp_set_type(req, "application/json");
-            httpd_resp_send(req, "{\"status\":\"success\",\"message\":\"Pairing gestartet. Warten auf Coordinator...\"}", HTTPD_RESP_USE_STRLEN);
-        } else {
-            httpd_resp_set_status(req, "500 Internal Server Error");
-            httpd_resp_set_type(req, "application/json");
-            char error_json[256];
-            snprintf(error_json, sizeof(error_json),
-                     "{\"status\":\"error\",\"message\":\"Fehler beim Starten des Pairings: %s\"}",
-                     transfer_status_to_string(pairing_status));
-            httpd_resp_send(req, error_json, HTTPD_RESP_USE_STRLEN);
+            httpd_resp_send(req,
+                            "{\"status\":\"error\",\"message\":\"ZigBee-Übertragung/Pairing läuft bereits im Hintergrund.\"}",
+                            HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
         }
-
+        /* Gleicher Pfad wie Timer-Wake: prepare_cluster_attrs, ensure_joined, Reports (blockiert nicht HTTP). */
+        BaseType_t created = xTaskCreate(zigbee_web_transfer_task, "zigbee_xfer", 8192, NULL, 5, NULL);
+        if (created != pdPASS) {
+            httpd_resp_set_status(req, "503 Service Unavailable");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req,
+                            "{\"status\":\"error\",\"message\":\"ZigBee-Task konnte nicht gestartet werden.\"}",
+                            HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        }
+        httpd_resp_set_status(req, "202 Accepted");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req,
+                        "{\"status\":\"success\",\"message\":\"Pairing/Übertragung gestartet (wie Timer-Wake). Status per Long-Poll (/zigbee/status?wait=20).\"}",
+                        HTTPD_RESP_USE_STRLEN);
         return ESP_OK;
         
     } else {
@@ -3815,8 +3946,7 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
     wifi_mode_t mode_before = WIFI_MODE_STA;
     (void)esp_wifi_get_mode(&mode_before);
     const bool scan_in_ap_mode = (mode_before == WIFI_MODE_AP || mode_before == WIFI_MODE_APSTA);
-    
-    // WiFi-Scan durchführen
+
     if (!wifi_manager_init()) {
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
@@ -3826,18 +3956,14 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
 
     esp_err_t ret = ESP_OK;
     if (scan_in_ap_mode) {
-        // Konfig-AP läuft als AP+STA: kein Moduswechsel nötig. Legacy: nur-AP → kurz APSTA.
-        if (mode_before == WIFI_MODE_AP) {
-            ret = esp_wifi_set_mode(WIFI_MODE_APSTA);
-            if (ret != ESP_OK) {
-                httpd_resp_set_status(req, "500 Internal Server Error");
-                httpd_resp_set_type(req, "application/json");
-                httpd_resp_send(req, "{\"error\":\"WiFi-Modus APSTA fehlgeschlagen\"}", HTTPD_RESP_USE_STRLEN);
-                return ESP_OK;
-            }
+        if (!wifi_manager_prepare_scan_in_ap_mode()) {
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, "{\"error\":\"WiFi-Modus APSTA fuer Scan fehlgeschlagen\"}",
+                            HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
         }
     } else {
-        // Nur STA: Scan nutzt 802.11, kein DNS. HTTP-Antwort läuft über TCP:80 — unabhängig vom DNS-Captive (UDP:53).
         ret = esp_wifi_set_mode(WIFI_MODE_STA);
         if (ret != ESP_OK) {
             httpd_resp_set_status(req, "500 Internal Server Error");
@@ -3845,9 +3971,6 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
             httpd_resp_send(req, "{\"error\":\"WiFi-Modus STA fehlgeschlagen\"}", HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
         }
-    }
-    
-    if (!scan_in_ap_mode) {
         ret = esp_wifi_start();
         if (ret != ESP_OK) {
             httpd_resp_set_status(req, "500 Internal Server Error");
@@ -3856,32 +3979,30 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
             return ESP_OK;
         }
     }
-    
+
     wifi_manager_apply_tx_power();
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    if (scan_in_ap_mode) {
-        esp_wifi_disconnect();
-    }
-    
-    wifi_scan_config_t scan_config = {
-        .ssid = NULL,
-        .bssid = NULL,
-        .channel = 0,
-        .show_hidden = false,
-    };
+    wifi_scan_config_t scan_config = {};
+    wifi_manager_fill_scan_config(&scan_config, scan_in_ap_mode);
     
     ret = esp_wifi_scan_start(&scan_config, true);
     if (ret != ESP_OK) {
+        if (scan_in_ap_mode) {
+            wifi_manager_restore_ap_after_scan();
+        }
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, "{\"error\":\"WiFi-Scan fehlgeschlagen\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_OK;
     }
-    
+
     uint16_t ap_total = 0;
     esp_wifi_scan_get_ap_num(&ap_total);
     if (ap_total == 0) {
+        if (scan_in_ap_mode) {
+            wifi_manager_restore_ap_after_scan();
+        }
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, "[]", HTTPD_RESP_USE_STRLEN);
         return ESP_OK;
@@ -3899,6 +4020,10 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
         n++;
     }
     esp_wifi_clear_ap_list();
+
+    if (scan_in_ap_mode) {
+        wifi_manager_restore_ap_after_scan();
+    }
 
     char json_response[1024];
     serializeJson(doc, json_response, sizeof(json_response));
@@ -4089,6 +4214,7 @@ void setupWebServer() {
     // HTTP-Server konfigurieren
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     // API + Static-Wildcard; keine separaten Captive-Probe-URIs nötig (AP: fehlende Datei → Redirect)
+    config.max_open_sockets = 7;  /* ESP-IDF-Maximum (3 intern reserviert) */
     config.max_uri_handlers = 30;
     config.max_resp_headers = 8;
     config.lru_purge_enable = true;
@@ -4586,8 +4712,8 @@ extern "C" void app_main(void) {
                         ESP_LOGI(TAG, "Web-Server: http://%s", ip_str);
                     } else {
                         ESP_LOGE(TAG, "WiFi-Verbindung fehlgeschlagen → Starte Access Point");
-                        
-                        // Access Point starten
+                        wifi_manager_session_end();
+
                         if (wifi_start_access_point()) {
                             // Web-Server starten (ohne mDNS und NTP im AP-Modus)
                             setupWebServer();

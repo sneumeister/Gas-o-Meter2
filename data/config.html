@@ -60,6 +60,36 @@
             -moz-appearance: none;
             padding-right: 35px;
         }
+        /* ZigBee-Aktionsstatus: dunkle Texte auf hellem Panel (Bootstrap text-warning/info zu blass) */
+        #zigbeeActionStatus {
+            color: #212529;
+            font-size: 0.95rem;
+            line-height: 1.45;
+        }
+        #zigbeeActionStatus p {
+            margin-bottom: 0.35rem;
+        }
+        #zigbeeActionStatus .zigbee-status-info {
+            color: #055160;
+        }
+        #zigbeeActionStatus .zigbee-status-success {
+            color: #0a3622;
+            font-weight: 600;
+        }
+        #zigbeeActionStatus .zigbee-status-warn {
+            color: #513c06;
+            background-color: #fff3cd;
+            border: 1px solid #e0c060;
+            padding: 0.5rem 0.75rem;
+            border-radius: 0.375rem;
+        }
+        #zigbeeActionStatus .zigbee-status-error {
+            color: #58151c;
+            font-weight: 500;
+        }
+        #zigbeeActionStatus .zigbee-status-muted {
+            color: #495057;
+        }
     </style>
 </head>
 <body>
@@ -230,7 +260,11 @@
                                 🔗 Start Pairing
                             </button>
                         </div>
-                        <div id="zigbeeActionStatus" class="text-muted"></div>
+                        <div id="zigbeeActionStatus"></div>
+                        <small class="text-muted" id="zigbeeStaHint" style="display: none;">
+                            ZigBee-Einstellungen und Pairing nur im WLAN (STA) verfügbar – nicht im Einrichtungs-Hotspot (AP).
+                            Nach Speichern der WiFi-Daten Gerät neu starten.
+                        </small>
                     </div>
                 </div>
             </div>
@@ -364,7 +398,7 @@
                 <button type="button" onclick="reloadConfig()">Konfig Neuladen</button>
                 <button type="button" onclick="saveConfig()" style="background-color: #28a745; color: white;">Konfig Speichern</button>
                 <button type="button" onclick="rebootDevice()" style="background-color: #dc3545; color: white;">Reboot</button>
-                <button type="button" onclick="window.location.href='/'" style="background-color: #667eea; color: white;">Zurück</button>
+                <button type="button" onclick="location.href='/'" style="background-color: #667eea; color: white;">Zurück</button>
             </div>
         </form>
     </div>

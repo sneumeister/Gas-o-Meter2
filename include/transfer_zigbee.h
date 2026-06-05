@@ -42,6 +42,16 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data);
 bool transfer_zigbee_sync_time(void);
 
 /**
+ * @brief Wartet auf ESP_ZB_COMMON_SIGNAL_CAN_SLEEP (Main-Loop laeuft weiter).
+ *
+ * Vor transfer_zigbee_deinit() / WiFi-Stop aufrufen, damit der Stack idle ist.
+ *
+ * @param timeout_ms Maximale Wartezeit
+ * @return true wenn CAN_SLEEP empfangen, false bei Timeout oder Stack nicht aktiv
+ */
+bool transfer_zigbee_wait_can_sleep(uint32_t timeout_ms);
+
+/**
  * @brief Stoppt ZigBee Main Loop (kein esp_zb_deinit; vollstaendiger Reset per Reboot).
  */
 void transfer_zigbee_deinit(void);
@@ -49,19 +59,20 @@ void transfer_zigbee_deinit(void);
 /**
  * @brief Schreibt zigbee_rtc aus dem laufenden Stack in NVS (wenn zigbee_nvs_save_pending).
  *
- * Synchroner NVS-Flush (Deinit/Reboot). /zigbee/status stellt nur pending + RTC-RAM nach.
+ * Synchroner NVS-Flush (Deinit/Reboot). /zigbee/status liest nur zigbee_rtc (kein Stack).
  * Reboot/Deep-Sleep: kein Extra-Aufruf noetig (shutdown_resources -> deinit).
  */
 void transfer_zigbee_persist_config_to_nvs(void);
 
 /**
- * @brief Gibt den aktuellen ZigBee-Status als JSON-String zurück
- * 
- * @param buffer Buffer für JSON-String (mindestens 512 Bytes)
- * @param buffer_size Größe des Buffers
- * @return true bei Erfolg, false bei Fehler
+ * @brief ZigBee-Status für Web (/zigbee/status): nur zigbee_rtc + Pairing-Flags, kein esp_zb_lock.
+ *
+ * joined = gültige zigbee_rtc-Config; pairing = Join läuft; sonst factory-new.
  */
 bool transfer_zigbee_get_status_json(char* buffer, size_t buffer_size);
+
+/** Gültige ZigBee-Config in RTC (joined + gültige network_addr), ohne Stack-Zugriff. */
+bool transfer_zigbee_rtc_config_valid(void);
 
 /**
  * @brief Führt einen Factory-Reset durch (löscht alle ZigBee-Daten)
@@ -72,11 +83,17 @@ bool transfer_zigbee_get_status_json(char* buffer, size_t buffer_size);
 bool transfer_zigbee_factory_reset(const char* transfer_mode);
 
 /**
- * @brief Startet ZigBee-Pairing (Network Steering)
- * 
- * @return transfer_status_t TRANSFER_STATUS_OK wenn Steering gestartet wurde
+ * @brief true während Web-Pairing/Transfer oder ensure_joined-Pairing-Schleife (noch nicht joined).
  */
-transfer_status_t transfer_zigbee_start_pairing(void);
+bool transfer_zigbee_is_pairing_active(void);
+
+/** Status „Pairing läuft“ in /zigbee/status (Web-UI, bis Join oder Task-Ende). */
+void transfer_zigbee_mark_web_pairing_requested(void);
+void transfer_zigbee_clear_web_pairing_requested(void);
+
+/** true waehrend zigbee_web_transfer_task (kuerzeres Interview-Fenster, Status transfer_busy). */
+void transfer_zigbee_set_web_transfer_busy(bool busy);
+bool transfer_zigbee_is_web_transfer_busy(void);
 
 /**
  * @brief Prüft, ob ein Factory-Reset gerade läuft

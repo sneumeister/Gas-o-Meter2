@@ -24,7 +24,7 @@ idf_component_register(
         esp_adc
         nvs_flash
         esp_wifi
-        esp_coex
+        esp_coex                  # esp_coex_wifi_i154_enable() (WiFi + 802.15.4 auf C6)
         esp_netif
         esp_event
         esp_timer

@@ -1,6 +1,22 @@
 // WiFi-Credentials dynamisch verwalten
 let wifiCredentials = [];
 
+/**
+ * Ziel-URL nach Reboot: immer mDNS (STA: direkt; AP: Captive Portal leitet auf 10.0.0.1 um).
+ */
+function getMdnsHomeUrl(hostname) {
+    const h = (hostname || '').trim().toLowerCase();
+    if (!h) {
+        return null;
+    }
+    return 'http://' + h + '.local/';
+}
+
+function getHostnameFromForm() {
+    const hostnameInput = document.getElementById('hostname');
+    return hostnameInput ? hostnameInput.value.trim() : '';
+}
+
 // Reboot-Funktion - vereinfacht: Countdown, dann Link anzeigen
 function rebootDevice() {
     // Sicherheitsfrage
@@ -8,31 +24,10 @@ function rebootDevice() {
         return;
     }
     
-    // Prüfe, ob Hostname geändert wurde (aus dem Formular)
-    const hostnameInput = document.getElementById('hostname');
-    const originalHostname = hostnameInput ? (hostnameInput.getAttribute('value') || 
-                                             hostnameInput.defaultValue || 
-                                             hostnameInput.value) : null;
-    const newHostname = hostnameInput ? hostnameInput.value.trim() : null;
-    const hostnameChanged = originalHostname && newHostname && (originalHostname !== newHostname);
-    
-    // Bestimme Ziel-URL für nach dem Reboot
-    // WICHTIG: Im AP-Modus verwenden wir den Hostname (mDNS), nicht die IP-Adresse
-    let targetUrl;
-    if (newHostname) {
-        // Hostname verfügbar: Verwende immer mDNS-URL (auch im AP-Modus)
-        targetUrl = `http://${newHostname}.local/`;
-    } else {
-        // Kein Hostname verfügbar: Verwende aktuelle URL (Fallback)
-        targetUrl = window.location.origin + '/';
-    }
-    
-    // POST-Request an /reboot senden
-    const rebootUrl = window.location.origin + '/reboot';
     const formData = new FormData();
     formData.append('cmd', 'reboot');
     
-    fetch(rebootUrl, {
+    fetch('/reboot', {
         method: 'POST',
         body: formData
     })
@@ -78,13 +73,12 @@ function rebootDevice() {
             clearInterval(countdownInterval);
             
             // Nach Countdown: UI ändern - Formular ausblenden, Link anzeigen
-            showRebootLink(targetUrl, newHostname);
+            showRebootLink();
         }
     }, 1000);
 }
 
-// Zeige Link zur neuen URL nach Reboot
-function showRebootLink(targetUrl, newHostname) {
+function showRebootLink() {
     // 1. Erfolgs-Fenster entfernen (falls vorhanden)
     const successAlerts = document.querySelectorAll('.alert-success');
     successAlerts.forEach(alert => alert.remove());
@@ -103,13 +97,23 @@ function showRebootLink(targetUrl, newHostname) {
     const infoText = document.createElement('p');
     infoText.className = 'mb-4';
     infoText.style.cssText = 'font-size: 1.1em; color: #333;';
-    infoText.textContent = 'Warten Sie, bis das System wieder online ist, und klicken Sie dann auf diesen Link:';
+    const homeUrl = getMdnsHomeUrl(getHostnameFromForm());
+    if (homeUrl) {
+        infoText.textContent = 'Nach dem Neustart immer diese Adresse öffnen (WLAN: mDNS; Konfig-AP: Captive Portal leitet um). Warten Sie, bis das Gerät online ist:';
+    } else {
+        infoText.textContent = 'Warten Sie, bis das System wieder online ist (Hostname im Formular fehlt):';
+    }
     
     const linkElement = document.createElement('a');
-    linkElement.href = targetUrl;
     linkElement.className = 'btn btn-primary btn-lg';
     linkElement.style.cssText = 'font-size: 1.2em; padding: 15px 30px; text-decoration: none; display: inline-block; margin-top: 20px;';
-    linkElement.textContent = targetUrl;
+    if (homeUrl) {
+        linkElement.href = homeUrl;
+        linkElement.textContent = homeUrl;
+    } else {
+        linkElement.href = '/';
+        linkElement.textContent = window.location.origin + '/';
+    }
     
     linkContainer.appendChild(infoText);
     linkContainer.appendChild(document.createElement('br'));
@@ -191,37 +195,7 @@ function startStayAlive() {
     
     // Ping alle 2 Minuten (120 Sekunden) - weniger als WIFI_WAIT_FOR_SLEEP (3 Minuten)
     stayAliveInterval = setInterval(() => {
-        // Bestimme die richtige URL für Ping (ähnlich wie bei Config-Save)
-        let pingUrl;
-        const hostnameInput = document.getElementById('hostname');
-        if (hostnameInput && originalHostname) {
-            const currentHostname = hostnameInput.value.trim();
-            const hostnameChanged = (originalHostname !== currentHostname);
-            
-            if (hostnameChanged) {
-                // Hostname wurde geändert: Verwende IP-Adresse oder ursprünglichen Hostname
-                const currentHost = window.location.hostname;
-                
-                // Prüfe, ob es bereits eine IP-Adresse ist
-                if (currentHost.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-                    // Es ist bereits eine IP-Adresse → verwende diese
-                    pingUrl = window.location.protocol + '//' + currentHost + 
-                             (window.location.port ? ':' + window.location.port : '') + '/ping';
-                } else {
-                    // Es ist ein Hostname → versuche ursprünglichen Hostname zu verwenden
-                    const port = window.location.port ? ':' + window.location.port : '';
-                    pingUrl = window.location.protocol + '//' + originalHostname + '.local' + port + '/ping';
-                }
-            } else {
-                // Hostname nicht geändert: Verwende relativen Pfad (funktioniert immer)
-                pingUrl = '/ping';
-            }
-        } else {
-            // Fallback: Verwende relativen Pfad
-            pingUrl = '/ping';
-        }
-        
-        fetch(pingUrl, {
+        fetch('/ping', {
             method: 'GET',
             cache: 'no-cache'
         })
@@ -766,20 +740,15 @@ function saveConfig() {
     // Basic-Auth-Credentials aus dem aktuellen Passwort-Feld (für Fallback)
     const authHeader = 'Basic ' + btoa('admin:' + currentAdminPass);
     
-    // WICHTIG: Wenn Hostname geändert wurde, aber ESP32 noch nicht neu gestartet wurde,
-    // verwende die aktuelle URL (window.location.origin), da der Browser bereits eine Verbindung hat.
-    // Der Browser hat die Seite bereits geladen, also sollte die Verbindung funktionieren.
-    // Wenn der neue Hostname noch nicht aufgelöst werden kann, wird der Browser die IP-Adresse verwenden.
-    let saveUrl = window.location.origin + '/config/save';
+    const savePath = '/config/save';
     
-    // Debug: Zeige verwendete URL in Konsole
-    console.log('Config-Save: URL =', saveUrl);
+    console.log('Config-Save: Pfad =', savePath);
     console.log('Config-Save: Hostname geändert =', hostnameChanged);
     console.log('Config-Save: Original Hostname =', originalHostname);
     console.log('Config-Save: Neuer Hostname =', newHostname);
     console.log('Config-Save: window.location.hostname =', window.location.hostname);
     
-    fetch(saveUrl, {
+    fetch(savePath, {
         method: 'POST',
         headers: {
             'Authorization': authHeader
@@ -898,7 +867,7 @@ function saveConfig() {
             message: error.message,
             name: error.name,
             stack: error.stack,
-            url: saveUrl,
+            url: savePath,
             hostnameChanged: hostnameChanged
         });
         
@@ -909,16 +878,16 @@ function saveConfig() {
                 alert("Fehler beim Speichern: " + error.message + 
                       "\n\n⚠️ Mögliche Ursache: Der Hostname wurde geändert, aber das Gerät wurde noch nicht neu gestartet." +
                       "\nDie aktuelle URL (" + window.location.href + ") stimmt möglicherweise nicht mit dem neuen Hostname überein." +
-                      "\n\nVersucht wurde: " + saveUrl +
+                      "\n\nVersucht wurde: " + savePath +
                       "\n\nBitte starten Sie das Gerät zuerst neu, bevor Sie weitere Änderungen vornehmen.");
             } else {
                 alert("Fehler beim Speichern: " + error.message + 
-                      "\n\nVersucht wurde: " + saveUrl +
+                      "\n\nVersucht wurde: " + savePath +
                       "\n\nBitte überprüfen Sie Ihre Eingaben und versuchen Sie es erneut.");
             }
         } else {
             alert("Fehler beim Speichern: " + error.message + 
-                  "\n\nVersucht wurde: " + saveUrl +
+                  "\n\nVersucht wurde: " + savePath +
                   "\n\nBitte überprüfen Sie Ihre Eingaben und versuchen Sie es erneut.");
         }
     });
@@ -1140,8 +1109,8 @@ function showRebootProgress(hostnameChanged, wifiChanged, newHostname) {
             if (wifiChanged) {
                 message.innerHTML = '<strong style="color: #dc3545;">⚠️ WiFi-Credentials wurden geändert!</strong><br>Die IP-Adresse könnte sich geändert haben.';
             } else if (hostnameChanged) {
-                message.innerHTML = '<strong style="color: #ffc107;">⚠️ Hostname wurde geändert!</strong><br>Versuche neue URL: <code>http://' + 
-                                   newHostname + '.local</code>';
+                const tryUrl = getMdnsHomeUrl(newHostname) || '/';
+                message.innerHTML = '<strong style="color: #ffc107;">⚠️ Hostname wurde geändert!</strong><br>Versuche: <code>' + tryUrl + '</code>';
             } else {
                 message.textContent = 'Konfiguration gespeichert. Warte auf Neustart...';
             }
@@ -1158,25 +1127,10 @@ function showRebootProgress(hostnameChanged, wifiChanged, newHostname) {
         const attemptOffset = circumference - ((maxAttempts - attempt + 1) / maxAttempts) * circumference;
         countdownCircle.setAttribute('stroke-dashoffset', attemptOffset.toString());
         
-        // Nach Reboot: Lade immer die index-Seite (nicht /config)
-        // Dies ist sinnvoll, da nach Reboot die Config-Seite möglicherweise nicht mehr erreichbar ist
-        // (z.B. wenn Hostname geändert wurde oder WiFi-Credentials geändert wurden)
-        let reloadUrl;
+        const reloadUrl = getMdnsHomeUrl(newHostname) || (window.location.origin + '/');
         
-        if (hostnameChanged && attempt <= 5) {
-            // Hostname geändert: Versuche neue mDNS-URL mit index-Seite
-            reloadUrl = `http://${newHostname}.local/`;
-        } else if (wifiChanged && attempt <= 10) {
-            // WiFi geändert: Versuche index.html (keine Auth nötig)
-            reloadUrl = window.location.origin + '/';
-        } else {
-            // Standard: Lade index-Seite
-            reloadUrl = window.location.origin + '/';
-        }
-        
-        // Versuche HEAD-Request mit 5 Sekunden Timeout
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 Sekunden Timeout
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
         
         fetch(reloadUrl, { 
             method: 'HEAD',
@@ -1208,14 +1162,19 @@ function showRebootProgress(hostnameChanged, wifiChanged, newHostname) {
                     errorMsg += '• WiFi-Credentials wurden geändert → Neue IP-Adresse<br>';
                 }
                 if (hostnameChanged) {
-                    errorMsg += '• Hostname wurde geändert → Neue URL: <code>http://' + newHostname + '.local</code><br>';
+                    errorMsg += '• Hostname wurde geändert<br>';
                 }
                 errorMsg += '<br>Bitte versuchen Sie:<br>';
-                errorMsg += '1. Router-Admin-Panel prüfen (neue IP-Adresse)<br>';
-                if (hostnameChanged) {
-                    errorMsg += '2. Neue URL manuell aufrufen: <code>http://' + newHostname + '.local</code><br>';
+                if (wifiChanged) {
+                    errorMsg += '1. Router-Admin-Panel prüfen (neue IP-Adresse)<br>';
                 }
-                errorMsg += '3. Seite manuell neu laden';
+                const homeHint = getMdnsHomeUrl(newHostname);
+                if (homeHint) {
+                    errorMsg += (wifiChanged ? '2' : '1') + '. Gerät öffnen: <code>' + homeHint + '</code><br>';
+                    errorMsg += (wifiChanged ? '3' : '2') + '. Seite manuell neu laden';
+                } else {
+                    errorMsg += (wifiChanged ? '2' : '1') + '. Seite manuell neu laden';
+                }
                 
                 message.innerHTML = errorMsg;
                 statusText.textContent = '';
@@ -1292,6 +1251,7 @@ function toggleTransferConfig() {
     if (transferMode === savedTransferMode) {
         if (transferMode === 'zigbee') {
             zigbeeSection.style.display = 'block';
+            applyZigbeeStaOnlyState();
             hideBle();
             hideMqtt();
         } else if (transferMode === 'ble' && bleSection) {
@@ -1354,6 +1314,7 @@ function toggleZigbeeConfigPanel() {
 }
 
 var zigbeeStatusPollTimer = null;
+var zigbeeStatusPollingActive = false;
 /** Inkrement pro Fetch; nur die neueste Antwort aktualisiert die Tabelle (kein Out-of-Order). */
 var zigbeeStatusFetchSeq = 0;
 
@@ -1369,7 +1330,7 @@ function zigbeeStatusLabelFromJson(data) {
     if (zigbeeJsonIsTrue(data.joined) || data.status === 'joined') {
         return 'Gepaart';
     }
-    if (zigbeeJsonIsTrue(data.pairing) || data.status === 'pairing') {
+    if (zigbeeJsonIsTrue(data.pairing) || data.status === 'pairing' || data.status === 'in-progress') {
         return 'Pairing läuft…';
     }
     if (zigbeeJsonIsTrue(data.factory_new) || data.status === 'factory-new') {
@@ -1378,12 +1339,53 @@ function zigbeeStatusLabelFromJson(data) {
     return 'Nicht gepaart';
 }
 
-function fetchZigbeeStatusJson() {
+var ZIGBEE_STATUS_LONG_POLL_SEC = 20;
+var ZIGBEE_STATUS_LONG_POLL_TIMEOUT_MS = 30000;
+var ZIGBEE_STATUS_LONG_POLL_MAX_ROUNDS = 12;
+
+function isWifiStaConnected() {
+    const hidden = document.getElementById('wifi_sta_connected');
+    return hidden && hidden.value === '1';
+}
+
+function applyZigbeeStaOnlyState() {
+    const hint = document.getElementById('zigbeeStaHint');
+    const factoryBtn = document.getElementById('zigbeeFactoryResetBtn');
+    const staOk = isWifiStaConnected();
+    if (hint) {
+        hint.style.display = staOk ? 'none' : 'block';
+    }
+    if (factoryBtn) {
+        factoryBtn.disabled = !staOk;
+    }
+    const pairingBtn = document.querySelector('button[onclick="zigbeeStartPairing()"]');
+    if (pairingBtn) {
+        pairingBtn.disabled = !staOk;
+    }
+}
+
+function fetchZigbeeStatusJson(timeoutMs, waitSec) {
     const transferMode = document.getElementById('transfer_mode');
     if (!transferMode || transferMode.value !== 'zigbee') {
         return Promise.resolve(null);
     }
-    return fetch('/zigbee/status', { method: 'GET' })
+    let url = '/zigbee/status';
+    if (waitSec && waitSec > 0) {
+        url += '?wait=' + encodeURIComponent(String(waitSec));
+    }
+    const controller = new AbortController();
+    const waitMs = timeoutMs || 8000;
+    const timeoutId = setTimeout(function() {
+        controller.abort();
+    }, waitMs);
+    return fetch(url, {
+        method: 'GET',
+        signal: controller.signal,
+        cache: 'no-cache'
+    })
+        .finally(function() {
+            clearTimeout(timeoutId);
+        })
         .then(response => {
             if (!response.ok) {
                 if (response.status === 400) {
@@ -1396,61 +1398,125 @@ function fetchZigbeeStatusJson() {
 }
 
 function stopZigbeeStatusPolling() {
+    zigbeeStatusPollingActive = false;
     if (zigbeeStatusPollTimer !== null) {
-        clearInterval(zigbeeStatusPollTimer);
+        clearTimeout(zigbeeStatusPollTimer);
         zigbeeStatusPollTimer = null;
     }
 }
 
-/** Nach Start Pairing: Status alle 5 s abfragen (Join dauert oft 20–60 s). */
-function startZigbeeStatusPolling(maxSeconds) {
+function finishZigbeeStatusPolling() {
     stopZigbeeStatusPolling();
+    startStayAlive();
+}
+
+function zigbeePollStatusLabel(attempts, maxAttempts, suffix) {
+    let text = 'Pairing läuft… (' + attempts + '/' + maxAttempts + ')';
+    if (suffix) {
+        text += ' – ' + suffix;
+    }
+    return '<p class="zigbee-status-info">' + text + '</p>';
+}
+
+/** Nach Start Pairing: ein Long-Poll (?wait=20), Stay-Alive pausiert während offener Anfrage. */
+function startZigbeeStatusLongPoll(maxRounds) {
+    stopZigbeeStatusPolling();
+    zigbeeStatusPollingActive = true;
+    stopStayAlive();
     const statusDiv = document.getElementById('zigbeeActionStatus');
-    const maxAttempts = Math.max(1, Math.ceil((maxSeconds || 120) / 5));
-    let attempts = 0;
+    const roundsMax = maxRounds || ZIGBEE_STATUS_LONG_POLL_MAX_ROUNDS;
+    let round = 0;
+
+    function showPollProgress(suffix) {
+        if (statusDiv) {
+            let text = 'Pairing läuft… (' + round + '/' + roundsMax + ')';
+            if (suffix) {
+                text += ' – ' + suffix;
+            }
+            statusDiv.innerHTML = '<p class="zigbee-status-info">' + text + '</p>';
+        }
+    }
+
+    function scheduleNextPoll() {
+        if (!zigbeeStatusPollingActive) {
+            return;
+        }
+        zigbeeStatusPollTimer = setTimeout(pollOnce, 500);
+    }
 
     function pollOnce() {
-        attempts += 1;
+        if (!zigbeeStatusPollingActive) {
+            return;
+        }
+        round += 1;
+        showPollProgress('Long-Poll /zigbee/status?wait=' + ZIGBEE_STATUS_LONG_POLL_SEC + '…');
         zigbeeStatusFetchSeq += 1;
         const seq = zigbeeStatusFetchSeq;
-        return fetchZigbeeStatusJson()
-            .then(data => {
+        let scheduleNext = true;
+
+        fetchZigbeeStatusJson(ZIGBEE_STATUS_LONG_POLL_TIMEOUT_MS, ZIGBEE_STATUS_LONG_POLL_SEC)
+            .then(function(data) {
                 if (seq !== zigbeeStatusFetchSeq) {
                     return;
                 }
                 if (!data) {
+                    showPollProgress('ZigBee-Modus nicht aktiv');
                     return;
                 }
                 applyZigbeeStatusTable(data);
                 const joined = zigbeeJsonIsTrue(data.joined) || data.status === 'joined';
                 if (joined) {
-                    stopZigbeeStatusPolling();
+                    scheduleNext = false;
+                    finishZigbeeStatusPolling();
                     if (statusDiv) {
-                        statusDiv.innerHTML = '<p class="text-success">Gepaart (Coordinator hat Join bestätigt).</p>';
+                        statusDiv.innerHTML = '<p class="zigbee-status-success">Gepaart (ZigBee-Config in RTC gültig) ' +
+                            '(' + round + '/' + roundsMax + ').</p>';
                     }
-                } else if (attempts >= maxAttempts) {
-                    stopZigbeeStatusPolling();
+                } else if (round >= roundsMax) {
+                    scheduleNext = false;
+                    finishZigbeeStatusPolling();
                     if (statusDiv) {
-                        statusDiv.innerHTML = '<p class="text-warning">Timeout: Noch kein Join im Gerätestatus. ' +
+                        statusDiv.innerHTML = '<p class="zigbee-status-warn">Timeout: Noch kein Join im Gerätestatus (' +
+                            round + '/' + roundsMax + '). ' +
                             'Zigbee2MQTT kann bereits „joined“ melden – Reboot oder später erneut prüfen.</p>';
                     }
-                } else if (statusDiv) {
-                    statusDiv.innerHTML = '<p class="text-info">Pairing läuft… (' + attempts + '/' + maxAttempts + ')</p>';
+                } else {
+                    showPollProgress('noch nicht gepaart (RTC)');
                 }
             })
-            .catch(error => {
+            .catch(function(error) {
                 if (seq !== zigbeeStatusFetchSeq) {
                     return;
                 }
-                stopZigbeeStatusPolling();
-                if (statusDiv) {
-                    statusDiv.innerHTML = '<p class="text-danger">Fehler beim Laden des Status: ' + error.message + '</p>';
+                if (round >= roundsMax) {
+                    scheduleNext = false;
+                    finishZigbeeStatusPolling();
+                    if (statusDiv) {
+                        statusDiv.innerHTML = '<p class="zigbee-status-error">Fehler beim Laden des Status (' +
+                            round + '/' + roundsMax + '): ' +
+                            (error && error.message ? error.message : 'unbekannt') + '</p>';
+                    }
+                    return;
+                }
+                let hint;
+                if (error && error.name === 'AbortError') {
+                    hint = 'keine Antwort innerhalb ' + (ZIGBEE_STATUS_LONG_POLL_TIMEOUT_MS / 1000) +
+                        ' s (Long-Poll)';
+                } else if (error && (error.message === 'Failed to fetch' || error.message === 'NetworkError when attempting to fetch resource.')) {
+                    hint = 'keine Antwort (Firefox: 0 B)';
+                } else {
+                    hint = error.message;
+                }
+                showPollProgress(hint);
+            })
+            .finally(function() {
+                if (scheduleNext && zigbeeStatusPollingActive) {
+                    scheduleNextPoll();
                 }
             });
     }
 
     pollOnce();
-    zigbeeStatusPollTimer = setInterval(pollOnce, 5000);
 }
 
 function zigbeeDisplayOrDash(value, emptyValues) {
@@ -1505,7 +1571,7 @@ function updateZigbeeStatus() {
     const seq = zigbeeStatusFetchSeq;
     const statusDiv = document.getElementById('zigbeeActionStatus');
     if (statusDiv) {
-        statusDiv.textContent = 'Lade ZigBee-Status...';
+        statusDiv.innerHTML = '<p class="zigbee-status-muted">Lade ZigBee-Status...</p>';
     }
     fetchZigbeeStatusJson()
         .then(data => {
@@ -1514,7 +1580,7 @@ function updateZigbeeStatus() {
             }
             if (!data) {
                 if (statusDiv) {
-                    statusDiv.innerHTML = '<p class="text-muted">ZigBee ist nicht aktiv</p>';
+                    statusDiv.innerHTML = '<p class="zigbee-status-muted">ZigBee ist nicht aktiv</p>';
                 }
                 return;
             }
@@ -1528,13 +1594,17 @@ function updateZigbeeStatus() {
                 return;
             }
             if (statusDiv) {
-                statusDiv.innerHTML = '<p class="text-danger">Fehler beim Laden des Status: ' + error.message + '</p>';
+                statusDiv.innerHTML = '<p class="zigbee-status-error">Fehler beim Laden des Status: ' + error.message + '</p>';
             }
         });
 }
 
 // ZigBee Factory-Reset
 function zigbeeFactoryReset() {
+    if (!isWifiStaConnected()) {
+        alert('ZigBee-Factory-Reset ist nur im WLAN (STA) möglich, nicht im Einrichtungs-Hotspot (AP).');
+        return;
+    }
     if (!confirm("Möchten Sie wirklich einen Factory-Reset für ZigBee durchführen?\n\nDies löscht alle ZigBee-Netzwerkdaten und setzt ZigBee auf 'factory-new' zurück.")) {
         return;
     }
@@ -1551,7 +1621,7 @@ function zigbeeFactoryReset() {
         statusSpan.innerHTML = '<span class="text-info"><span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>läuft...</span>';
     }
     if (statusDiv) {
-        statusDiv.innerHTML = '<p class="text-info">Factory-Reset wird durchgeführt...</p>';
+        statusDiv.innerHTML = '<p class="zigbee-status-info">Factory-Reset wird durchgeführt...</p>';
     }
     
     // Aktuelles Admin-Passwort für Basic-Auth
@@ -1628,7 +1698,7 @@ function zigbeeFactoryReset() {
             statusSpan.innerHTML = '<span class="text-danger">✗ Fehler</span>';
         }
         if (statusDiv) {
-            statusDiv.innerHTML = `<p class="text-danger">Fehler: ${error.message}</p>`;
+            statusDiv.innerHTML = `<p class="zigbee-status-error">Fehler: ${error.message}</p>`;
         }
         // Status-Span nach 5 Sekunden wieder leeren
         setTimeout(() => {
@@ -1647,6 +1717,10 @@ function zigbeeFactoryReset() {
 
 // ZigBee Pairing starten
 function zigbeeStartPairing() {
+    if (!isWifiStaConnected()) {
+        alert('ZigBee-Pairing ist nur im WLAN (STA) möglich, nicht im Einrichtungs-Hotspot (AP).');
+        return;
+    }
     if (!confirm("Möchten Sie das ZigBee-Pairing jetzt starten?\n\nStellen Sie sicher, dass der Coordinator im 'Permit Join' Modus ist.")) {
         return;
     }
@@ -1655,7 +1729,7 @@ function zigbeeStartPairing() {
     const statusDiv = document.getElementById('zigbeeActionStatus');
     const statusCell = document.getElementById('zigbeeStatusCell');
     if (statusDiv) {
-        statusDiv.innerHTML = '<p class="text-info">Pairing wird gestartet...</p>';
+        statusDiv.innerHTML = '<p class="zigbee-status-info">Pairing wird gestartet...</p>';
     }
 
     postTransferAction('/zigbee/action', { cmd: 'start-pairing' })
@@ -1675,14 +1749,14 @@ function zigbeeStartPairing() {
             statusCell.textContent = 'Pairing läuft…';
         }
         if (statusDiv) {
-            statusDiv.innerHTML = '<p class="text-info">Pairing gestartet. Warten auf Coordinator (bis ca. 2 Min.)…</p>';
+            statusDiv.innerHTML = '<p class="zigbee-status-info">Pairing/Übertragung läuft im Hintergrund (wie Timer-Wake, bis ca. 3 Min.)…</p>';
         }
-        startZigbeeStatusPolling(120);
+        startZigbeeStatusLongPoll(ZIGBEE_STATUS_LONG_POLL_MAX_ROUNDS);
     })
     .catch(error => {
-        stopZigbeeStatusPolling();
+        finishZigbeeStatusPolling();
         if (statusDiv) {
-            statusDiv.innerHTML = '<p class="text-danger">Fehler: ' + error.message + '</p>';
+            statusDiv.innerHTML = '<p class="zigbee-status-error">Fehler: ' + error.message + '</p>';
         }
         fetchZigbeeStatusJson().then(function(data) {
             if (data) {
@@ -1882,4 +1956,5 @@ document.addEventListener('DOMContentLoaded', function() {
     if (sel) savedTransferMode = sel.value;
     toggleTransferConfig();
     applyMqttTestButtonState();
+    applyZigbeeStaOnlyState();
 });

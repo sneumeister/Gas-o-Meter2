@@ -42,8 +42,14 @@ bool wifi_connect_sta(void);
 /** disconnect + esp_wifi_stop. */
 void wifi_manager_session_end(void);
 
-/** AP+STA-Konfigurations-AP (Ersteinrichtung). */
+/** Konfig-AP als APSTA (leere STA, kein Connect) – Scan ohne AP/STA/AP-Flip. */
 bool wifi_start_access_point(void);
+
+/** Vor /wifi/scan: STA leer/disconnect, ggf. AP->APSTA (Legacy). */
+bool wifi_manager_prepare_scan_in_ap_mode(void);
+
+/** No-op: Modus nach Scan nicht zurueckschalten (HTTP-Client bleibt am SoftAP). */
+void wifi_manager_restore_ap_after_scan(void);
 
 bool wifi_is_connected(void);
 
@@ -56,6 +62,9 @@ bool wifi_manager_set_tx_power_quarter_dbm(int8_t tx_power_quarter);
 
 /** Setzt TX Power aus wifi_manager_load_sta_config(). */
 bool wifi_manager_apply_tx_power(void);
+
+/** Gleiche Scan-Parameter wie /wifi/scan (channel 0, aktiv/passiv). */
+void wifi_manager_fill_scan_config(wifi_scan_config_t* out, bool passive);
 
 #ifdef __cplusplus
 }

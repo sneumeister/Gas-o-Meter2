@@ -29,10 +29,6 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "esp_partition.h"
-#include "esp_coexist.h"
-#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE && CONFIG_SOC_IEEE802154_SUPPORTED
-#include "esp_coex_i154.h"
-#endif
 #include <ctime>
 #include <cstdio>
 #if CONFIG_ESP_ZB_TRACE_ENABLE
@@ -40,10 +36,6 @@
 #endif
 
 static const char* TAG = "transfer_zigbee";
-
-#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE && CONFIG_SOC_IEEE802154_SUPPORTED
-static bool zigbee_coex_wifi_i154_enabled = false;
-#endif
 
 // ============================================
 // Globale Variablen
@@ -62,12 +54,16 @@ static volatile bool first_pairing_after_join = false;  // Flag: Erstes Pairing 
 static volatile bool steering_failed = false;  // Flag: Network Steering fehlgeschlagen
 static volatile bool steering_successful = false;  // Flag: Network Steering erfolgreich (für Timing-Verzögerung)
 static volatile bool web_steering_requested = false;  // Network Steering per Web „Start Pairing“
+static volatile bool s_zigbee_web_transfer_busy = false;
 static uint32_t web_steering_request_ms = 0;  // esp_timer ms; Grace nach Start bis BDB-Mode gesetzt
 static uint32_t last_device_annce_sent_ms = 0;  // Debounce fuer esp_zb_zdo_device_announcement_req()
 static volatile bool zigbee_time_sync_response_received = false;
 static volatile bool zigbee_stack_device_annce_received = false;
 static volatile bool zigbee_nvs_save_pending = false;  // NVS-Schreiben aus Signal-Handler deferren
+static SemaphoreHandle_t zigbee_can_sleep_sem = NULL;
+static volatile bool zigbee_can_sleep_flag = false;
 
+static void zigbee_can_sleep_sync_init(void);
 static void zigbee_web_steering_clear_request(void);
 static void zigbee_web_steering_mark_requested(void);
 static bool zigbee_bdb_network_steering_active(void);
@@ -476,7 +472,12 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             } else {
                 ESP_LOGW(TAG, "ZigBee Signal: STEERING fehlgeschlagen (Status: %s)", esp_err_to_name(err_status));
                 steering_failed = true;  // Flag setzen, damit Warte-Schleife sofort abbricht
+                const bool web_pairing_only =
+                    web_steering_requested && !zigbee_rejoin_in_progress;
                 zigbee_web_steering_clear_request();
+                if (web_pairing_only) {
+                    zigbee_pairing_in_progress = false;
+                }
                 steering_successful = false;
             }
             break;
@@ -496,10 +497,11 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 // HINWEIS: Wenn wir hier sind, ist das Device bereits joined, also sollte
                 // esp_zb_bdb_is_factory_new() false sein. Aber zur Sicherheit prüfen wir
                 // den vorherigen Status über zigbee_rtc.joined
-                if (!zigbee_rtc.joined) {
-                    // Device war vorher nicht joined -> Pairing
+                if (!zigbee_rtc.joined || (zigbee_pairing_in_progress && !pairing_successful)) {
+                    // Erstes Pairing (auch nach LEAVE/Re-Join mit neuer Short Address)
                     ESP_LOGI(TAG, "        → Pairing erfolgreich abgeschlossen");
                     pairing_successful = true;
+                    zigbee_pairing_in_progress = false;
                     zigbee_web_steering_clear_request();
                     first_pairing_after_join = true;  // Flag setzen für Interview-Wartezeit
                     
@@ -546,6 +548,13 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             
         case ESP_ZB_ZDO_SIGNAL_LEAVE:
             ESP_LOGI(TAG, "ZigBee Signal: LEAVE (Status: %s)", esp_err_to_name(err_status));
+            /* Pairing: kurzer Join + LEAVE hinterlaesst joined=true/0x258F in RTC → blockiert ANNCE bei 0x1AC4 */
+            if (zigbee_pairing_in_progress && !pairing_successful) {
+                ESP_LOGW(TAG, "        → LEAVE waehrend Pairing: RTC-Join zuruecksetzen (vor erneutem Steering)");
+                zigbee_rtc.joined = false;
+                zigbee_rtc.network_addr = ZIGBEE_INVALID_NETWORK_ADDR;
+                zigbee_nvs_save_pending = false;
+            }
             break;
             
         case ESP_ZB_ZDO_SIGNAL_PRODUCTION_CONFIG_READY:
@@ -557,8 +566,12 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             break;
 
         case ESP_ZB_COMMON_SIGNAL_CAN_SLEEP:
-            /* Sleepy ED: Stack idle – kein esp_zb_sleep_now() in Config-Modus (Deep-Sleep via main_idf). */
+            /* Sleepy ED: Stack idle – kein esp_zb_sleep_now(); Shutdown wartet per Semaphore (main_idf). */
             ESP_LOGD(TAG, "ZigBee Signal: CAN_SLEEP (Status: %s)", esp_err_to_name(err_status));
+            zigbee_can_sleep_flag = true;
+            if (zigbee_can_sleep_sem != NULL) {
+                xSemaphoreGive(zigbee_can_sleep_sem);
+            }
             break;
             
         default:
@@ -1217,11 +1230,24 @@ void transfer_zigbee_prepare_cluster_attrs(const transfer_data_t* data) {
              data->battery_voltage);
 }
 
+static void zigbee_can_sleep_sync_init(void) {
+    if (zigbee_can_sleep_sem == NULL) {
+        zigbee_can_sleep_sem = xSemaphoreCreateBinary();
+    }
+    zigbee_can_sleep_flag = false;
+    if (zigbee_can_sleep_sem != NULL) {
+        while (xSemaphoreTake(zigbee_can_sleep_sem, 0) == pdTRUE) {
+        }
+    }
+}
+
 bool transfer_zigbee_init(void) {
     if (zigbee_initialized) {
         ESP_LOGW(TAG, "transfer_zigbee_init: Bereits initialisiert");
         return true;
     }
+
+    zigbee_can_sleep_sync_init();
     
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "ZigBee-Stack Initialisierung");
@@ -1273,17 +1299,6 @@ bool transfer_zigbee_init(void) {
     
     // [2/5] Stack initialisieren
     ESP_LOGI(TAG, "  [2/5] Stack wird initialisiert...");
-#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE && CONFIG_SOC_IEEE802154_SUPPORTED
-    if (!zigbee_coex_wifi_i154_enabled) {
-        esp_err_t coex_err = esp_coex_wifi_i154_enable();
-        if (coex_err == ESP_OK) {
-            zigbee_coex_wifi_i154_enabled = true;
-            ESP_LOGI(TAG, "        → WiFi/802.15.4 Coexistence aktiviert (esp_coex_wifi_i154_enable)");
-        } else {
-            ESP_LOGW(TAG, "        → esp_coex_wifi_i154_enable: %s", esp_err_to_name(coex_err));
-        }
-    }
-#endif
     esp_zb_init(&zb_nwk_cfg);  // Gibt void zurück (keine Fehlerbehandlung möglich)
     ESP_LOGI(TAG, "        → Stack initialisiert");
     
@@ -1466,6 +1481,12 @@ static bool zigbee_network_addr_stable_for_annce(void) {
                 return true;
             }
         }
+        if (zigbee_pairing_in_progress && !pairing_successful && zigbee_network_info_valid(&info)) {
+            ESP_LOGW(TAG, "        → Pairing: Short Addr geaendert (RTC 0x%04X → Stack 0x%04X), RTC sync",
+                     zigbee_rtc.network_addr, info.network_addr);
+            zigbee_update_rtc_from_stack();
+            return true;
+        }
         ESP_LOGW(TAG, "        → DEVICE_ANNCE uebersprungen: Addr 0x%04X != RTC 0x%04X",
                  info.network_addr, zigbee_rtc.network_addr);
         return false;
@@ -1605,10 +1626,14 @@ static void zigbee_wait_for_first_pairing_interview(void) {
         }
     }
 
-    ESP_LOGI(TAG, "        → Post-Announce: Z2M Interview/Configure (%lu s)",
-             (unsigned long)(ZIGBEE_INTERVIEW_POST_ANNCE_MS / 1000));
+    const uint32_t post_annce_ms = s_zigbee_web_transfer_busy
+        ? ZIGBEE_INTERVIEW_POST_ANNCE_WEB_MS
+        : ZIGBEE_INTERVIEW_POST_ANNCE_MS;
+    ESP_LOGI(TAG, "        → Post-Announce: Z2M Interview/Configure (%lu s%s)",
+             (unsigned long)(post_annce_ms / 1000),
+             s_zigbee_web_transfer_busy ? ", Web" : "");
     waited_ms = 0;
-    while (waited_ms < ZIGBEE_INTERVIEW_POST_ANNCE_MS) {
+    while (waited_ms < post_annce_ms) {
         vTaskDelay(pdMS_TO_TICKS(poll_ms));
         waited_ms += poll_ms;
     }
@@ -2115,9 +2140,8 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                     zigbee_network_info_t join_info = zigbee_read_network_info_locked();
                     bool has_valid_network_addr = zigbee_network_info_valid(&join_info);
                     
-                    if (join_info.joined && !zigbee_rtc.joined && has_valid_network_addr) {
-                        // Device ist joined, aber pairing_successful wurde noch nicht gesetzt
-                        // (DEVICE_ANNCE Signal kam nicht, aber Join war erfolgreich)
+                    if (join_info.joined && !pairing_successful && has_valid_network_addr) {
+                        // Join OK, pairing_successful noch nicht (z. B. ANNCE blockiert durch alte RTC-Addr)
                         ESP_LOGI(TAG, "        → Device ist joined (direkte Prüfung), aber DEVICE_ANNCE Signal kam nicht");
                         ESP_LOGI(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X",
                                  join_info.network_addr, join_info.pan_id);
@@ -2721,6 +2745,21 @@ void transfer_zigbee_persist_config_to_nvs(void) {
     zigbee_process_pending_nvs_save();
 }
 
+bool transfer_zigbee_wait_can_sleep(uint32_t timeout_ms) {
+    if (!zigbee_initialized || zigbee_main_task_handle == NULL || zigbee_can_sleep_sem == NULL) {
+        return false;
+    }
+
+    while (xSemaphoreTake(zigbee_can_sleep_sem, 0) == pdTRUE) {
+    }
+    zigbee_can_sleep_flag = false;
+
+    if (xSemaphoreTake(zigbee_can_sleep_sem, pdMS_TO_TICKS(timeout_ms)) == pdTRUE) {
+        return true;
+    }
+    return zigbee_can_sleep_flag;
+}
+
 void transfer_zigbee_deinit(void) {
     if (!zigbee_initialized) {
         return;
@@ -2749,14 +2788,7 @@ void transfer_zigbee_deinit(void) {
     // Kein esp_zb_deinit() (nicht in esp-zigbee-lib) – nur Main-Loop-Task stoppen.
     // Nach Factory-Reset folgt ohnehin Reboot (Web-UX); danach frischer Stack-Start.
     ESP_LOGI(TAG, "  [2/2] ZigBee Main Loop gestoppt (kein vollstaendiger Stack-Teardown)");
-    
     ESP_LOGI(TAG, "========================================");
-    
-#if CONFIG_ESP_COEX_SW_COEXIST_ENABLE && CONFIG_SOC_IEEE802154_SUPPORTED
-    esp_coex_ieee802154_status_disable();
-    ESP_LOGI(TAG, "  → 802.15.4 Coexistence-Status deaktiviert (vor WiFi-Stop/Restart)");
-    vTaskDelay(pdMS_TO_TICKS(200));
-#endif
 
     zigbee_initialized = false;
     stack_ready_signal_received = false;  // Flag zurücksetzen
@@ -2768,6 +2800,30 @@ void transfer_zigbee_deinit(void) {
 // ============================================
 
 #define WEB_STEERING_STALE_GRACE_MS 2500U
+/** /zigbee/status: kein portMAX_DELAY – HTTP-Worker sonst waehrend Web-Transfer blockiert. */
+#define ZIGBEE_STATUS_LOCK_TIMEOUT_MS 80U
+
+static bool zigbee_rtc_joined_valid(void) {
+    return zigbee_rtc.joined && ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr);
+}
+
+/** Gültige ZigBee-Config in RTC (für Web-Tabelle; kein Stack-Zugriff). */
+static bool zigbee_rtc_config_valid_for_web(void) {
+    return zigbee_rtc_joined_valid();
+}
+
+/** Pairing/Transfer läuft, RTC-Config noch nicht gültig (Web: „in progress“). */
+static bool zigbee_web_status_in_progress(void) {
+    if (zigbee_rtc_config_valid_for_web()) {
+        return false;
+    }
+    return zigbee_pairing_in_progress || web_steering_requested || s_zigbee_web_transfer_busy
+        || pairing_successful || rejoin_successful;
+}
+
+static bool zigbee_status_try_lock(void) {
+    return esp_zb_lock_acquire(pdMS_TO_TICKS(ZIGBEE_STATUS_LOCK_TIMEOUT_MS));
+}
 
 static void zigbee_web_steering_clear_request(void) {
     web_steering_requested = false;
@@ -2783,7 +2839,7 @@ static bool zigbee_bdb_network_steering_active(void) {
     if (!zigbee_initialized) {
         return false;
     }
-    if (!esp_zb_lock_acquire(portMAX_DELAY)) {
+    if (!zigbee_status_try_lock()) {
         return false;
     }
     const esp_zb_bdb_commissioning_mode_mask_t mode = esp_zb_get_bdb_commissioning_mode();
@@ -2814,18 +2870,37 @@ static void zigbee_web_steering_reconcile_stale_flag(void) {
     zigbee_web_steering_clear_request();
 }
 
+void transfer_zigbee_set_web_transfer_busy(bool busy) {
+    s_zigbee_web_transfer_busy = busy;
+}
+
+bool transfer_zigbee_is_web_transfer_busy(void) {
+    return s_zigbee_web_transfer_busy;
+}
+
+bool transfer_zigbee_rtc_config_valid(void) {
+    return zigbee_rtc.joined && ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr);
+}
+
 bool transfer_zigbee_get_status_json(char* buffer, size_t buffer_size) {
     if (buffer == NULL || buffer_size < 512) {
         ESP_LOGE(TAG, "transfer_zigbee_get_status_json: Buffer zu klein oder NULL");
         return false;
     }
-    
-    // ZigBee-Status ermitteln über Wrapper-Funktionen
-    // Diese prüfen automatisch den Stack-Status (wenn initialisiert) oder fallen auf zigbee_rtc zurück
-    bool is_joined = transfer_zigbee_is_joined();
-    bool is_factory_new = transfer_zigbee_is_factory_new();
-    zigbee_web_steering_reconcile_stale_flag();
-    bool is_pairing = web_steering_requested && !is_joined;
+
+    /*
+     * Web /config: nur RTC-RAM (persistierte ZigBee-Config), kein esp_zb_lock.
+     * NVS-Flush erfolgt beim Reboot/Deinit – nicht im HTTP-Handler.
+     */
+    const bool in_progress = zigbee_web_status_in_progress();
+    const bool is_joined = zigbee_rtc_config_valid_for_web();
+
+    if (is_joined) {
+        transfer_zigbee_clear_web_pairing_requested();
+    }
+
+    const bool is_pairing = in_progress;
+    const bool is_factory_new = !is_joined && !in_progress;
 
     const char* status_str;
     if (is_joined) {
@@ -2838,44 +2913,6 @@ bool transfer_zigbee_get_status_json(char* buffer, size_t buffer_size) {
         status_str = "not-joined";
     }
 
-    /* Anzeige: bei laufendem Stack Live-Daten (joined kann vor RTC/NVS-Update true sein). */
-    uint16_t network_addr = zigbee_rtc.network_addr;
-    uint16_t pan_id = zigbee_rtc.pan_id;
-    uint8_t channel = zigbee_rtc.channel;
-    uint64_t extended_addr = zigbee_rtc.extended_addr;
-
-    if (zigbee_initialized) {
-        zigbee_network_info_t live = zigbee_read_network_info_locked();
-        if (live.joined) {
-            network_addr = live.network_addr;
-            pan_id = live.pan_id;
-            channel = live.channel;
-        }
-        esp_zb_ieee_addr_t ieee_addr = {};
-        esp_zb_lock_acquire(portMAX_DELAY);
-        esp_zb_get_long_address(ieee_addr);
-        esp_zb_lock_release();
-        uint64_t live_ext = 0;
-        for (int i = 0; i < 8; i++) {
-            live_ext |= ((uint64_t)ieee_addr[i]) << (i * 8);
-        }
-        if (live_ext != 0) {
-            extended_addr = live_ext;
-        }
-        if (live.joined && zigbee_network_info_valid(&live)) {
-            const bool rtc_stale = !zigbee_rtc.joined
-                || zigbee_rtc.network_addr != live.network_addr
-                || zigbee_rtc.pan_id != live.pan_id
-                || zigbee_rtc.channel != live.channel
-                || (live_ext != 0 && zigbee_rtc.extended_addr != live_ext);
-            if (rtc_stale) {
-                /* RAM + pending nur – NVS in Main-Loop (Wear), Deinit flusht synchron. */
-                zigbee_schedule_rtc_nvs_sync_from_stack();
-            }
-        }
-    }
-
-    // JSON-Response erstellen
     int written = snprintf(buffer, buffer_size,
         "{"
         "\"status\":\"%s\","
@@ -2891,17 +2928,16 @@ bool transfer_zigbee_get_status_json(char* buffer, size_t buffer_size) {
         is_factory_new ? "true" : "false",
         is_joined ? "true" : "false",
         is_pairing ? "true" : "false",
-        network_addr,
-        pan_id,
-        channel,
-        (unsigned long long)extended_addr
-    );
-    
+        zigbee_rtc.network_addr,
+        zigbee_rtc.pan_id,
+        zigbee_rtc.channel,
+        (unsigned long long)zigbee_rtc.extended_addr);
+
     if (written < 0 || (size_t)written >= buffer_size) {
         ESP_LOGE(TAG, "transfer_zigbee_get_status_json: Fehler beim Erstellen des JSON-Strings");
         return false;
     }
-    
+
     return true;
 }
 
@@ -2985,36 +3021,16 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode) {
     return true;
 }
 
-transfer_status_t transfer_zigbee_start_pairing(void) {
-    // Prüfe, ob ZigBee-Stack initialisiert ist
-    if (!zigbee_initialized) {
-        // Stack initialisieren (falls noch nicht geschehen)
-        if (!transfer_zigbee_init()) {
-            ESP_LOGE(TAG, "transfer_zigbee_start_pairing: ZigBee-Initialisierung fehlgeschlagen");
-            zigbee_web_steering_clear_request();
-            return TRANSFER_STATUS_INIT_FAILED;
-        }
-    }
-    
-    // Versuche Network Steering zu starten
-    esp_err_t comm_err = esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
-    if (comm_err == ESP_OK) {
-        zigbee_web_steering_mark_requested();
-        pairing_successful = false;
-        steering_successful = false;
-        steering_failed = false;
-        ESP_LOGI(TAG, "transfer_zigbee_start_pairing: Network Steering gestartet");
-        ESP_LOGI(TAG, "        → Z2M: Permit Join aktivieren; warte auf STEERING / DEVICE_ANNCE / Rejoin …");
-        return TRANSFER_STATUS_OK;
-    }
-    ESP_LOGE(TAG, "transfer_zigbee_start_pairing: Fehler beim Starten von Network Steering: %s",
-             esp_err_to_name(comm_err));
-    if (!zigbee_bdb_network_steering_active()) {
-        zigbee_web_steering_clear_request();
-    } else {
-        ESP_LOGW(TAG, "transfer_zigbee_start_pairing: Steering laeuft bereits – web_steering_requested bleibt gesetzt");
-    }
-    return TRANSFER_STATUS_CONNECTION_FAILED;
+bool transfer_zigbee_is_pairing_active(void) {
+    return zigbee_pairing_in_progress || web_steering_requested;
+}
+
+void transfer_zigbee_mark_web_pairing_requested(void) {
+    zigbee_web_steering_mark_requested();
+}
+
+void transfer_zigbee_clear_web_pairing_requested(void) {
+    zigbee_web_steering_clear_request();
 }
 
 bool transfer_zigbee_is_factory_reset_in_progress(void) {
@@ -3036,24 +3052,12 @@ bool transfer_zigbee_is_initialized(void) {
  * @return true wenn Device joined ist, false sonst
  */
 bool transfer_zigbee_is_joined(void) {
-    if (zigbee_initialized) {
-        return zigbee_read_network_info_locked().joined;
-    }
-    return zigbee_rtc.joined;
+    return zigbee_rtc_config_valid_for_web();
 }
 
-/**
- * @brief Prüft, ob das Device factory-new ist (noch nicht gepaart)
- * 
- * @return true wenn Device factory-new ist, false sonst
- */
 bool transfer_zigbee_is_factory_new(void) {
-    if (transfer_zigbee_is_joined()) {
+    if (zigbee_rtc_config_valid_for_web()) {
         return false;
     }
-    if (zigbee_initialized) {
-        return esp_zb_bdb_is_factory_new();
-    }
-    // Fallback: Wenn nicht joined und keine gültige Network Address → factory-new
-    return !zigbee_rtc.joined && !ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr);
+    return !zigbee_web_status_in_progress();
 }
