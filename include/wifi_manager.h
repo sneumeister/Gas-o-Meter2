@@ -24,10 +24,6 @@ typedef struct {
 /** Lädt Config aus RTC (Implementierung in main_idf.cpp). */
 bool wifi_manager_load_sta_config(wifi_manager_sta_config_t* out);
 
-/** DNS-Captive-Hooks für AP/STA-Wechsel (Implementierung in main_idf.cpp). */
-void wifi_manager_platform_stop_dns_captive(void);
-bool wifi_manager_platform_start_dns_captive(void);
-
 /** Einmalig: Netif, Event-Loop, WiFi-Treiber, Event-Handler. */
 bool wifi_manager_init(void);
 

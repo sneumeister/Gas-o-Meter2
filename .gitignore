@@ -1,7 +1,6 @@
 # Build-Artefakte
 .pio/
 build/
-data/bootstrap.min.css
 *.backup
 compile_commands.json
 

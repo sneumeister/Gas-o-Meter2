@@ -64,7 +64,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
     if (event_base == WIFI_EVENT) {
         switch (event_id) {
             case WIFI_EVENT_STA_START:
-                ESP_LOGI(TAG, "WiFi Station gestartet");
+                ESP_LOGI(TAG, "WiFi STA-Interface gestartet (APSTA: inaktiv bis esp_wifi_connect)");
                 break;
             case WIFI_EVENT_STA_CONNECTED: {
                 auto* event = static_cast<wifi_event_sta_connected_t*>(event_data);
@@ -185,7 +185,6 @@ bool wifi_manager_session_begin(void) {
         return false;
     }
 
-    wifi_manager_platform_stop_dns_captive();
     esp_wifi_set_mode(WIFI_MODE_STA);
 
     esp_err_t ret = esp_wifi_start();
@@ -362,7 +361,6 @@ bool wifi_start_access_point(void) {
 
     ESP_LOGI(TAG, "Starte Access Point...");
 
-    wifi_manager_platform_stop_dns_captive();
     esp_wifi_disconnect();
     esp_wifi_stop();
     vTaskDelay(pdMS_TO_TICKS(300));
@@ -416,6 +414,24 @@ bool wifi_start_access_point(void) {
         return false;
     }
 
+    /*
+     * AP-IP vor esp_wifi_start(): sonst kurz 192.168.4.1 (IDF-Default).
+     * DHCP startet einmalig mit esp_wifi_start(); kein zweites dhcps_start() danach.
+     * Captive-Portal setzt DHCP Option 114 danach (dhcps_stop/start).
+     */
+    esp_netif_t* ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ap_netif != nullptr) {
+        esp_netif_ip_info_t ip_info;
+        IP4_ADDR(&ip_info.ip, AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
+        IP4_ADDR(&ip_info.gw, AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
+        IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
+        esp_netif_dhcps_stop(ap_netif);
+        esp_err_t ip_ret = esp_netif_set_ip_info(ap_netif, &ip_info);
+        if (ip_ret != ESP_OK) {
+            ESP_LOGW(TAG, "AP-IP vor Start: %s", esp_err_to_name(ip_ret));
+        }
+    }
+
     ret = esp_wifi_start();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "AP-Start fehlgeschlagen: %s", esp_err_to_name(ret));
@@ -424,15 +440,8 @@ bool wifi_start_access_point(void) {
 
     vTaskDelay(pdMS_TO_TICKS(200));
 
-    esp_netif_t* ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     if (ap_netif != nullptr) {
-        esp_netif_ip_info_t ip_info;
-        IP4_ADDR(&ip_info.ip, AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
-        IP4_ADDR(&ip_info.gw, AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
-        IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
-        esp_netif_dhcps_stop(ap_netif);
-        esp_netif_set_ip_info(ap_netif, &ip_info);
-        esp_netif_dhcps_start(ap_netif);
+        esp_netif_set_default_netif(ap_netif);
     }
 
     esp_wifi_set_ps(WIFI_PS_NONE);
@@ -447,9 +456,6 @@ bool wifi_start_access_point(void) {
     ESP_LOGI(TAG, "AP IP: %d.%d.%d.%d", AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
     ESP_LOGI(TAG, "WLAN ist offen (kein Passwort)");
 
-    if (!wifi_manager_platform_start_dns_captive()) {
-        ESP_LOGW(TAG, "DNS Captive konnte nicht gestartet werden (HTTP-Captive-Redirect bleibt aktiv)");
-    }
     return true;
 }
 

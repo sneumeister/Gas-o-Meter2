@@ -9,8 +9,9 @@
 #include "mdns.h"
 #include "esp_littlefs.h"
 #include "lwip/apps/sntp.h"
-#include "lwip/sockets.h"
 #include "lwip/inet.h"
+#include "lwip/sockets.h"
+#include "captive_portal.h"
 #include <string.h>
 #include "esp_vfs.h"
 #include "esp_timer.h"
@@ -66,146 +67,6 @@ extern "C" {
     extern const uint8_t ulp_main_bin_start[] asm("_binary_ulp_main_bin_start");
     extern const uint8_t ulp_main_bin_end[]   asm("_binary_ulp_main_bin_end");
 }
-
-// DNS Captive-Portal-Server (nur im AP-Modus aktiv)
-static TaskHandle_t dns_captive_task_handle = NULL;
-static volatile bool dns_captive_running = false;
-static int dns_captive_sock = -1;
-
-static void dns_captive_task(void *parameter) {
-    (void)parameter;
-
-    struct sockaddr_in server_addr = {};
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(53);
-    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-    dns_captive_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-    if (dns_captive_sock < 0) {
-        ESP_LOGE(TAG, "DNS Captive: Socket konnte nicht erstellt werden");
-        dns_captive_running = false;
-        dns_captive_task_handle = NULL;
-        vTaskDelete(NULL);
-        return;
-    }
-
-    int reuse = 1;
-    setsockopt(dns_captive_sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-
-    int recv_timeout_ms = 1000;
-    setsockopt(dns_captive_sock, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout_ms, sizeof(recv_timeout_ms));
-
-    if (bind(dns_captive_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        ESP_LOGE(TAG, "DNS Captive: Bind auf Port 53 fehlgeschlagen");
-        lwip_close(dns_captive_sock);
-        dns_captive_sock = -1;
-        dns_captive_running = false;
-        dns_captive_task_handle = NULL;
-        vTaskDelete(NULL);
-        return;
-    }
-
-    ESP_LOGI(TAG, "DNS Captive aktiv (alle Anfragen -> 10.0.0.1)");
-
-    uint8_t rx_buf[512];
-    uint8_t tx_buf[512];
-    const uint8_t captive_ip[4] = {AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4};
-
-    while (dns_captive_running) {
-        struct sockaddr_in client_addr = {};
-        socklen_t client_len = sizeof(client_addr);
-        int len = recvfrom(dns_captive_sock, rx_buf, sizeof(rx_buf), 0,
-                           (struct sockaddr *)&client_addr, &client_len);
-
-        if (len <= 0) {
-            continue;
-        }
-        if (len < 12) {
-            continue;
-        }
-
-        int qname_end = 12;
-        while (qname_end < len && rx_buf[qname_end] != 0) {
-            qname_end += (int)rx_buf[qname_end] + 1;
-        }
-        if (qname_end + 5 > len) {
-            continue;
-        }
-
-        int question_len = (qname_end + 5) - 12;
-        int resp_len = 12 + question_len + 16;
-        if (resp_len > (int)sizeof(tx_buf)) {
-            continue;
-        }
-
-        // Header
-        tx_buf[0] = rx_buf[0];
-        tx_buf[1] = rx_buf[1];
-        tx_buf[2] = 0x81;  // response + recursion available
-        tx_buf[3] = 0x80;  // no error
-        tx_buf[4] = 0x00; tx_buf[5] = 0x01;  // QDCOUNT=1
-        tx_buf[6] = 0x00; tx_buf[7] = 0x01;  // ANCOUNT=1
-        tx_buf[8] = 0x00; tx_buf[9] = 0x00;  // NSCOUNT=0
-        tx_buf[10] = 0x00; tx_buf[11] = 0x00; // ARCOUNT=0
-
-        memcpy(&tx_buf[12], &rx_buf[12], question_len);
-        int off = 12 + question_len;
-
-        // Answer
-        tx_buf[off + 0] = 0xC0; tx_buf[off + 1] = 0x0C; // name pointer to question
-        tx_buf[off + 2] = 0x00; tx_buf[off + 3] = 0x01; // TYPE A
-        tx_buf[off + 4] = 0x00; tx_buf[off + 5] = 0x01; // CLASS IN
-        tx_buf[off + 6] = 0x00; tx_buf[off + 7] = 0x00; // TTL
-        tx_buf[off + 8] = 0x00; tx_buf[off + 9] = 0x3C; // TTL 60s
-        tx_buf[off + 10] = 0x00; tx_buf[off + 11] = 0x04; // RDLENGTH
-        tx_buf[off + 12] = captive_ip[0];
-        tx_buf[off + 13] = captive_ip[1];
-        tx_buf[off + 14] = captive_ip[2];
-        tx_buf[off + 15] = captive_ip[3];
-
-        sendto(dns_captive_sock, tx_buf, resp_len, 0, (struct sockaddr *)&client_addr, client_len);
-    }
-
-    if (dns_captive_sock >= 0) {
-        lwip_close(dns_captive_sock);
-        dns_captive_sock = -1;
-    }
-    dns_captive_task_handle = NULL;
-    ESP_LOGI(TAG, "DNS Captive gestoppt");
-    vTaskDelete(NULL);
-}
-
-static bool start_dns_captive_server(void) {
-    if (dns_captive_running) {
-        return true;
-    }
-    dns_captive_running = true;
-    BaseType_t ok = xTaskCreate(dns_captive_task, "dns_captive", 4096, NULL, 5, &dns_captive_task_handle);
-    if (ok != pdPASS) {
-        dns_captive_running = false;
-        dns_captive_task_handle = NULL;
-        ESP_LOGE(TAG, "DNS Captive: Task-Start fehlgeschlagen");
-        return false;
-    }
-    return true;
-}
-
-static void stop_dns_captive_server(void) {
-    dns_captive_running = false;
-    if (dns_captive_sock >= 0) {
-        lwip_close(dns_captive_sock);
-        dns_captive_sock = -1;
-    }
-}
-
-extern "C" void wifi_manager_platform_stop_dns_captive(void) {
-    stop_dns_captive_server();
-}
-
-extern "C" bool wifi_manager_platform_start_dns_captive(void) {
-    return start_dns_captive_server();
-}
-
 
 // LP-Core Initialisierung und Start
 // Läuft auf dem HP-Core und startet den LP-Core-Prozessor
@@ -395,7 +256,6 @@ RTC_DATA_ATTR uint32_t ring_idx = RING_BUFFER_SIZE;  // Ring-Buffer-Index (im RT
 httpd_handle_t server = NULL;  // ESP-IDF HTTP Server Handle
 bool littlefs_mounted = false;
 bool server_started = false;  // Flag: Web-Server gestartet?
-
 // Akku-Messwerte
 uint32_t battery_adc_mv = 0;  // ADC-Wert in Millivolt
 float battery_voltage = 0.0f;
@@ -1098,11 +958,7 @@ void shutdown_resources(bool for_imminent_restart) {
         vTaskDelay(pdMS_TO_TICKS(100));  // Kurze Verzögerung für sauberes Schließen
     }
     
-    // 3. DNS-Captive-Server stoppen (falls AP-Modus aktiv war)
-    stop_dns_captive_server();
-    vTaskDelay(pdMS_TO_TICKS(50));
-
-    // 4. WiFi trennen und stoppen (nach ZigBee-Deinit; Stack/Main-Loop bereits beendet)
+    // 3. WiFi trennen und stoppen (nach ZigBee-Deinit; Stack/Main-Loop bereits beendet)
     if (wifi_manager_is_initialized()) {
         wifi_manager_session_end();
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -2784,6 +2640,15 @@ bool check_basic_auth(httpd_req_t *req, const char* username, const char* passwo
 // Handler für /ping
 static esp_err_t ping_handler(httpd_req_t *req) {
     last_web_activity_us = esp_timer_get_time();
+    struct sockaddr_storage peer = {};
+    socklen_t peer_len = sizeof(peer);
+    char peer_ip[16] = "?";
+    int sock = httpd_req_to_sockfd(req);
+    if (sock >= 0 && getpeername(sock, reinterpret_cast<struct sockaddr*>(&peer), &peer_len) == 0 &&
+        peer.ss_family == AF_INET) {
+        inet_ntoa_r(reinterpret_cast<struct sockaddr_in*>(&peer)->sin_addr, peer_ip, sizeof(peer_ip));
+    }
+    ESP_LOGI(TAG, "GET /ping von %s", peer_ip);
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_send(req, "pong", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
@@ -4033,7 +3898,66 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Handler für / (Root - Redirect zu /index.html)
+static void ap_portal_index_url(char *buf, size_t len) {
+    snprintf(buf, len, "http://%d.%d.%d.%d/index.html",
+             AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
+}
+
+/** DHCP-Client erhaelt explizit AP-IP als DNS (nach Option-114-Restart). */
+static void ap_dhcp_ensure_dns_server(void) {
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (netif == nullptr) {
+        return;
+    }
+    esp_netif_ip_info_t ip_info;
+    if (esp_netif_get_ip_info(netif, &ip_info) != ESP_OK) {
+        return;
+    }
+    esp_netif_dhcps_stop(netif);
+    esp_netif_dns_info_t dns = {};
+    dns.ip.type = ESP_IPADDR_TYPE_V4;
+    dns.ip.u_addr.ip4.addr = ip_info.ip.addr;
+    esp_err_t dns_ret = esp_netif_set_dns_info(netif, ESP_NETIF_DNS_MAIN, &dns);
+    if (dns_ret != ESP_OK) {
+        ESP_LOGW(TAG, "AP DHCP set_dns_info: %s", esp_err_to_name(dns_ret));
+    }
+    uint8_t offer_dns = 1;
+    esp_err_t opt_ret = esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET,
+                                               ESP_NETIF_DOMAIN_NAME_SERVER,
+                                               &offer_dns, sizeof(offer_dns));
+    if (opt_ret != ESP_OK) {
+        ESP_LOGW(TAG, "AP DHCP DNS-Option: %s", esp_err_to_name(opt_ret));
+    }
+    esp_err_t start_ret = esp_netif_dhcps_start(netif);
+    if (start_ret != ESP_OK) {
+        ESP_LOGW(TAG, "AP DHCP restart: %s", esp_err_to_name(start_ret));
+    } else {
+        ESP_LOGI(TAG, "AP DHCP DNS-Server: " IPSTR, IP2STR(&ip_info.ip));
+    }
+}
+
+/** mDNS im AP-Modus: gas-o-meter2.local (STA-Pfad startet mDNS erst nach Join). */
+static void ap_mdns_start(void) {
+    esp_err_t ret = mdns_init();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "mDNS AP init: %s", esp_err_to_name(ret));
+        return;
+    }
+    mdns_hostname_set(config_rtc.hostname);
+    mdns_instance_name_set("Gas-O-Meter");
+    ret = mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    if (ret == ESP_OK) {
+        mdns_initialized = true;
+        ESP_LOGI(TAG, "mDNS AP: http://%s.local", config_rtc.hostname);
+    } else if (ret == ESP_ERR_INVALID_STATE) {
+        mdns_initialized = true;
+        ESP_LOGI(TAG, "mDNS AP: http://%s.local (bereits aktiv)", config_rtc.hostname);
+    } else {
+        ESP_LOGW(TAG, "mDNS AP service: %s", esp_err_to_name(ret));
+    }
+}
+
+// Handler für / (Root)
 static esp_err_t root_handler(httpd_req_t *req) {
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", "/index.html");
@@ -4041,29 +3965,8 @@ static esp_err_t root_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Captive-Landing: absolute URL auf die AP-IP (hardware.h), damit der Client eindeutig
-// dieselbe Origin nutzt wie DNS-Captive (10.0.0.1) — relative Pfade in index.html bleiben gültig.
-static esp_err_t captive_portal_redirect_handler(httpd_req_t *req) {
-    last_web_activity_us = esp_timer_get_time();
-    char location[56];
-    snprintf(location, sizeof(location), "http://%d.%d.%d.%d/index.html",
-             AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
-    httpd_resp_set_status(req, "302 Found");
-    httpd_resp_set_hdr(req, "Location", location);
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
-    httpd_resp_set_hdr(req, "Pragma", "no-cache");
-    httpd_resp_set_type(req, "text/plain");
-    httpd_resp_send(req, "Redirecting to captive portal", HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
-
 // Handler für 404 (Not Found)
 static esp_err_t not_found_handler(httpd_req_t *req) {
-    // Unbekannte URLs nur im AP-Modus auf Landingpage umleiten (Captive-Portal-Verhalten)
-    wifi_mode_t mode = WIFI_MODE_NULL;
-    if (esp_wifi_get_mode(&mode) == ESP_OK && (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA)) {
-        return captive_portal_redirect_handler(req);
-    }
     httpd_resp_set_status(req, "404 Not Found");
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_send(req, "Not Found", HTTPD_RESP_USE_STRLEN);
@@ -4091,56 +3994,42 @@ static esp_err_t httpd_404_err_handler(httpd_req_t *req, httpd_err_code_t err) {
     return not_found_handler(req);
 }
 
-// Handler für Static Files
+// Handler für /static/* (LittleFS data/static/)
 static esp_err_t static_file_handler(httpd_req_t *req) {
     last_web_activity_us = esp_timer_get_time();
 
     char uri_path[128];
     uri_copy_path_only(uri_path, sizeof(uri_path), req->uri);
-    
-    // Blockiere config.json
-    if (strcmp(uri_path, "/config.json") == 0) {
+
+    char filepath[256];
+    snprintf(filepath, sizeof(filepath), "/littlefs%s", uri_path);
+
+    if (strstr(filepath, "config.json")) {
         httpd_resp_set_status(req, "403 Forbidden");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_send(req, "Forbidden: config.json is protected", HTTPD_RESP_USE_STRLEN);
+        httpd_resp_send(req, NULL, 0);
         return ESP_OK;
-    }
-    
-    // Dateipfad konstruieren
-    char filepath[160];
-    if (strcmp(uri_path, "/") == 0) {
-        strcpy(filepath, "/littlefs/index.html");
-    } else {
-        snprintf(filepath, sizeof(filepath), "/littlefs%s", uri_path);
     }
     
     FILE* file = fopen(filepath, "r");
     if (!file) {
-        // AP: jede nicht vorhandene Datei (z. B. /generate_204, /hotspot-detect.html) → Landingpage.
-        // Damit entfallen eigene Captive-Probe-Handler; DNS liefert ohnehin 10.0.0.1.
-        wifi_mode_t mode = WIFI_MODE_NULL;
-        if (esp_wifi_get_mode(&mode) == ESP_OK && (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA)) {
-            return captive_portal_redirect_handler(req);
-        }
         httpd_resp_set_status(req, "404 Not Found");
         httpd_resp_set_type(req, "text/plain");
         httpd_resp_send(req, "File not found", HTTPD_RESP_USE_STRLEN);
         return ESP_OK;
     }
     
-    // Content-Type bestimmen
-    if (strstr(uri_path, ".css")) {
-        httpd_resp_set_type(req, "text/css");
-    } else if (strstr(uri_path, ".js")) {
-        httpd_resp_set_type(req, "application/javascript");
-    } else if (strstr(uri_path, ".gz")) {
+    // Content-Type bestimmen (.gz vor .css, sonst kein Content-Encoding bei .css.gz)
+    if (strstr(uri_path, ".gz")) {
         httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-        // Content-Type basierend auf Dateiname ohne .gz
         if (strstr(uri_path, ".css.gz")) {
             httpd_resp_set_type(req, "text/css");
         } else if (strstr(uri_path, ".js.gz")) {
             httpd_resp_set_type(req, "application/javascript");
         }
+    } else if (strstr(uri_path, ".css")) {
+        httpd_resp_set_type(req, "text/css");
+    } else if (strstr(uri_path, ".js")) {
+        httpd_resp_set_type(req, "application/javascript");
     } else if (strstr(uri_path, ".html")) {
         httpd_resp_set_type(req, "text/html");
     } else if (strstr(uri_path, ".png")) {
@@ -4168,36 +4057,7 @@ static esp_err_t static_file_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Handler für /bootstrap.min.css (gzip)
-static esp_err_t bootstrap_css_handler(httpd_req_t *req) {
-    last_web_activity_us = esp_timer_get_time();
-    
-    FILE* file = fopen("/littlefs/bootstrap.min.css.gz", "r");
-    if (!file) {
-        httpd_resp_set_status(req, "404 Not Found");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_send(req, "File not found", HTTPD_RESP_USE_STRLEN);
-        return ESP_OK;
-    }
-    
-    httpd_resp_set_type(req, "text/css");
-    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-    httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=31536000");
-    
-    char buffer[512];
-    size_t bytes_read;
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        if (httpd_resp_send_chunk(req, buffer, bytes_read) != ESP_OK) {
-            fclose(file);
-            return ESP_FAIL;
-        }
-    }
-    fclose(file);
-    httpd_resp_send_chunk(req, NULL, 0);
-    return ESP_OK;
-}
-
-void setupWebServer() {
+void setupWebServer(bool enable_captive) {
     // WICHTIG: LittleFS muss gemountet sein, bevor Web-Server startet
     // (auch wenn Config bereits aus RTC-RAM geladen wurde)
     if (!mount_littlefs()) {
@@ -4213,9 +4073,8 @@ void setupWebServer() {
     
     // HTTP-Server konfigurieren
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    // API + Static-Wildcard; keine separaten Captive-Probe-URIs nötig (AP: fehlende Datei → Redirect)
-    config.max_open_sockets = 7;  /* ESP-IDF-Maximum (3 intern reserviert) */
-    config.max_uri_handlers = 30;
+    config.max_open_sockets = 13;  /* LWIP_MAX_SOCKETS(16) − 3 intern reserviert */
+    config.max_uri_handlers = 40;  /* App(17) + /static/*(1) + Captive(11) */
     config.max_resp_headers = 8;
     config.lru_purge_enable = true;
     config.uri_match_fn = httpd_uri_match_wildcard;  // Wildcard-Matching für statische Dateien aktivieren
@@ -4269,14 +4128,6 @@ void setupWebServer() {
         .user_ctx  = NULL
     };
     httpd_register_uri_handler(server, &config_uri);
-    
-    httpd_uri_t bootstrap_uri = {
-        .uri       = "/bootstrap.min.css",
-        .method    = HTTP_GET,
-        .handler   = bootstrap_css_handler,
-        .user_ctx  = NULL
-    };
-    httpd_register_uri_handler(server, &bootstrap_uri);
     
     httpd_uri_t ping_uri = {
         .uri       = "/ping",
@@ -4390,16 +4241,34 @@ void setupWebServer() {
         .user_ctx  = NULL
     };
     httpd_register_uri_handler(server, &mqtt_action_uri);
-    
-    // Wildcard-Handler für alle statischen Dateien (muss als letzter registriert werden)
-    // Spezifische Handler (oben) haben Vorrang vor dem Wildcard-Handler
+
     httpd_uri_t static_uri = {
-        .uri       = "/*",
+        .uri       = "/static/*",
         .method    = HTTP_GET,
         .handler   = static_file_handler,
         .user_ctx  = NULL
     };
     httpd_register_uri_handler(server, &static_uri);
+
+    if (enable_captive) {
+        ap_mdns_start();
+
+        char portal_url[48];
+        ap_portal_index_url(portal_url, sizeof(portal_url));
+        captive_portal_config_t portal_cfg = CAPTIVE_PORTAL_CONFIG_DEFAULT();
+        portal_cfg.redirect_url = portal_url;
+        portal_cfg.netif_key = "WIFI_AP_DEF";
+
+        esp_err_t cp_ret = captive_portal_register(server, &portal_cfg);
+        if (cp_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Captive-Portal: %s", esp_err_to_name(cp_ret));
+        } else {
+            ap_dhcp_ensure_dns_server();
+            ESP_LOGI(TAG, "Captive-Portal aktiv → %s (auch http://%s.local/)",
+                     portal_url, config_rtc.hostname);
+        }
+        esp_log_level_set("captive_portal", ESP_LOG_WARN);
+    }
     
     server_started = true;
     last_web_activity_us = esp_timer_get_time();
@@ -4706,7 +4575,7 @@ extern "C" void app_main(void) {
                 sync_ntp_time();
                 
                 // Web-Server starten
-                setupWebServer();
+                setupWebServer(false);
                         char ip_str[16];
                         snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&wifi_get_ip_info()->ip));
                         ESP_LOGI(TAG, "Web-Server: http://%s", ip_str);
@@ -4714,10 +4583,10 @@ extern "C" void app_main(void) {
                         ESP_LOGE(TAG, "WiFi-Verbindung fehlgeschlagen → Starte Access Point");
                         wifi_manager_session_end();
 
+                        /* AP zuerst: httpd nach laufendem AP starten (sonst TCP-Timeout trotz DNS). */
                         if (wifi_start_access_point()) {
-                            // Web-Server starten (ohne mDNS und NTP im AP-Modus)
-                            setupWebServer();
-                            ESP_LOGI(TAG, "Web-Server (AP-Modus): http://%d.%d.%d.%d", 
+                            setupWebServer(true);
+                            ESP_LOGI(TAG, "Web-Server (AP-Modus): http://%d.%d.%d.%d",
                                      AP_IP_ADDRESS_1, AP_IP_ADDRESS_2, AP_IP_ADDRESS_3, AP_IP_ADDRESS_4);
             } else {
                             ESP_LOGE(TAG, "FEHLER: Weder WiFi-Verbindung noch Access Point möglich");

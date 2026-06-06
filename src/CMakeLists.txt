@@ -35,6 +35,7 @@ idf_component_register(
         mqtt                    # ESP-IDF MQTT Client (IDF built-in)
         espressif__esp-zboss-lib    # ESP-Zigbee-SDK: ZBOSS Stack (über idf_component.yml)
         espressif__esp-zigbee-lib   # ESP-Zigbee-SDK: Espressif APIs (über idf_component.yml)
+        nordesems__esp-captive-portal  # AP Captive Portal (DNS, DHCP 114, OS-Probes)
 )
 # LittleFS Image Erstellung für ESP-IDF
 # WICHTIG: Das erste Argument ist das LABEL aus der partitions.csv
