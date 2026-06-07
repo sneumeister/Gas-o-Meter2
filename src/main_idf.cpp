@@ -3714,7 +3714,7 @@ static esp_err_t mqtt_action_handler(httpd_req_t* req) {
         return ESP_OK;
     }
 
-    char json_response[256];
+    char json_response[384];
     transfer_mqtt_test_connection(host, (uint16_t)port_val, username, password, json_response,
                                   sizeof(json_response));
 

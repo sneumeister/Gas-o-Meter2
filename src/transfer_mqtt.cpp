@@ -6,10 +6,12 @@
 
 #include "esp_log.h"
 #include "esp_event.h"
+#include "esp_tls_errors.h"
 #include "mqtt_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -472,9 +474,99 @@ void transfer_mqtt_deinit(void) {
 
 struct mqtt_test_ctx {
     volatile bool connected;
+    volatile bool failed;
+    volatile bool subscribe_failed;
     volatile bool version_received;
     char broker_version[64];
+    char error_message[96];
+    int error_type;
+    int connect_return_code;
+    uint32_t esp_err_code;
+    int sock_errno;
 };
+
+static void mqtt_test_set_message(mqtt_test_ctx* ctx, const char* message) {
+    strncpy(ctx->error_message, message, sizeof(ctx->error_message) - 1);
+    ctx->error_message[sizeof(ctx->error_message) - 1] = '\0';
+}
+
+static void mqtt_test_record_error_details(mqtt_test_ctx* ctx, const esp_mqtt_error_codes_t* err) {
+    if (err == nullptr) {
+        ctx->error_type = MQTT_ERROR_TYPE_NONE;
+        ctx->connect_return_code = -1;
+        ctx->esp_err_code = 0;
+        ctx->sock_errno = 0;
+        return;
+    }
+    ctx->error_type = static_cast<int>(err->error_type);
+    ctx->connect_return_code = static_cast<int>(err->connect_return_code);
+    ctx->esp_err_code = static_cast<uint32_t>(err->esp_tls_last_esp_err);
+    ctx->sock_errno = err->esp_transport_sock_errno;
+}
+
+static void mqtt_test_handle_error(mqtt_test_ctx* ctx, const esp_mqtt_error_codes_t* err) {
+    mqtt_test_record_error_details(ctx, err);
+
+    if (err == nullptr) {
+        mqtt_test_set_message(ctx, "Verbindung fehlgeschlagen");
+        ctx->failed = true;
+        return;
+    }
+
+    switch (err->error_type) {
+        case MQTT_ERROR_TYPE_CONNECTION_REFUSED:
+            switch (err->connect_return_code) {
+                case MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED:
+                case MQTT_CONNECTION_REFUSE_BAD_USERNAME:
+                    mqtt_test_set_message(ctx, "Anmeldung fehlgeschlagen (Benutzer/Passwort)");
+                    break;
+                case MQTT_CONNECTION_REFUSE_ID_REJECTED:
+                    mqtt_test_set_message(ctx, "Client-ID abgelehnt");
+                    break;
+                case MQTT_CONNECTION_REFUSE_SERVER_UNAVAILABLE:
+                    mqtt_test_set_message(ctx, "Broker nicht verfuegbar");
+                    break;
+                case MQTT_CONNECTION_REFUSE_PROTOCOL:
+                    mqtt_test_set_message(ctx, "Falsches MQTT-Protokoll");
+                    break;
+                default:
+                    mqtt_test_set_message(ctx, "Broker lehnt Verbindung ab");
+                    break;
+            }
+            ctx->failed = true;
+            break;
+
+        case MQTT_ERROR_TYPE_TCP_TRANSPORT:
+            if (err->esp_tls_cert_verify_flags != 0) {
+                mqtt_test_set_message(ctx, "TLS-Zertifikat ungueltig");
+            } else if (err->esp_tls_last_esp_err == ESP_ERR_ESP_TLS_CANNOT_RESOLVE_HOSTNAME) {
+                mqtt_test_set_message(ctx, "Hostname nicht aufloesbar");
+            } else if (err->esp_tls_last_esp_err == ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT ||
+                       err->esp_transport_sock_errno == ETIMEDOUT) {
+                mqtt_test_set_message(ctx, "Verbindungs-Timeout");
+            } else if (err->esp_transport_sock_errno == ECONNREFUSED ||
+                       err->esp_tls_last_esp_err == ESP_ERR_ESP_TLS_FAILED_CONNECT_TO_HOST) {
+                mqtt_test_set_message(ctx, "Server/Port nicht erreichbar");
+            } else if (err->esp_transport_sock_errno == ENETUNREACH ||
+                       err->esp_transport_sock_errno == EHOSTUNREACH) {
+                mqtt_test_set_message(ctx, "Server/Port nicht erreichbar");
+            } else {
+                mqtt_test_set_message(ctx, "Server nicht erreichbar");
+            }
+            ctx->failed = true;
+            break;
+
+        case MQTT_ERROR_TYPE_SUBSCRIBE_FAILED:
+            mqtt_test_set_message(ctx, "Verbunden, Broker-Infotest nicht moeglich");
+            ctx->subscribe_failed = true;
+            break;
+
+        default:
+            mqtt_test_set_message(ctx, "Verbindung fehlgeschlagen");
+            ctx->failed = true;
+            break;
+    }
+}
 
 static void mqtt_test_event_handler(void* handler_args, esp_event_base_t base, int32_t event_id,
                                     void* event_data) {
@@ -487,6 +579,15 @@ static void mqtt_test_event_handler(void* handler_args, esp_event_base_t base, i
             ctx->connected = true;
             if (event->client != nullptr) {
                 esp_mqtt_client_subscribe(event->client, MQTT_TEST_SYS_VERSION_TOPIC, 0);
+            }
+            break;
+        case MQTT_EVENT_ERROR:
+            mqtt_test_handle_error(ctx, event->error_handle);
+            break;
+        case MQTT_EVENT_SUBSCRIBED:
+            if (event->error_handle != nullptr &&
+                event->error_handle->error_type == MQTT_ERROR_TYPE_SUBSCRIBE_FAILED) {
+                mqtt_test_handle_error(ctx, event->error_handle);
             }
             break;
         case MQTT_EVENT_DATA: {
@@ -522,6 +623,20 @@ static void mqtt_test_write_error(char* json_out, size_t json_out_len, const cha
     snprintf(json_out, json_out_len, "{\"status\":\"error\",\"message\":\"%s\"}", message);
 }
 
+static void mqtt_test_write_error_ctx(char* json_out, size_t json_out_len, const mqtt_test_ctx* ctx) {
+    snprintf(json_out, json_out_len,
+             "{\"status\":\"error\",\"message\":\"%s\",\"error_type\":%d,"
+             "\"connect_return_code\":%d,\"esp_err\":\"0x%x\",\"sock_errno\":%d}",
+             ctx->error_message, ctx->error_type, ctx->connect_return_code, ctx->esp_err_code,
+             ctx->sock_errno);
+}
+
+static void mqtt_test_cleanup_client(esp_mqtt_client_handle_t client) {
+    esp_mqtt_client_stop(client);
+    vTaskDelay(pdMS_TO_TICKS(MQTT_DISCONNECT_TIMEOUT_MS));
+    esp_mqtt_client_destroy(client);
+}
+
 bool transfer_mqtt_test_connection(const char* host, uint16_t port, const char* username,
                                      const char* password, char* json_out, size_t json_out_len) {
     if (json_out == nullptr || json_out_len < 32) {
@@ -551,6 +666,8 @@ bool transfer_mqtt_test_connection(const char* host, uint16_t port, const char* 
     snprintf(test_uri, sizeof(test_uri), "mqtt://%s:%u", host, (unsigned int)port);
 
     mqtt_test_ctx ctx = {};
+    ctx.error_type = MQTT_ERROR_TYPE_NONE;
+    ctx.connect_return_code = -1;
     esp_mqtt_client_config_t cfg = {};
     cfg.broker.address.uri = test_uri;
     cfg.session.keepalive = 30;
@@ -575,28 +692,43 @@ bool transfer_mqtt_test_connection(const char* host, uint16_t port, const char* 
 
     uint32_t waited_ms = 0;
     const uint32_t poll_ms = 50;
-    while (!ctx.connected && waited_ms < MQTT_CONNECT_TIMEOUT_MS) {
+    while (!ctx.connected && !ctx.failed && waited_ms < MQTT_CONNECT_TIMEOUT_MS) {
         vTaskDelay(pdMS_TO_TICKS(poll_ms));
         waited_ms += poll_ms;
     }
 
+    if (ctx.failed) {
+        mqtt_test_cleanup_client(client);
+        mqtt_test_write_error_ctx(json_out, json_out_len, &ctx);
+        return false;
+    }
+
     if (!ctx.connected) {
-        esp_mqtt_client_stop(client);
-        vTaskDelay(pdMS_TO_TICKS(MQTT_DISCONNECT_TIMEOUT_MS));
-        esp_mqtt_client_destroy(client);
-        mqtt_test_write_error(json_out, json_out_len, "MQTT-Server connect: Timeout");
+        mqtt_test_cleanup_client(client);
+        ctx.error_type = MQTT_ERROR_TYPE_TCP_TRANSPORT;
+        ctx.esp_err_code = static_cast<uint32_t>(ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT);
+        mqtt_test_set_message(&ctx, "Verbindungs-Timeout");
+        mqtt_test_write_error_ctx(json_out, json_out_len, &ctx);
         return false;
     }
 
     waited_ms = 0;
-    while (!ctx.version_received && waited_ms < MQTT_TEST_SYS_WAIT_MS) {
+    while (!ctx.version_received && !ctx.subscribe_failed && waited_ms < MQTT_TEST_SYS_WAIT_MS) {
         vTaskDelay(pdMS_TO_TICKS(poll_ms));
         waited_ms += poll_ms;
     }
 
-    esp_mqtt_client_stop(client);
-    vTaskDelay(pdMS_TO_TICKS(MQTT_DISCONNECT_TIMEOUT_MS));
-    esp_mqtt_client_destroy(client);
+    mqtt_test_cleanup_client(client);
+
+    if (ctx.subscribe_failed) {
+        snprintf(json_out, json_out_len,
+                 "{\"status\":\"ok\",\"message\":\"%s\",\"subscribe_ok\":false,"
+                 "\"error_type\":%d,\"connect_return_code\":%d,\"esp_err\":\"0x%x\","
+                 "\"sock_errno\":%d}",
+                 ctx.error_message, ctx.error_type, ctx.connect_return_code, ctx.esp_err_code,
+                 ctx.sock_errno);
+        return true;
+    }
 
     if (ctx.version_received && ctx.broker_version[0] != '\0') {
         snprintf(json_out, json_out_len,

@@ -1804,6 +1804,16 @@ function applyMqttTestButtonState() {
     }
 }
 
+function mqttTestDebugTitle(data) {
+    if (!data || data.error_type === undefined) {
+        return '';
+    }
+    return 'error_type=' + data.error_type +
+        ', connect_return_code=' + (data.connect_return_code !== undefined ? data.connect_return_code : '-') +
+        ', esp_err=' + (data.esp_err || '-') +
+        ', sock_errno=' + (data.sock_errno !== undefined ? data.sock_errno : '-');
+}
+
 function mqttTestServer() {
     const statusEl = document.getElementById('mqttTestStatus');
     const btn = document.getElementById('mqttTestBtn');
@@ -1830,7 +1840,9 @@ function mqttTestServer() {
                 throw new Error('Authentifizierung fehlgeschlagen. Bitte Seite neu laden.');
             }
             return response.json().then(function(data) {
-                throw new Error(data.message || ('HTTP ' + response.status));
+                const err = new Error(data.message || ('HTTP ' + response.status));
+                err.mqttDebug = data;
+                throw err;
             });
         }
         return response.json();
@@ -1841,15 +1853,23 @@ function mqttTestServer() {
         if (data.broker_version) {
             text += ' (' + data.broker_version + ')';
         }
-        statusEl.innerHTML = '<span class="text-success">' + text + '</span>';
+        let debugTitle = mqttTestDebugTitle(data);
+        if (data.subscribe_ok === false) {
+            const titleAttr = debugTitle ? ' title="' + debugTitle + '"' : '';
+            statusEl.innerHTML = '<span class="text-warning"' + titleAttr + '>' + text + '</span>';
+        } else {
+            statusEl.innerHTML = '<span class="text-success">' + text + '</span>';
+        }
     })
     .catch(function(error) {
         if (statusEl) {
             const msg = error.message || 'Unbekannter Fehler';
+            const debugTitle = error.mqttDebug ? mqttTestDebugTitle(error.mqttDebug) : '';
+            const titleAttr = debugTitle ? ' title="' + debugTitle + '"' : '';
             if (msg.indexOf('401') >= 0 || msg.indexOf('Authentifizierung') >= 0) {
                 statusEl.innerHTML = '<span class="text-danger">Authentifizierung fehlgeschlagen. Seite neu laden.</span>';
             } else {
-                statusEl.innerHTML = '<span class="text-danger">' + msg + '</span>';
+                statusEl.innerHTML = '<span class="text-danger"' + titleAttr + '>' + msg + '</span>';
             }
         }
     })
