@@ -35,4 +35,4 @@ Quelle: `BOM_ESP32C6_gasometer.xlsx`
 
 ## KiCAD-Export
 
-Aktueller Stand: `ESP32C6_gasometer-2026-07-11_162129`
+Aktueller Stand: [ESP32C6_gasometer-2026-07-11_162129](ESP32C6_gasometer-2026-07-11_162129/)
