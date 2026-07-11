@@ -2425,6 +2425,13 @@ const char* processor_get_value(const char* var) {
         }
         return buffer;
     }
+    if (strcmp(var, "usb_connected") == 0) {
+#if BOARD_VERSION_ID == 20260523
+        return IS_USB_POWER(battery_voltage) ? "JA" : "NEIN";
+#else
+        return "nicht erkennbar";
+#endif
+    }
     if (strcmp(var, "wifiCredentialsData") == 0) {
         // WiFi-Credentials als JSON für JavaScript
         static char json_buffer[512];
