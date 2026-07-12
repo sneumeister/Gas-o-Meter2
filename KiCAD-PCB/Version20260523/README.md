@@ -27,6 +27,7 @@ Quelle: `BOM_ESP32C6_gasometer.xlsx`
 | SW1 | 1 | KSK-1A87-2025 | reed switch | [Datasheet](https://standexdetect.de/wp-content/uploads/sites/8/2025/09/datasheet-reed-switch-series-ksk-1a80.pdf) |
 | SW2,SW3 | 2 | OMRON_B3F-6000 | Push button switch, generic, two pins | [Datasheet](https://omronfs.omron.com/en_US/ecb/products/pdf/en-b3f.pdf) |
 | U1 | 1 | TPL5110 | Timer, Nano Power, SOT-23-6 | [Datasheet](http://www.ti.com/lit/ds/symlink/tpl5110.pdf) |
+| U2 | 1 | Seeed Studio XIAO ESP32-C6 | | |
 | J3 | | JST-Conn. / Battery Connector | | |
 
 ## 3D-Ansicht
