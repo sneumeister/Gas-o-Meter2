@@ -33,10 +33,13 @@ Thumbs.db
 *.log
 *.tmp
 
-# CAD-Housing: STEP-, PNG- und Markdown-Dateien inkl. Unterverzeichnisse versionieren
+# CAD-Housing: CAD-Exporte, Bilder und Dokumentation inkl. Unterverzeichnisse versionieren
 CAD-housing/**
 !CAD-housing/**/
 !CAD-housing/**/*.stp
+!CAD-housing/**/*.step
+!CAD-housing/**/*.prt
+!CAD-housing/**/*.asm
 !CAD-housing/**/*.png
 !CAD-housing/**/*.md
 
