@@ -33,11 +33,12 @@ Thumbs.db
 *.log
 *.tmp
 
-# CAD-Housing: nur die *.stp Dateien git'en, alles andere ignorieren
+# CAD-Housing: STEP-, PNG- und Markdown-Dateien inkl. Unterverzeichnisse versionieren
 CAD-housing/**
-!CAD-housing/*.stp
-!CAD-housing/*.png
-!CAD-housing/*.md
+!CAD-housing/**/
+!CAD-housing/**/*.stp
+!CAD-housing/**/*.png
+!CAD-housing/**/*.md
 
 # KiCAD: Temporärdateien und Cache
 KiCAD-PCB/**/fp-info-cache
