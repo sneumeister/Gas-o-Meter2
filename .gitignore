@@ -38,3 +38,10 @@ CAD-housing/**
 !CAD-housing/*.stp
 !CAD-housing/*.png
 !CAD-housing/*.md
+
+# KiCAD: Temporärdateien und Cache
+KiCAD-PCB/**/fp-info-cache
+KiCAD-PCB/**/_autosave-*
+KiCAD-PCB/**/#auto_saved_files#
+KiCAD-PCB/**/~*.lck
+KiCAD-PCB/**/*-backups/
