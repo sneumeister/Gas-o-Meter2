@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gas-O-Meter Konfiguration</title>
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/bootstrap.min.css.gz">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .config-container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: #f5f5f5;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            padding: 30px;
+        }
+        .spinner-border {
+            display: inline-block;
+            width: 2rem;
+            height: 2rem;
+            vertical-align: text-bottom;
+            border: 0.25em solid currentColor;
+            border-right-color: transparent;
+            border-radius: 50%;
+            animation: spinner-border 0.75s linear infinite;
+        }
+        @keyframes spinner-border {
+            to { transform: rotate(360deg); }
+        }
+        .text-primary {
+            color: #667eea !important;
+        }
+        .form-label {
+            font-weight: bold;
+        }
+        /* Dropdown-Icon für Select-Felder */
+        .select-with-icon {
+            position: relative;
+        }
+        .select-with-icon::after {
+            content: "▼";
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            pointer-events: none;
+            color: #666;
+            font-size: 0.8em;
+        }
+        .select-with-icon select {
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            padding-right: 35px;
+        }
+        /* ZigBee-Aktionsstatus: dunkle Texte auf hellem Panel (Bootstrap text-warning/info zu blass) */
+        #zigbeeActionStatus {
+            color: #212529;
+            font-size: 0.95rem;
+            line-height: 1.45;
+        }
+        #zigbeeActionStatus p {
+            margin-bottom: 0.35rem;
+        }
+        #zigbeeActionStatus .zigbee-status-info {
+            color: #055160;
+        }
+        #zigbeeActionStatus .zigbee-status-success {
+            color: #0a3622;
+            font-weight: 600;
+        }
+        #zigbeeActionStatus .zigbee-status-warn {
+            color: #513c06;
+            background-color: #fff3cd;
+            border: 1px solid #e0c060;
+            padding: 0.5rem 0.75rem;
+            border-radius: 0.375rem;
+        }
+        #zigbeeActionStatus .zigbee-status-error {
+            color: #58151c;
+            font-weight: 500;
+        }
+        #zigbeeActionStatus .zigbee-status-muted {
+            color: #495057;
+        }
+    </style>
+</head>
+<body>
+    <div class="config-container">
+        <h1 class="text-center mb-4" style="color: #667eea;">Gas-O-Meter Konfiguration</h1>
+        
+        <form id="configForm">
+            <div class="mb-3">
+                <label for="hostname" class="form-label">Hostname</label>
+                <input type="text" class="form-control" id="hostname" name="hostname" value="gas-o-meter2" required maxlength="26">
+                <small class="form-text text-muted">Max. 26 Zeichen (BLE-Gerätename, mDNS/Web-Zugriff, MQTT/HA-Gerätename; Standard für MQTT Main Topic)</small>
+            </div>
+            
+            <div class="mb-3">
+                <label for="adminpass" class="form-label">Admin-Passwort</label>
+                <div id="adminpassLocked">
+                    <div class="input-group">
+                        <input type="password" class="form-control" id="adminpass" name="adminpass" value="********" readonly disabled>
+                        <button class="btn btn-dark" type="button" onclick="unlockAdminPass()">
+                            🔓 Passwort ändern
+                        </button>
+                    </div>
+                </div>
+                <div id="adminpassUnlocked" style="display: none;">
+                    <div class="alert alert-warning mb-3">
+                        <strong>⚠️ Achtung:</strong> Passwort wird geändert. Beide Felder müssen übereinstimmen!
+                    </div>
+                    <div class="mb-3">
+                        <label for="adminpass_new" class="form-label">Neues Admin-Passwort</label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="adminpass_new" name="adminpass_new" placeholder="Neues Passwort eingeben">
+                            <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('adminpass_new', 'toggleAdminPassNewIcon')">
+                                <span id="toggleAdminPassNewIcon">👁️</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="adminpass_confirm" class="form-label">Passwort wiederholen</label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="adminpass_confirm" name="adminpass_confirm" placeholder="Passwort wiederholen">
+                            <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('adminpass_confirm', 'toggleAdminPassConfirmIcon')">
+                                <span id="toggleAdminPassConfirmIcon">👁️</span>
+                            </button>
+                        </div>
+                        <div id="adminpassMatch" class="invalid-feedback" style="display: none;">
+                            Passwörter stimmen nicht überein!
+                        </div>
+                        <div id="adminpassMatchOk" class="valid-feedback" style="display: none;">
+                            ✓ Passwörter stimmen überein
+                        </div>
+                    </div>
+                    <button class="btn btn-secondary btn-sm" type="button" onclick="lockAdminPass()">
+                        ✖ Änderung abbrechen
+                    </button>
+                </div>
+            </div>
+            
+            <div class="mb-3">
+                <h2 class="h5 mb-3">WiFi-Credentials</h2>
+                
+                <!-- Aufklappbarer Bereich: WLAN in der Nähe -->
+                <div class="mb-3">
+                    <button class="btn btn-outline-info btn-sm" type="button" id="wifiScanToggle" onclick="toggleWifiScan()">
+                        📡 WLAN in der Nähe...
+                    </button>
+                    <div class="collapse mt-2" id="wifiScanCollapse" style="display: none;">
+                        <div class="card card-body">
+                            <p class="small text-muted mb-2">Hinweis: Es werden höchstens die <strong>10 stärksten</strong> Netzwerke angezeigt (nach Signalstärke / RSSI sortiert). Schwächere WLANs erscheinen nicht in der Liste.</p>
+                            <div id="wifiScanStatus" class="text-muted">Klicken Sie auf den Button, um verfügbare Netzwerke zu laden.</div>
+                            <div id="wifiNetworksList"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="wifiCredentials">
+<div class="card mb-3">
+  <div class="card-body">
+    <h5 class="card-title h6 mb-3" style="color: #667eea;">WiFi-Set 1</h5>
+    <div class="mb-3">
+      <label class="form-label">SSID</label>
+      <input type="text" class="form-control" value="Mein-WLAN" readonly>
+    </div>
+    <div class="mb-3">
+      <label class="form-label">Passwort</label>
+      <input type="password" class="form-control" value="********" readonly>
+    </div>
+  </div>
+</div>
+</div>
+                <button type="button" class="btn btn-info btn-sm" onclick="addWifiCredential()" id="addWifiBtn" style="display: none;">+ WiFi-Set hinzufügen</button>
+            </div>
+            
+            <!-- WiFi TX Power -->
+            <div class="mb-3">
+                <label for="wifi_tx_power_dbm" class="form-label">WiFi TX Power (dBm)</label>
+                <div class="select-with-icon">
+                    <select class="form-control" id="wifi_tx_power_dbm" name="wifi_tx_power_dbm">
+                        <option value="2">2 dBm</option>
+                        <option value="5">5 dBm</option>
+                        <option value="8">8 dBm</option>
+                        <option value="11">11 dBm</option>
+                        <option value="14">14 dBm</option>
+                        <option value="17">17 dBm</option>
+                        <option value="20">20 dBm (Standard)</option>
+                    </select>
+                </div>
+                <input type="hidden" id="wifi_tx_power_dbm_current" value="20">
+            </div>
+            
+            <div class="mb-3">
+                <label for="wakeup_minutes" class="form-label">Wake-up Intervall (Minuten)</label>
+                <input type="number" class="form-control" id="wakeup_minutes" name="wakeup_minutes" value="10" min="1" max="60" required>
+            </div>
+            
+            <div class="mb-3">
+                <label for="transfer_mode" class="form-label">Datenübertragung</label>
+                <div class="select-with-icon">
+                    <select class="form-control" id="transfer_mode" name="transfer_mode" required onchange="toggleTransferConfig()">
+                        <option value="none" >Keine Übertragung</option>
+                        <option value="zigbee" selected>ZigBee</option>
+                        <option value="ble" >BLE</option>
+                        <option value="mqtt" >MQTT via WiFi</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- ZigBee-Konfiguration (nur sichtbar wenn transfer_mode=zigbee) -->
+            <div class="mb-3" id="zigbeeConfigSection" style="display: block;">
+                <button class="btn btn-outline-primary btn-sm" type="button" id="zigbeeConfigToggle" onclick="toggleZigbeeConfigPanel()">
+                    📡 ZigBee-Einstellungen...
+                </button>
+                <div class="collapse mt-2" id="zigbeeConfigCollapse" style="display: block;">
+                    <div class="card card-body">
+                        <div class="mb-3">
+                            <label for="zigbee_tx_power_dbm" class="form-label">ZigBee TX Power (dBm)</label>
+                            <div class="select-with-icon">
+                                <select class="form-control" id="zigbee_tx_power_dbm" name="zigbee_tx_power_dbm">
+                                    <option value="-9">-9 dBm</option>
+                                    <option value="-6">-6 dBm</option>
+                                    <option value="-3">-3 dBm</option>
+                                    <option value="0">0 dBm (Standard)</option>
+                                    <option value="3">3 dBm</option>
+                                    <option value="6">6 dBm</option>
+                                    <option value="10">10 dBm</option>
+                                </select>
+                            </div>
+                            <input type="hidden" id="zigbee_tx_power_dbm_current" value="0">
+                        </div>
+                        <h5 class="mb-3">ZigBee-Status</h5>
+                        <div class="mb-3">
+                            <table class="table table-sm table-bordered">
+                                <tr>
+                                    <td><strong>Status:</strong></td>
+                                    <td id="zigbeeStatusCell">Gepaart</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Network Address:</strong></td>
+                                    <td id="zigbeeNetworkAddrCell">0x4A2B</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>PAN ID:</strong></td>
+                                    <td id="zigbeePanIdCell">0x1A2B</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Channel:</strong></td>
+                                    <td id="zigbeeChannelCell">15</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Extended Address (MAC):</strong></td>
+                                    <td id="zigbeeExtendedAddrCell">0x483FDAFFFE123456</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="mb-3">
+                            <button type="button" class="btn btn-warning btn-sm" id="zigbeeFactoryResetBtn" onclick="zigbeeFactoryReset()">
+                                🔄 Factory-Reset ZigBee
+                            </button>
+                            <span id="zigbeeFactoryResetStatus" class="ms-2"></span>
+                            <button type="button" class="btn btn-info btn-sm" onclick="zigbeeStartPairing()">
+                                🔗 Start Pairing
+                            </button>
+                        </div>
+                        <div id="zigbeeActionStatus"></div>
+                        <small class="text-muted" id="zigbeeStaHint" style="display: none;">
+                            ZigBee-Einstellungen und Pairing nur im WLAN (STA) verfügbar – nicht im Einrichtungs-Hotspot (AP).
+                            Nach Speichern der WiFi-Daten Gerät neu starten.
+                        </small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BLE-Konfiguration (nur sichtbar wenn transfer_mode=ble) -->
+            <div class="mb-3" id="bleConfigSection" style="display: none;">
+                <button class="btn btn-outline-primary btn-sm" type="button" id="bleConfigToggle" onclick="toggleBleConfigPanel()">
+                    📶 BLE-Einstellungen...
+                </button>
+                <div class="collapse mt-2" id="bleConfigCollapse" style="display: none;">
+                    <div class="card card-body">
+                        <div class="mb-3">
+                            <label for="ble_tx_power_dbm" class="form-label">BLE TX Power (dBm)</label>
+                            <div class="select-with-icon">
+                                <select class="form-control" id="ble_tx_power_dbm" name="ble_tx_power_dbm">
+                                    <option value="3">3 dBm</option>
+                                    <option value="6">6 dBm</option>
+                                    <option value="9">9 dBm (Standard)</option>
+                                    <option value="12">12 dBm</option>
+                                    <option value="15">15 dBm</option>
+                                    <option value="18">18 dBm</option>
+                                    <option value="20">20 dBm</option>
+                                </select>
+                            </div>
+                            <input type="hidden" id="ble_tx_power_dbm_current" value="9">
+                        </div>
+                        <h5 class="mb-3">BLE-Status</h5>
+                        <div class="mb-3">
+                            <table class="table table-sm table-bordered">
+                                <tr>
+                                    <td><strong>Status:</strong></td>
+                                    <td id="bleStatusText">Bereit</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Device Name:</strong></td>
+                                    <td>gas-o-meter2</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>BLE MAC:</strong></td>
+                                    <td><code>48:3F:DA:12:34:56</code></td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="mb-3">
+                            <button type="button" class="btn btn-info btn-sm" id="blePairingBtn" onclick="blePairing()">
+                                📶 BLE Pairing starten
+                            </button>
+                            <span id="blePairingStatus" class="ms-2"></span>
+                        </div>
+                        <small class="text-muted">Tipp: In Node-RED zuerst „Scan“ starten, dann hier klicken. Nach 2–3 s erscheint <strong>gas-o-meter2</strong> in der Liste. Läuft Node-RED auf einem anderen Rechner (z. B. Pi), muss dieser in BLE-Reichweite zum ESP32 stehen. Zur Kontrolle: Smartphone-App „nRF Connect“ o. ä. – sichtbar?</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MQTT-Konfiguration (nur sichtbar wenn transfer_mode=mqtt) -->
+            <div class="mb-3" id="mqttConfigSection" style="display: none;">
+                <button class="btn btn-outline-primary btn-sm" type="button" id="mqttConfigToggle" onclick="toggleMqttConfigPanel()">
+                    📶 MQTT-Einstellungen...
+                </button>
+                <div class="collapse mt-2" id="mqttConfigCollapse" style="display: none;">
+                    <div class="card card-body">
+                        <input type="hidden" id="mqtt_dummy_host_default" value="dummy_mqtt_host">
+                        <input type="hidden" id="mqtt_default_port_value" value="1883">
+                        <input type="hidden" id="mqtt_default_main_topic_value" value="gas-o-meter2">
+                        <h5 class="mb-3">MQTT-Einstellungen</h5>
+                        <div class="mb-3">
+                            <label for="mqtt_host" class="form-label">MQTT Host</label>
+                            <input type="text" class="form-control" id="mqtt_host" name="mqtt_host" value="mqtt.example.local" maxlength="63">
+                        </div>
+                        <div class="mb-3">
+                            <label for="mqtt_port" class="form-label">MQTT Port</label>
+                            <input type="number" class="form-control" id="mqtt_port" name="mqtt_port" value="1883" min="1" max="65535">
+                        </div>
+                        <div class="mb-3">
+                            <label for="mqtt_username" class="form-label">MQTT Username (optional)</label>
+                            <input type="text" class="form-control" id="mqtt_username" name="mqtt_username" value="" maxlength="63">
+                        </div>
+                        <div class="mb-3">
+                            <label for="mqtt_password" class="form-label">MQTT Passwort (optional)</label>
+                            <div class="input-group">
+                                <input type="password" class="form-control" id="mqtt_password" name="mqtt_password" value="" maxlength="63">
+                                <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('mqtt_password', 'toggleMqttPassIcon')">
+                                    <span id="toggleMqttPassIcon">👁️</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="mqtt_main_topic" class="form-label">MQTT Main Topic</label>
+                            <input type="text" class="form-control" id="mqtt_main_topic" name="mqtt_main_topic" value="gas-o-meter2" maxlength="63">
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="mqtt_ha_autodiscovery" name="mqtt_ha_autodiscovery" >
+                            <label class="form-check-label" for="mqtt_ha_autodiscovery">
+                                HomeAssistant Auto-Discovery
+                            </label>
+                        </div>
+                        <input type="hidden" id="wifi_sta_connected" value="1">
+                        <div class="mb-2 mt-3">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="mqttTestBtn" onclick="mqttTestServer()">
+                                MQTT-Server testen
+                            </button>
+                            <span id="mqttTestStatus" class="ms-2 text-muted"></span>
+                        </div>
+                        <small class="text-muted" id="mqttTestHint" style="display: none;">
+                            MQTT-Test erst nach Verbindung mit Ihrem WLAN möglich (nicht nur im Konfigurations-Hotspot).
+                            Nach Speichern der WiFi-Daten Gerät neu starten.
+                        </small>
+                        <small class="text-muted d-block mt-2">Hinweis: Ohne echten MQTT Host wird der Dummy-Host gespeichert und MQTT-Transfer übersprungen.</small>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mb-3">
+                <label for="transfer_minutes" class="form-label">Transfer Intervall (alle x Wake-up Intervall)</label>
+                <input type="number" class="form-control" id="transfer_minutes" name="transfer_minutes" value="2" min="0" max="60" required>
+                <small class="form-text text-muted">0 = nie, 1-60 = alle x Wake-up Intervalle (max. 60 Min. pro Stunde)</small>
+            </div>
+            
+            <div class="mb-3">
+                <label for="adc_voltage_multiplier" class="form-label">ADC Spannungs-Multiplikator</label>
+                <input type="number" class="form-control" id="adc_voltage_multiplier" name="adc_voltage_multiplier" value="1.0000" step="0.0001" min="0.5" max="2.0" required>
+                <small class="form-text text-muted">Kalibrierung: Multimeter-Spannung / angezeigte Spannung (z. B. 4.19 / 4.06 = 1.0320)</small>
+            </div>
+            
+            <div class="mb-3">
+                <label for="ntp_server" class="form-label">NTP-Server</label>
+                <input type="text" class="form-control" id="ntp_server" name="ntp_server" value="pool.ntp.org" required>
+            </div>
+            
+            <div class="refresh">
+                <button type="button" onclick="reloadConfig()">Konfig Neuladen</button>
+                <button type="button" onclick="saveConfig()" style="background-color: #28a745; color: white;">Konfig Speichern</button>
+                <button type="button" onclick="rebootDevice()" style="background-color: #dc3545; color: white;">Reboot</button>
+                <button type="button" onclick="location.href='/'" style="background-color: #667eea; color: white;">Zurück</button>
+            </div>
+        </form>
+    </div>
+    
+    <!-- Versteckte Daten für JavaScript -->
+    <script id="wifiCredentialsData" type="application/json">[]</script>
+    <script id="currentWifiData" type="application/json">[]</script>
+    
+    
+</body>
+</html>
