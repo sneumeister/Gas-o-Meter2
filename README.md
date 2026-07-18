@@ -1,5 +1,11 @@
 # Gas-O-Meter2
 
+[![Release](https://img.shields.io/github/v/release/sneumeister/Gas-o-Meter2)](https://github.com/sneumeister/Gas-o-Meter2/releases)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](./LICENSE)
+[![ESP32-C6](https://img.shields.io/badge/MCU-ESP32--C6-red)](https://www.espressif.com/en/products/socs/esp32-c6)
+[![pioarduino](https://img.shields.io/badge/platform-pioarduino-orange)](https://github.com/pioarduino/platform-espressif32)
+[![ESP-IDF](https://img.shields.io/badge/framework-ESP--IDF%205.5-green)](https://docs.espressif.com/projects/esp-idf/)
+
 ESP32-C6-basiertes Gaszähler-Monitoring mit **LP-Core Pulse-Counting**, akkubetriebenem Deep-Sleep und wählbaren Übertragungswegen (WiFi/MQTT, BLE, Zigbee).
 
 Custom Carrier-PCB mit **TPL5110**-Mikrotimer für saubere Reed-Impulse, optionalem 3D-Druck-Gehäuse und Web-Interface zur Konfiguration.
