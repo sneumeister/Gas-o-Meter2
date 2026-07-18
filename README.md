@@ -121,10 +121,8 @@ Standard-Environment in `[platformio.ini](platformio.ini)`: `PCB_20251022`
 
 Zwei Wege:
 
-1. **Web-UI** nach Wake-up über **Taster A** (nicht bei Timer-Wake-up im Dauerbetrieb)
+1. **Web-UI** nach Wake-up über **Taster A** ([Anleitung zur Web-UI](README_WEBUI.md))
 2. `**data/config.json**` — manuell oder über die Web-UI speichern
-
-Ausführliche Anleitung zur Web-UI: [README_WEBUI.md](README_WEBUI.md)
 
 **Hinweis Dauerbetrieb:** Bei periodischem Timer-Wake-up (Akku-Betrieb) wacht das Gerät nur kurz auf, überträgt ggf. Daten und geht wieder in Deep-Sleep — **ohne** Web-Frontend. Status und Konfiguration sind nur nach manuellem Wake-up über **Taster A** erreichbar (WiFi STA oder Captive Portal im AP-Modus).
 
