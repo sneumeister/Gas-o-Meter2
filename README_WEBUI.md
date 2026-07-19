@@ -56,7 +56,6 @@ Die Konfigurationsseite ist geschützt (Browser-Abfrage):
 - **Benutzername:** immer `admin`
 - **Passwort:** Wert von `adminpass` in `config.json` (bei Erstinstallation z. B. `AdminPasswort` aus dem Beispiel)
 
-
 ![Konfiguration – Übersicht](pictures/webui/config.png)
 
 Wichtige Bereiche:
