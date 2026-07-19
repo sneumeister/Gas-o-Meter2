@@ -72,6 +72,9 @@ extern "C" {
 // Läuft auf dem HP-Core und startet den LP-Core-Prozessor
 bool start_lp_core(void) {
     ESP_LOGI(TAG, "Starte LP-Core...");
+
+    // Binary-Load initialisiert LP-BSS neu (pulse_counter := 0). Stand vorher sichern.
+    const uint32_t saved_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
     
     // REED-Pin als RTC-GPIO initialisieren (erforderlich für LP-Core-Zugriff)
     // GPIO2 auf ESP32C6
@@ -94,6 +97,11 @@ bool start_lp_core(void) {
     }
     
     ESP_LOGI(TAG, "LP-Core Binary geladen (%zu Bytes)", binary_size);
+
+    // Zählerstand wiederherstellen (NVS/RTC-Wert darf durch Load nicht verloren gehen)
+    *(volatile uint32_t *)&ulp_pulse_counter = saved_pulse;
+    ESP_LOGI(TAG, "LP-Core: ulp_pulse_counter nach Load wiederhergestellt: %lu",
+             (unsigned long)saved_pulse);
     
     // LP-Core konfigurieren und starten
     ulp_lp_core_cfg_t cfg = {
@@ -4480,24 +4488,21 @@ extern "C" void app_main(void) {
             ESP_LOGI(TAG, "Erwartete Version (Build-Timestamp): %lu", RING_BUFFER_VERSION);
             check_and_init_pulse_ring_nvs();
         }
-            
-            // LP-Core Watchdog Task starten (asynchron)
-            // Der Task prüft automatisch ulp_lp_core_running und startet LP-Core bei Bedarf
-        // WICHTIG: Task wird sowohl bei Power-On als auch bei Deep-Sleep-Wake-up gestartet
-            xTaskCreate(
-                lp_core_watchdog_task,      // Task-Funktion
-                "LP_Core_Watchdog",          // Task-Name
-                4096,                        // Stack-Größe (Bytes)
-                NULL,                        // Parameter
-                1,                           // Priorität (niedrig, da nicht kritisch)
-                NULL                         // Task-Handle (nicht benötigt)
-            );
-            ESP_LOGI(TAG, "LP-Core Watchdog Task gestartet");
-            
-        // ring_idx und ulp_pulse_counter initialisieren (kombiniert)
-        // ring_idx: Ring-Buffer-Index (aus RTC-RAM oder Ring-Speicher)
-        // ulp_pulse_counter: Puls-Zähler (aus RTC-RAM oder Ring-Speicher)
+
+        // Zählerstand aus NVS/RTC laden, BEVOR der LP-Core (asynchron) gestartet wird.
+        // Sonst kann ulp_lp_core_load_binary() den Wert auf 0 zurücksetzen.
         init_ring_buffer_and_ulp_pulse_counter(isPowerOn);
+
+        // LP-Core Watchdog Task starten (asynchron)
+        xTaskCreate(
+            lp_core_watchdog_task,      // Task-Funktion
+            "LP_Core_Watchdog",          // Task-Name
+            4096,                        // Stack-Größe (Bytes)
+            NULL,                        // Parameter
+            1,                           // Priorität (niedrig, da nicht kritisch)
+            NULL                         // Task-Handle (nicht benötigt)
+        );
+        ESP_LOGI(TAG, "LP-Core Watchdog Task gestartet");
         
         // 1. Batteriespannung-Test und ggf. in Ring-Speicher schreiben
         // < 30% ODER USB: Schreibe in Ring-Speicher (RTC-RAM könnte verloren gehen)
