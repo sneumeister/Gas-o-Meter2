@@ -3344,65 +3344,107 @@ static esp_err_t counter_set_handler(httpd_req_t *req) {
     }
     
     uint32_t old_value = *(volatile uint32_t *)&ulp_pulse_counter;
-    ESP_LOGI(TAG, "Zählerstand manuell gesetzt: %lu → %lu", old_value, new_value);
-    
-    // Alten Wert in Ring-Speicher schreiben (falls > 0 und > max_pulse)
-    if (old_value > 0) {
-        uint32_t max_pulse = 0;
-        uint32_t max_index = 0;
-        max_pulse = find_max_pulse_and_index_from_nvs(&max_index);
-        
-        if (old_value > max_pulse) {
-            ESP_LOGI(TAG, "Alter Wert (%lu) > max_pulse (%lu) → schreibe in Ring-Speicher", old_value, max_pulse);
-            write_ulp_pulse_counter_to_ring_buffer();
-        }
+    ESP_LOGI(TAG, "Zählerstand manuell gesetzt: %lu → %lu",
+             (unsigned long)old_value, (unsigned long)new_value);
+
+    if (!init_pulse_nvs_minimal()) {
+        ESP_LOGE(TAG, "counter/set: Pulse-NVS nicht initialisiert");
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: Pulse-NVS nicht initialisiert", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
     }
-    
-    // Neuen Wert in RTC-RAM setzen
+
+    // ring_idx sicherstellen (nach Power-On/RTC-Verlust sonst ungültig)
+    if (ring_idx >= RING_BUFFER_SIZE) {
+        uint32_t max_index = 0;
+        uint32_t max_pulse = find_max_pulse_and_index_from_nvs(&max_index);
+        ring_idx = (max_pulse > 0) ? ((max_index + 1) % RING_BUFFER_SIZE) : 0;
+        ESP_LOGI(TAG, "counter/set: ring_idx neu ermittelt: %lu", (unsigned long)ring_idx);
+    }
+
+    // RTC sofort aktualisieren (UI/LP-Core)
     *(volatile uint32_t *)&ulp_pulse_counter = new_value;
-    
-    // Wenn neuer Wert < alter Wert: Stelle sicher, dass neuer Wert der höchste im Ring-Speicher ist
+
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open_from_partition(NVS_PARTITION_PULSE, NVS_NAMESPACE_PULSE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "counter/set: NVS-Open fehlgeschlagen: %s", esp_err_to_name(err));
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: Ring-Speicher konnte nicht geöffnet werden", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    // Korrektur nach unten: höhere Ring-Einträge entfernen, sonst gewinnt find_max den alten Wert
     if (new_value < old_value) {
-        ESP_LOGI(TAG, "Neuer Wert (%lu) < alter Wert (%lu) → lösche alle Werte > %lu im Ring-Speicher", 
-                 new_value, old_value, new_value);
-        
-        nvs_handle_t nvs_handle;
-        esp_err_t err = nvs_open_from_partition(NVS_PARTITION_PULSE, NVS_NAMESPACE_PULSE, NVS_READWRITE, &nvs_handle);
-        if (err == ESP_OK) {
-            uint32_t deleted_count = 0;
-            for (uint32_t i = 0; i < RING_BUFFER_SIZE; i++) {
-                char key[MAX_KEY_LENGTH];
-                snprintf(key, sizeof(key), "%s%lu", NVS_KEY_PREFIX, i);
-                
-                uint32_t pulse_value = 0;
-                err = nvs_get_u32(nvs_handle, key, &pulse_value);
-                
-                if (err == ESP_OK && pulse_value > new_value) {
-                    nvs_erase_key(nvs_handle, key);
+        uint32_t deleted_count = 0;
+        for (uint32_t i = 0; i < RING_BUFFER_SIZE; i++) {
+            char key[MAX_KEY_LENGTH];
+            snprintf(key, sizeof(key), "%s%lu", NVS_KEY_PREFIX, (unsigned long)i);
+            uint32_t pulse_value = 0;
+            if (nvs_get_u32(nvs_handle, key, &pulse_value) == ESP_OK && pulse_value > new_value) {
+                if (nvs_erase_key(nvs_handle, key) == ESP_OK) {
                     deleted_count++;
                 }
             }
-            nvs_close(nvs_handle);
-            ESP_LOGI(TAG, "Ring-Speicher bereinigt: %lu Einträge gelöscht", deleted_count);
         }
+        ESP_LOGI(TAG, "counter/set: Ring bereinigt, %lu Einträge > %lu gelöscht",
+                 (unsigned long)deleted_count, (unsigned long)new_value);
     }
-    
-    // Neuen Wert in Ring-Speicher schreiben
-    init_pulse_nvs_minimal();
-    nvs_handle_t nvs_handle;
-    esp_err_t err = nvs_open_from_partition(NVS_PARTITION_PULSE, NVS_NAMESPACE_PULSE, NVS_READWRITE, &nvs_handle);
+
+    // Neuen Wert schreiben (wie write_ulp: an ring_idx, danach Index erhöhen)
+    char key[MAX_KEY_LENGTH];
+    snprintf(key, sizeof(key), "%s%lu", NVS_KEY_PREFIX, (unsigned long)ring_idx);
+    err = nvs_set_u32(nvs_handle, key, new_value);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "counter/set: nvs_set_u32(%s=%lu) fehlgeschlagen: %s",
+                 key, (unsigned long)new_value, esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: Zählerstand konnte nicht in NVS geschrieben werden", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    err = nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "counter/set: nvs_commit fehlgeschlagen: %s", esp_err_to_name(err));
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: NVS-Commit fehlgeschlagen", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    const uint32_t written_at = ring_idx;
+    ring_idx = (ring_idx + 1) % RING_BUFFER_SIZE;
+    ESP_LOGI(TAG, "counter/set: NVS OK — %s=%lu (nächster ring_idx=%lu)",
+             key, (unsigned long)new_value, (unsigned long)ring_idx);
+
+    // Verifikation: denselben Key zurücklesen
+    err = nvs_open_from_partition(NVS_PARTITION_PULSE, NVS_NAMESPACE_PULSE, NVS_READONLY, &nvs_handle);
+    uint32_t readback = 0;
+    esp_err_t read_err = ESP_FAIL;
     if (err == ESP_OK) {
-        ring_idx = (ring_idx + 1) % RING_BUFFER_SIZE;
-        char key[MAX_KEY_LENGTH];
-        snprintf(key, sizeof(key), "%s%lu", NVS_KEY_PREFIX, ring_idx);
-        nvs_set_u32(nvs_handle, key, new_value);
-        nvs_commit(nvs_handle);
+        read_err = nvs_get_u32(nvs_handle, key, &readback);
         nvs_close(nvs_handle);
     }
-    
-    // Erfolgreiche Antwort
-    char response[100];
-    snprintf(response, sizeof(response), "Zählerstand gesetzt und in NVS gespeichert: %05lu.%02lu", new_value / PULSE_COUNTER_DIVISOR, new_value % PULSE_COUNTER_DIVISOR);
+    ESP_LOGI(TAG, "counter/set: NVS-Verify %s → %s, Wert=%lu (erwartet %lu, Slot %lu)",
+             key, esp_err_to_name(read_err), (unsigned long)readback,
+             (unsigned long)new_value, (unsigned long)written_at);
+    if (read_err != ESP_OK || readback != new_value) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Fehler: NVS-Verify fehlgeschlagen (Wert nicht lesbar)", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    char response[128];
+    snprintf(response, sizeof(response),
+             "Zählerstand gesetzt und in NVS gespeichert: %05lu.%02lu",
+             (unsigned long)(new_value / PULSE_COUNTER_DIVISOR),
+             (unsigned long)(new_value % PULSE_COUNTER_DIVISOR));
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
