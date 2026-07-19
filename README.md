@@ -80,7 +80,7 @@ Der LP-Core zählt Impulse weiter, solange der Chip versorgt ist. **Taster B** h
 | Transfer   | `src/transfer.cpp`, `transfer_{mqtt,ble,zigbee}.cpp` | Modus-Dispatcher und Protokoll-Stacks                               |
 | Netzwerk   | `src/wifi_manager.cpp`, `src/time_sync.cpp`          | WiFi STA/AP, mDNS, NTP                                              |
 | Persistenz | `data/` (LittleFS), `pulse_nv` (NVS)                 | Web-UI, `config.json`, Zähler-Ringpuffer                            |
-| Version    | `include/version.h`                                  | `Gas-O-Meter2` v1.0.0                                               |
+| Version    | `include/version.h`                                  | `Gas-O-Meter2` v1.0.1                                               |
 
 
 **Typischer Ablauf:** TPL5110 weckt ESP → LP-Core liefert Zählerstand → HP-Core liest ADC/Config → optional Transfer → Deep-Sleep.

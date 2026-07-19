@@ -39,11 +39,13 @@
                                 </td>
                                 <td style="text-align: center; vertical-align: middle; box-sizing: border-box;">
                                     <div class="d-flex justify-content-center counter-input-container" style="gap: 0; box-sizing: border-box;">
-                                        <input type="text" id="counterLeft" readonly value="00000" 
+                                        <input type="text" id="counterLeft" value="00000"
                                                class="form-control text-center fw-bold counter-input"
+                                               inputmode="numeric" pattern="[0-9]*" maxlength="5" autocomplete="off"
                                                style="width: 100px; font-size: 1.5em; background-color: #000000; color: #ffffff; border: 2px solid #667eea; border-radius: 8px 0 0 8px; font-family: 'Courier New', monospace; border-right: none !important; margin-right: 0 !important; padding-right: 8px !important; box-sizing: border-box;">
-                                        <input type="text" id="counterRight" readonly value="00" 
+                                        <input type="text" id="counterRight" value="00"
                                                class="form-control text-center fw-bold counter-input"
+                                               inputmode="numeric" pattern="[0-9]*" maxlength="2" autocomplete="off"
                                                style="width: 70px; font-size: 1.5em; background-color: #dc3545; color: #ffffff; border: 2px solid #667eea; border-radius: 0 8px 8px 0; font-family: 'Courier New', monospace; border-left: none !important; margin-left: 0 !important; padding-left: 8px !important; box-sizing: border-box;">
                                     </div>
                                 </td>

@@ -47,7 +47,7 @@ Die Startseite zeigt den **Zählerstand** (LP-Core-Pulse), Systeminfos und Aktio
 
 ![Zählerstand korrigieren](pictures/webui/status-counter.png)
 
-Mit **Zählerstand korrigieren** lässt sich der Anzeigewert per Slider oder +/- an den realen Gaszähler anpassen. **Übernehmen** speichert den Wert (NVS/RTC).
+Mit **Zählerstand korrigieren** lässt sich der Anzeigewert per direkter Zahleneingabe in die Felder, per Slider oder +/- an den realen Gaszähler anpassen. Zwischen Vor- und Nachkommastellen wechseln Tab, Punkt/Komma oder die Pfeiltasten. **Übernehmen** speichert den Wert (NVS/RTC).
 
 ## Konfigurationsseite (`/config`)
 
@@ -103,7 +103,7 @@ MQTT-Test und -Transfer erfordern eine **STA-Verbindung** zum Heim-WLAN (nicht n
 ### Zählerstand an Gaszähler anpassen
 
 1. Status-Seite öffnen.
-2. **Zählerstand korrigieren**, Wert setzen, **Übernehmen**.
+2. **Zählerstand korrigieren**, Wert tippen oder per Slider/+/- setzen, **Übernehmen**.
 
 ### ZigBee koppeln
 

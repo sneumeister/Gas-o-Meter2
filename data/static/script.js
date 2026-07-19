@@ -8,6 +8,8 @@ window.addEventListener('load', () => {
     if (wifiInfoElement && wifiInfoElement.dataset.style) {
         wifiInfoElement.style.cssText = wifiInfoElement.dataset.style;
     }
+
+    initCounterManualInput();
 });
 
 // Deep-Sleep-Funktion
@@ -192,6 +194,124 @@ function updateCounterFromSlider() {
     
     document.getElementById('counterLeft').value = String(leftValue).padStart(5, '0');
     document.getElementById('counterRight').value = String(rightValue).padStart(2, '0');
+}
+
+function updateSliderFromCounterFields() {
+    const leftInput = document.getElementById('counterLeft');
+    const rightInput = document.getElementById('counterRight');
+    const slider = document.getElementById('counterSlider');
+    if (!leftInput || !rightInput || !slider) {
+        return;
+    }
+
+    let leftValue = parseInt(leftInput.value, 10);
+    let rightValue = parseInt(rightInput.value, 10);
+    if (isNaN(leftValue)) leftValue = 0;
+    if (isNaN(rightValue)) rightValue = 0;
+    leftValue = Math.min(99999, Math.max(0, leftValue));
+    rightValue = Math.min(99, Math.max(0, rightValue));
+    slider.value = leftValue * 100 + rightValue;
+}
+
+function padCounterField(input) {
+    if (!input) return;
+    const maxLen = input.id === 'counterRight' ? 2 : 5;
+    let value = parseInt(input.value, 10);
+    if (isNaN(value)) value = 0;
+    if (input.id === 'counterRight') {
+        value = Math.min(99, Math.max(0, value));
+    } else {
+        value = Math.min(99999, Math.max(0, value));
+    }
+    input.value = String(value).padStart(maxLen, '0');
+    updateSliderFromCounterFields();
+}
+
+function focusCounterField(input, selectAll) {
+    if (!input) return;
+    input.focus();
+    if (selectAll) {
+        input.select();
+    }
+}
+
+function initCounterManualInput() {
+    const leftInput = document.getElementById('counterLeft');
+    const rightInput = document.getElementById('counterRight');
+    if (!leftInput || !rightInput) {
+        return;
+    }
+
+    function onDigitsInput(event) {
+        const input = event.target;
+        const maxLen = input.id === 'counterRight' ? 2 : 5;
+        const digitsOnly = input.value.replace(/\D/g, '').slice(0, maxLen);
+        if (input.value !== digitsOnly) {
+            input.value = digitsOnly;
+        }
+        updateSliderFromCounterFields();
+    }
+
+    function onFocusSelect(event) {
+        event.target.select();
+    }
+
+    function onBlurPad(event) {
+        padCounterField(event.target);
+    }
+
+    function onKeyDownNavigate(event) {
+        const input = event.target;
+        const isLeft = input.id === 'counterLeft';
+        const isRight = input.id === 'counterRight';
+        const value = input.value;
+        const selStart = input.selectionStart;
+        const selEnd = input.selectionEnd;
+        const allSelected = selStart === 0 && selEnd === value.length;
+        const atEnd = selStart === value.length && selEnd === value.length;
+        const atStart = selStart === 0 && selEnd === 0;
+
+        // Dezimaltrenner: vom linken Feld nach rechts
+        if (isLeft && (event.key === '.' || event.key === ',')) {
+            event.preventDefault();
+            padCounterField(leftInput);
+            focusCounterField(rightInput, true);
+            return;
+        }
+
+        // Pfeiltasten an Feldgrenzen
+        if (isLeft && event.key === 'ArrowRight' && (atEnd || allSelected)) {
+            event.preventDefault();
+            focusCounterField(rightInput, true);
+            return;
+        }
+        if (isRight && event.key === 'ArrowLeft' && (atStart || allSelected)) {
+            event.preventDefault();
+            focusCounterField(leftInput, true);
+            return;
+        }
+
+        // Linkes Feld voll + weitere Ziffer → nach rechts und Ziffer einfügen
+        if (isLeft && /^[0-9]$/.test(event.key) && !event.ctrlKey && !event.metaKey && !event.altKey) {
+            const replacingAll = allSelected;
+            const currentLen = replacingAll ? 0 : value.length;
+            if (currentLen >= 5 && selStart === selEnd) {
+                event.preventDefault();
+                padCounterField(leftInput);
+                rightInput.value = event.key;
+                focusCounterField(rightInput, false);
+                rightInput.setSelectionRange(1, 1);
+                updateSliderFromCounterFields();
+            }
+        }
+    }
+
+    [leftInput, rightInput].forEach((input) => {
+        input.addEventListener('input', onDigitsInput);
+        input.addEventListener('focus', onFocusSelect);
+        input.addEventListener('blur', onBlurPad);
+        input.addEventListener('keydown', onKeyDownNavigate);
+    });
 }
 
 // Counter-Interval für +/- Buttons
