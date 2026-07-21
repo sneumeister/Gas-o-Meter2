@@ -84,7 +84,7 @@ const definition = {
     description: 'Custom Gas Meter with Battery (ESP32C6)',
 
     // Z2M/herdsman: Semver 0.0.<patch> (Default 0.0.0). Patch erhoehen → Geraet wird neu konfiguriert.
-    version: '0.0.1',
+    version: '0.0.3',
     
     // WICHTIG: Power Source muss explizit definiert werden für das Battery-Icon!
     // Ohne diese Property zeigt Z2M ein "?" statt des Battery-Icons
@@ -119,9 +119,10 @@ const definition = {
             .withDescription('Gas consumption [m³]'),
     ],
     
-    // Configure-Funktion: Wird nach dem Pairing/Join ausgeführt
-    // Bind + Configure Reporting. Das Device setzt nur die Cluster-Werte; der Zigbee-Stack
-    // sendet Attribute Reports automatisch bei Wertänderung (sobald Reporting konfiguriert ist).
+    // Configure-Funktion: Wird nach dem Pairing/Join und bei „Rekonfigurieren“ ausgeführt.
+    // Zuerst Basic lesen (Firmware-ID in der Z2M-UI), dann Bind + Configure Reporting.
+    // Das Device setzt nur die Cluster-Werte; der Zigbee-Stack sendet Attribute Reports
+    // automatisch bei Wertänderung (sobald Reporting konfiguriert ist).
     //
     // Branch zigbee_reporting_fix: Fehler nicht mehr stillschweigend mit .catch(() => {}) schlucken.
     // Pro Attribut try/catch + Ausgabe auf stdout/stderr (sichtbar in Z2M-Container-/Prozesslogs).
@@ -134,6 +135,25 @@ const definition = {
             info: (msg) => console.log(`[gas-o-meter2 configure] ${msg}`),
             warn: (msg) => console.warn(`[gas-o-meter2 configure] ${msg}`),
         };
+
+        // Firmware-Anzeige: endpoint.read allein aktualisiert oft nur den Cluster-Cache.
+        // Die About-UI liest device.softwareBuildID — daher explizit setzen + speichern.
+        // Sleepy ED: Gerät muss wach sein (sonst Timeout). Nur swBuildId (dateCode oft ungesetzt).
+        try {
+            const basic = await endpoint.read('genBasic', ['swBuildId']);
+            const sw = basic && basic.swBuildId;
+            if (sw !== undefined && sw !== null && String(sw).length > 0) {
+                device.softwareBuildID = String(sw);
+                if (typeof device.save === 'function') {
+                    device.save();
+                }
+                cfgLog.info(`configure read genBasic OK: softwareBuildID=${device.softwareBuildID}`);
+            } else {
+                cfgLog.warn('configure read genBasic: swBuildId leer/undefined');
+            }
+        } catch (e) {
+            cfgLog.warn(`configure read genBasic FAIL: ${e.message}`);
+        }
 
         // Bind pro Cluster (mit Pause dazwischen): Ein kombinierter Bind fuer mehrere
         // Cluster kann bei Sleepy-EDs zu bindRsp-Timeouts fuehren (Z2M: "after 10000ms"),
@@ -176,7 +196,7 @@ const definition = {
     meta: {
         battery: {type: 'battery'},  // Sagt Z2M: "Dieses Device ist batteriebetrieben" → zeigt Batterie-Icon statt "?"
         // configureKey erhoehen: Z2M ruft configure() erneut auf, sobald sich der Key aendert (ohne Re-Pair).
-        configureKey: 4,
+        configureKey: 6,
     },
 };
 
