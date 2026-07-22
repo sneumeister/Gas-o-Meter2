@@ -29,10 +29,10 @@
                             <tr>
                                 <td style="text-align: right; vertical-align: middle; padding-right: 4px;">
                                     <button type="button" class="btn btn-secondary btn-lg counter-btn" 
-                                            onmousedown="startDecrement('counterLeft', 'counterRight')" 
+                                            onmousedown="startDecrement('counterLeft', 'counterRight', event)" 
                                             onmouseup="stopCounter()" onmouseleave="stopCounter()"
-                                            ontouchstart="startDecrement('counterLeft', 'counterRight')" 
-                                            ontouchend="stopCounter()"
+                                            ontouchstart="startDecrement('counterLeft', 'counterRight', event)" 
+                                            ontouchend="stopCounter()" ontouchcancel="stopCounter()"
                                             style="min-width: 60px; font-size: 1.5em; padding: 12px 20px;">
                                         −
                                     </button>
@@ -51,10 +51,10 @@
                                 </td>
                                 <td style="text-align: left; vertical-align: middle; padding-left: 4px;">
                                     <button type="button" class="btn btn-secondary btn-lg counter-btn" 
-                                            onmousedown="startIncrement('counterLeft', 'counterRight')" 
+                                            onmousedown="startIncrement('counterLeft', 'counterRight', event)" 
                                             onmouseup="stopCounter()" onmouseleave="stopCounter()"
-                                            ontouchstart="startIncrement('counterLeft', 'counterRight')" 
-                                            ontouchend="stopCounter()"
+                                            ontouchstart="startIncrement('counterLeft', 'counterRight', event)" 
+                                            ontouchend="stopCounter()" ontouchcancel="stopCounter()"
                                             style="min-width: 60px; font-size: 1.5em; padding: 12px 20px;">
                                         +
                                     </button>

@@ -316,102 +316,120 @@ function initCounterManualInput() {
 
 // Counter-Interval für +/- Buttons
 let counterInterval = null;
-let counterSpeed = 500; // Initial: 500ms zwischen Änderungen
-const COUNTER_ACCELERATION = 60; // Beschleunigung beim Gedrückthalten (ms weniger pro Iteration)
-const COUNTER_MIN_SPEED = 5; // Minimale Geschwindigkeit (ms) - entspricht 200x pro Sekunde (100x schneller als Start)
+let counterHoldTimeout = null;
+let counterActive = false;
+let counterLastTouchStartMs = 0;
+let counterSpeed = 350;
+const COUNTER_HOLD_DELAY_MS = 450; // Erst nach Hold Repeat starten (kurzer Tap = genau 1 Schritt)
+const COUNTER_INITIAL_SPEED = 350; // ms zwischen Repeat-Schritten am Anfang
+const COUNTER_ACCELERATION = 40; // Beschleunigung erst nach einigen Repeat-Ticks
+const COUNTER_MIN_SPEED = 50; // Nicht zu aggressiv (Mobil/Firefox)
+const COUNTER_ACCEL_AFTER_TICKS = 4;
+const COUNTER_TOUCH_MOUSE_GUARD_MS = 600; // mousedown nach touchstart ignorieren
 
-function startIncrement(leftId, rightId) {
-    stopCounter(); // Sicherstellen, dass kein anderer Timer läuft
-    counterSpeed = 500; // Reset Geschwindigkeit
-    
-    function increment() {
-        const leftInput = document.getElementById(leftId);
-        const rightInput = document.getElementById(rightId);
-        
-        let leftValue = parseInt(leftInput.value) || 0;
-        let rightValue = parseInt(rightInput.value) || 0;
-        
-        // Erhöhe Nachkommastellen
+function applyCounterStep(direction, leftId, rightId) {
+    const leftInput = document.getElementById(leftId);
+    const rightInput = document.getElementById(rightId);
+    if (!leftInput || !rightInput) {
+        return;
+    }
+
+    let leftValue = parseInt(leftInput.value, 10) || 0;
+    let rightValue = parseInt(rightInput.value, 10) || 0;
+
+    if (direction > 0) {
         rightValue++;
         if (rightValue > 99) {
             rightValue = 0;
             leftValue++;
             if (leftValue > 99999) {
-                leftValue = 0; // Wrap-around
+                leftValue = 0;
             }
         }
-        
-        leftInput.value = String(leftValue).padStart(5, '0');
-        rightInput.value = String(rightValue).padStart(2, '0');
-        
-        // Slider aktualisieren
-        const totalValue = leftValue * 100 + rightValue;
-        const slider = document.getElementById('counterSlider');
-        if (slider) {
-            slider.value = totalValue;
-        }
-        
-        // Beschleunige beim Gedrückthalten
-        counterSpeed = Math.max(COUNTER_MIN_SPEED, counterSpeed - COUNTER_ACCELERATION);
-        
-        // Neuen Timer mit aktualisierter Geschwindigkeit starten
-        clearInterval(counterInterval);
-        counterInterval = setInterval(increment, counterSpeed);
-    }
-    
-    // Sofort einmal ausführen
-    increment();
-}
-
-function startDecrement(leftId, rightId) {
-    stopCounter();
-    counterSpeed = 500;
-    
-    function decrement() {
-        const leftInput = document.getElementById(leftId);
-        const rightInput = document.getElementById(rightId);
-        
-        let leftValue = parseInt(leftInput.value) || 0;
-        let rightValue = parseInt(rightInput.value) || 0;
-        
-        // Verringere Nachkommastellen
+    } else {
         rightValue--;
         if (rightValue < 0) {
             rightValue = 99;
             leftValue--;
             if (leftValue < 0) {
-                leftValue = 99999; // Wrap-around
+                leftValue = 99999;
             }
         }
-        
-        leftInput.value = String(leftValue).padStart(5, '0');
-        rightInput.value = String(rightValue).padStart(2, '0');
-        
-        // Slider aktualisieren
-        const totalValue = leftValue * 100 + rightValue;
-        const slider = document.getElementById('counterSlider');
-        if (slider) {
-            slider.value = totalValue;
-        }
-        
-        // Beschleunige beim Gedrückthalten
-        counterSpeed = Math.max(COUNTER_MIN_SPEED, counterSpeed - COUNTER_ACCELERATION);
-        
-        // Neuen Timer mit aktualisierter Geschwindigkeit starten
-        clearInterval(counterInterval);
-        counterInterval = setInterval(decrement, counterSpeed);
     }
-    
-    // Sofort einmal ausführen
-    decrement();
+
+    leftInput.value = String(leftValue).padStart(5, '0');
+    rightInput.value = String(rightValue).padStart(2, '0');
+
+    const slider = document.getElementById('counterSlider');
+    if (slider) {
+        slider.value = leftValue * 100 + rightValue;
+    }
+}
+
+function startCounterHold(direction, leftId, rightId, event) {
+    // Mobil: touchstart + synthetisches mousedown → sonst Doppel-Schritt
+    if (event) {
+        if (event.type === 'touchstart') {
+            counterLastTouchStartMs = Date.now();
+            if (typeof event.preventDefault === 'function') {
+                event.preventDefault();
+            }
+        } else if (event.type === 'mousedown' &&
+                   (Date.now() - counterLastTouchStartMs) < COUNTER_TOUCH_MOUSE_GUARD_MS) {
+            return;
+        }
+    }
+
+    stopCounter();
+    counterActive = true;
+    counterSpeed = COUNTER_INITIAL_SPEED;
+
+    // Kurzer Tap: genau ein Schritt
+    applyCounterStep(direction, leftId, rightId);
+
+    // Dauerdruck: Repeat erst nach Hold-Delay, Beschleunigung verzögert
+    counterHoldTimeout = setTimeout(() => {
+        if (!counterActive) {
+            return;
+        }
+        let ticks = 0;
+
+        function tick() {
+            if (!counterActive) {
+                return;
+            }
+            applyCounterStep(direction, leftId, rightId);
+            ticks++;
+            if (ticks >= COUNTER_ACCEL_AFTER_TICKS) {
+                counterSpeed = Math.max(COUNTER_MIN_SPEED, counterSpeed - COUNTER_ACCELERATION);
+            }
+            clearInterval(counterInterval);
+            counterInterval = setInterval(tick, counterSpeed);
+        }
+
+        counterInterval = setInterval(tick, counterSpeed);
+    }, COUNTER_HOLD_DELAY_MS);
+}
+
+function startIncrement(leftId, rightId, event) {
+    startCounterHold(1, leftId, rightId, event);
+}
+
+function startDecrement(leftId, rightId, event) {
+    startCounterHold(-1, leftId, rightId, event);
 }
 
 function stopCounter() {
+    counterActive = false;
+    if (counterHoldTimeout) {
+        clearTimeout(counterHoldTimeout);
+        counterHoldTimeout = null;
+    }
     if (counterInterval) {
         clearInterval(counterInterval);
         counterInterval = null;
     }
-    counterSpeed = 500; // Reset
+    counterSpeed = COUNTER_INITIAL_SPEED;
 }
 
 // Parameter-Tabelle: Panel aufklappen/zuklappen
