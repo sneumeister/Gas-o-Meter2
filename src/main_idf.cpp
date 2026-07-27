@@ -75,6 +75,9 @@ bool start_lp_core(void) {
 
     // Binary-Load initialisiert LP-BSS neu (pulse_counter := 0). Stand vorher sichern.
     const uint32_t saved_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
+
+    // Watchdog-Zähler zurücksetzen — sonst interpretiert der HP-Core RTC-Müll als „LP läuft“
+    *(volatile uint32_t *)&ulp_lp_core_running = 0;
     
     // REED-Pin als RTC-GPIO initialisieren (erforderlich für LP-Core-Zugriff)
     // GPIO2 auf ESP32C6
@@ -622,18 +625,30 @@ bool write_ulp_pulse_counter_to_ring_buffer() {
 
 
 // FreeRTOS Task für LP-Core Watchdog
+static bool lp_core_running_sane(uint32_t value)
+{
+    return value <= LP_CORE_RUNNING_SANITY_MAX;
+}
+
 void lp_core_watchdog_task(void *parameter) {
     uint32_t last_lp_core_value = 0;
     uint8_t retry_count = 0;
     const uint8_t MAX_RETRIES = 3;
     
     ESP_LOGI(TAG, "LP-Core Watchdog Task gestartet");
+
+    uint32_t running = *(volatile uint32_t *)&ulp_lp_core_running;
+    if (!lp_core_running_sane(running)) {
+        ESP_LOGW(TAG, "ulp_lp_core_running=%lu (ungültig, kein LP-Start) → zurücksetzen",
+                 (unsigned long)running);
+        *(volatile uint32_t *)&ulp_lp_core_running = 0;
+    } else if (running > 0) {
+        ESP_LOGI(TAG, "LP-Core Watchdog: vorhandener Zähler %lu (Prüfung folgt)",
+                 (unsigned long)running);
+    }
     
     // Initialisiere last_lp_core_value mit aktuellem Wert
     last_lp_core_value = *(volatile uint32_t *)&ulp_lp_core_running;
-    if (last_lp_core_value > 0) {
-        ESP_LOGI(TAG, "LP-Core läuft bereits (Zähler: %lu)", last_lp_core_value);
-    }
     
     // Kombinierte Start- und Watchdog-Schleife
     // Wenn ulp_lp_core_running == 0 ODER Counter erhöht sich nicht → versuche LP-Core zu starten
