@@ -100,6 +100,9 @@ Standard-Environment in [`platformio.ini`](platformio.ini): `PCB_20251022`
 | ----------- | ------------- | ------ |
 | `PCB_20251022` | ADC-Heuristik (Default; läuft auf beiden Platinenrevisionen) | `pio run` / `pio run -t upload` |
 | `PCB_20260523` | VBUS an GPIO18 (nur sinnvoll auf Revision 20260523) | `pio run -e PCB_20260523 -t upload` |
+| `TPL_test` | — (Hardwaretest TPL5110/Reed an GPIO2, ohne LP-Core/WiFi) | `pio run -e TPL_test -t upload` |
+
+**TPL_test:** Seriell `pio device monitor -e TPL_test` (115200). Monitor **vor** dem Reset öffnen oder Board danach neu starten (USB-CDC). Flanken auf GPIO2 mit µs-Zeitstempel und Intervall `dt`; alle 2 s ein Heartbeat. Reed tippen → ein LOW ~3–4 s; Reed dauerhaft brücken → ggf. kurze HIGH-Lücken ~50 ms. Details: [`src/main_TPL_test.cpp`](src/main_TPL_test.cpp).
 
 `BOARD_VERSION_ID` steuert in `include/hardware.h`, ob USB per ADC-Schwellwert oder per VBUS-GPIO erkannt wird — kein harter Platinen-Zwang.
 

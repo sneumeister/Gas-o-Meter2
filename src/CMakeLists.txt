@@ -3,10 +3,23 @@
 # PROJECT_DIR ist die ESP-IDF Variable für das Projekt-Root-Verzeichnis
 get_filename_component(INCLUDE_DIR "${PROJECT_DIR}/include" ABSOLUTE)
 
+# Optional: TPL5110-Hardwaretest (PlatformIO env TPL_test → -DGOM_TPL_TEST=1)
+if(GOM_TPL_TEST)
+    message(STATUS "GOM_TPL_TEST=1 → baue nur main_TPL_test.cpp (ohne ULP/WiFi/LittleFS)")
+    idf_component_register(
+        SRCS "main_TPL_test.cpp"
+        INCLUDE_DIRS "${INCLUDE_DIR}"
+        REQUIRES
+            driver
+            esp_timer
+            freertos
+            log
+    )
+    return()
+endif()
+
 # ArduinoJson Bibliothek einbinden (über PlatformIO lib_deps)
 # PlatformIO bindet Bibliotheken automatisch ein, wenn lib_compat_mode = off gesetzt ist
-# get_filename_component(ARDUINOJSON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../.pio/libdeps/espidf/ArduinoJson/src" ABSOLUTE)
-# Aber normalerweise nicht nötig, da PlatformIO das automatisch macht
 
 idf_component_register(
     SRCS "main_idf.cpp"
