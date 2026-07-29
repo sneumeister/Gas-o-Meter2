@@ -180,11 +180,11 @@ So erscheint in den geparsten Daten und in MQTT die echte Firmware-Version statt
 
 | Was | Wo | Anpassen? |
 | --- | --- | --- |
-| **`mqtt_main_topic`** | Node **Set flow: MQTT & HA Presets** → `PRESETS` | Ja (= ESP `config.json` → `mqtt_main_topic`) |
-| **`ha_device_name`** | dort → `PRESETS` | Ja (= ESP `hostname`, max. 26 Zeichen) |
-| **`HA_DEVICE_PREFIX`** (`gas_o_meter2`) | Function-Code (Presets + HA Discovery) | Nein – wie `MQTT_HA_DEVICE_TOPIC_PREFIX` in `mqtt_config.h` |
-| **`HA_MANUFACTURER`** / **`HA_MODEL`** | dort | Nein – wie `MQTT_HA_MANUFACTURER` / `MQTT_HA_MODEL` (Zigbee-Converter: `vendor`/`model`) |
-| **`EXPIRE_AFTER_SEC`** (7200) | dort | Nein – wie `MQTT_HA_EXPIRE_AFTER_SEC` |
+| **`mqtt_main_topic`** | Node **„Set flow: MQTT & HA Presets“** → `PRESETS` | Ja (= ESP `config.json` → `mqtt_main_topic`) |
+| **`ha_device_name`** | Node **„Set flow: MQTT & HA Presets“** → `PRESETS` | Ja (= ESP `hostname`, max. 26 Zeichen) |
+| **`HA_DEVICE_PREFIX`** (`gas_o_meter2`) | Function-Code in **„Set flow: MQTT & HA Presets“** und **„HA Discovery Config“** | Nein – wie `MQTT_HA_DEVICE_TOPIC_PREFIX` in `mqtt_config.h` |
+| **`HA_MANUFACTURER`** / **`HA_MODEL`** | Function-Code in **„Set flow: MQTT & HA Presets“** und **„HA Discovery Config“** | Nein – wie `MQTT_HA_MANUFACTURER` / `MQTT_HA_MODEL` (Zigbee-Converter: `vendor`/`model`) |
+| **`EXPIRE_AFTER_SEC`** (7200) | Function-Code in **„Set flow: MQTT & HA Presets“** und **„HA Discovery Config“** | Nein – wie `MQTT_HA_EXPIRE_AFTER_SEC` |
 
 **Slug:** Aus `mqtt_main_topic` werden `/`, `-` und Leerzeichen zu `_` (z. B. `gas-o-meter2` → `gas_o_meter2`).
 
