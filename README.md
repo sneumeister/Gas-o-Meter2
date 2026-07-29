@@ -11,13 +11,14 @@ ESP32-C6-basiertes Gaszähler-Monitoring mit **LP-Core Pulse-Counting**, akkubet
 Custom Carrier-PCB mit **TPL5110**-Mikrotimer für saubere Reed-Impulse, optionalem 3D-Druck-Gehäuse und Web-Interface zur Konfiguration.
 
 ![Status-Übersicht](pictures/status_small.png)
+![Gas-o-meter2_angebaut](pictures/gaszaehler.png)
 
 ## Features
 
-- **TPL5110** — entprellt den Reed-Kontakt und liefert ein definiertes Wake-Signal (~3,5 s); kompensiert den fehlenden Schmitt-Trigger-Eingang am ESP32-C6
-- **LP-Core (ULP)** — Pulszählung im Low-Power-Core (`ulp/ulp_main.c`); der HP-Core ist nur bei Wake-up aktiv
+- **TPL5110** — entprellt den Reed-Kontakt und liefert ein definiertes Zähler-Signal (~3,5 s); kompensiert den fehlenden Schmitt-Trigger-Eingang am ESP32-C6
+- **LP-Core (ULP)** — Pulszählung im Low-Power-Core (`ulp/ulp_main.c`); der HP-Core ist nur bei Wake-up zur Datenübertragung aktiv
 - **Deep-Sleep** — konfigurierbares Wake-up-Intervall über `wakeup_minutes` in der Config
-- **NVS Ring-Buffer** — Sicherung des Zählerstands bei **Low-Akku** (< 30 %) vor Deep-Sleep; verhindert Datenverlust, wenn RTC-RAM nicht mehr zuverlässig genug ist; zusätzliche Schreibung bei USB-Betrieb
+- **NVS Ring-Buffer** — Sicherung des Zählerstands nur bei **Low-Akku** (< 30 % / < 3,57 V); bei Akku ≥ 30 % bleibt der Stand im RTC-RAM (auch bei USB/VBUS), um den Flash zu schonen
 - **Web-Interface** — Status und Konfiguration über LittleFS (`data/index.html`, `config.html`); im **Dauerbetrieb** (Timer-Wake-up) nicht automatisch erreichbar
 - **Taster A** — Web-UI und WiFi nur nach Wake-up über **Taster A** auf der Platine; bei reinem Timer-Wake-up erfolgt nur die Datenübertragung, danach sofort Deep-Sleep
 - **Taster B** — derzeit **ohne Funktion**
@@ -50,7 +51,7 @@ LiPo-Spannungsreihe (wie in der Firmware hinterlegt; %-Anzeige wird dazwischen l
 
 | Spannung | % | Ohne USB (Akku) | Mit USB |
 | -------- | - | --------------- | ------- |
-| ≥ 4,02 V | 100 % | Normal: Transfer, Zähler im RTC-RAM | Normal; Zähler zusätzlich in NVS |
+| ≥ 4,02 V | 100 % | Normal: Transfer, Zähler im RTC-RAM | Normal: Transfer, Zähler im RTC-RAM (kein NVS) |
 | 3,92 V | 80 % | wie oben | wie oben |
 | 3,72 V | 50 % | wie oben | wie oben |
 | 3,57 V | 30 % | Ab hier bzw. darunter: Low-Battery-Meldung; Zähler in NVS | wie links |

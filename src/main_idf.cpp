@@ -311,8 +311,10 @@ static bool timer_wake_should_transfer(bool config_available) {
 }
 
 static void persist_pulse_counter_before_deep_sleep(void) {
-    if (battery_voltage < BATTERY_VOLTAGE_30 || IS_USB_POWER(battery_voltage)) {
-        ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher vor Deep-Sleep (< 30%% oder USB)...");
+    // Nur bei Low-Akku (< 30%): RTC-RAM kann unzuverlässig sein.
+    // Bei Akku >= 30% (auch mit USB/VBUS) kein NVS-Schreiben → Flash-Schonung.
+    if (battery_voltage < BATTERY_VOLTAGE_30) {
+        ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher vor Deep-Sleep (< 30%%)...");
         write_ulp_pulse_counter_to_ring_buffer();
     } else {
         ESP_LOGI(TAG, "Akku-Spannung OK (>= 30%%) → ulp_pulse_counter bleibt im RTC-RAM (kein Schreiben nötig)");
@@ -553,7 +555,7 @@ bool init_pulse_nvs_minimal() {
 }
 
 // ============================================
-// RTC ulp_pulse_counter: In Ring-Speicher schreiben (bei ESP.restart(), Akku-Low, USB)
+// RTC ulp_pulse_counter: In Ring-Speicher schreiben (bei ESP.restart(), Akku-Low)
 // ============================================
 bool write_ulp_pulse_counter_to_ring_buffer() {
     // WICHTIG: Stelle sicher, dass Pulse-NVS initialisiert ist
@@ -4520,10 +4522,10 @@ extern "C" void app_main(void) {
         ESP_LOGI(TAG, "LP-Core Watchdog Task gestartet");
         
         // 1. Batteriespannung-Test und ggf. in Ring-Speicher schreiben
-        // < 30% ODER USB: Schreibe in Ring-Speicher (RTC-RAM könnte verloren gehen)
-        // >= 30%: Kein Schreiben (RTC-RAM bleibt erhalten)
-        if (battery_voltage < BATTERY_VOLTAGE_30 || IS_USB_POWER(battery_voltage)) {
-            ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher (< 30%% oder USB)...");
+        // < 30%: Schreibe in Ring-Speicher (RTC-RAM könnte verloren gehen; deckt auch reinen USB ab)
+        // >= 30%: Kein Schreiben (RTC-RAM bleibt erhalten; auch bei USB/VBUS)
+        if (battery_voltage < BATTERY_VOLTAGE_30) {
+            ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher (< 30%%)...");
             write_ulp_pulse_counter_to_ring_buffer();
         }
         
