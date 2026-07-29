@@ -4326,7 +4326,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "KSK-1A87-2025"
+		(property "Value" "KSK-1A87-1520"
 			(at 26.67 76.1999 90)
 			(show_name no)
 			(do_not_autoplace no)
