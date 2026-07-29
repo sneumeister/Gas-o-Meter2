@@ -11,7 +11,7 @@ compile_commands.json
 .vscode/ipch
 .cursor
 .claude
-docs/*.md
+docs/*
 
 # Sensible Konfiguration
 data/config.json
