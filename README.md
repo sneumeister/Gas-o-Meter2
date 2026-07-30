@@ -117,6 +117,23 @@ Standard-Environment in [`platformio.ini`](platformio.ini): `PCB_20251022`
 
 **Partitionen** (`partitions.csv`): Factory-App, `pulse_nv` (NVS-Ring), Zigbee-Speicher, LittleFS.
 
+### Web-Flash und Releases
+
+Ohne PlatformIO kann die Firmware über den
+[Gas-O-Meter2 Web-Flasher](https://sneumeister.github.io/Gas-o-Meter2/)
+installiert werden (Chrome/Edge, USB-Datenkabel). Unterstützt werden beide
+PCB-Versionen sowie `TPL_test`.
+
+- **Complete:** Erstinstallation oder ein in den Release Notes als
+  **Breaking** markiertes Update; PCB-Complete setzt persistente Konfiguration
+  und Zähler-/Zigbee-Daten zurück
+- **Firmware:** nur Programmcode
+- **LittleFS:** nur Web-UI und Default-Konfiguration; überschreibt die aktuelle
+  Gerätekonfiguration
+
+Release-Tags `v*` bauen und veröffentlichen diese Dateien automatisch. Die
+Maintainer-Schritte stehen in [RELEASING.md](RELEASING.md).
+
 ## Konfiguration
 
 Zwei Wege:
@@ -149,6 +166,9 @@ gas-o-meter2/
 ├── CAD-housing/            # Gehäuse STEP/Creo/Bilder
 ├── integration_templates/  # Zigbee2MQTT, Node-RED
 ├── pictures/webui/         # Screenshots für README_WEBUI.md
+├── scripts/                # Release-Build und Artefakt-Verifikation
+├── web-flasher/            # GitHub-Pages-Installseite (ohne Binaries)
+├── RELEASING.md            # Maintainer-Anleitung für Releases
 └── platformio.ini          # Build-Environments
 ```
 

@@ -1,6 +1,11 @@
 # Build-Artefakte
 .pio/
 build/
+/dist/
+/pages_site/
+web-flasher/firmware/
+__pycache__/
+*.py[cod]
 *.backup
 compile_commands.json
 

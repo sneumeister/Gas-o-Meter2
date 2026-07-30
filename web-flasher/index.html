@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Gas-O-Meter2 Web-Flasher</title>
+    <meta
+      name="description"
+      content="Gas-O-Meter2 Firmware per Web Serial auf einen ESP32-C6 flashen."
+    />
+    <link rel="stylesheet" href="./style.css" />
+    <script
+      type="module"
+      src="https://unpkg.com/esp-web-tools@10.2.1/dist/web/install-button.js?module"
+    ></script>
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <p class="eyebrow">ESP32-C6 · Web Serial</p>
+        <h1>Gas-O-Meter2 Web-Flasher</h1>
+        <p>
+          Firmware ohne PlatformIO direkt im Browser installieren. Unterstützt
+          werden Chrome und Edge über HTTPS.
+        </p>
+      </header>
+
+      <section class="card" aria-labelledby="selection-heading">
+        <h2 id="selection-heading">1. Ziel auswählen</h2>
+
+        <label for="environment">Gerät / Firmware-Variante</label>
+        <select id="environment">
+          <option value="">Bitte auswählen …</option>
+          <option value="PCB_20251022">
+            PCB_20251022 – USB-Erkennung über Akku-ADC
+          </option>
+          <option value="PCB_20260523">
+            PCB_20260523 – USB-Erkennung über VBUS / GPIO18
+          </option>
+          <option value="TPL_test">
+            TPL_test – TPL5110-/Reed-Hardwaretest
+          </option>
+        </select>
+
+        <label for="install-type">Installationsart</label>
+        <select id="install-type" disabled>
+          <option value="">Bitte auswählen …</option>
+          <option value="complete">Complete – Erstinstallation / Breaking</option>
+          <option value="firmware">Firmware – nur Programmcode</option>
+          <option value="littlefs">LittleFS – nur Web-UI und Default-Config</option>
+        </select>
+
+        <div id="selection-help" class="notice" aria-live="polite">
+          Wähle zuerst die passende Platinen- bzw. Testversion.
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="flash-heading">
+        <h2 id="flash-heading">2. Verbinden und flashen</h2>
+        <p>
+          XIAO ESP32-C6 per USB verbinden, Auswahl kontrollieren und
+          anschließend „Connect“ anklicken.
+        </p>
+
+        <div id="tpl-warning" class="warning" hidden>
+          <strong>Achtung:</strong> TPL_test ersetzt die Produktiv-Firmware und
+          dient nur dem TPL5110-/Reed-Test. Danach wieder die passende
+          PCB-Firmware flashen.
+        </div>
+
+        <div id="install-wrapper" class="install-wrapper" hidden>
+          <esp-web-install-button id="install-button">
+            <span slot="unsupported">
+              Web Serial wird von diesem Browser nicht unterstützt. Bitte
+              Chrome oder Edge verwenden.
+            </span>
+            <span slot="not-allowed">
+              Web Serial ist hier nicht verfügbar. Die Seite muss über HTTPS
+              geöffnet werden.
+            </span>
+          </esp-web-install-button>
+        </div>
+      </section>
+
+      <section class="card compact" aria-labelledby="help-heading">
+        <h2 id="help-heading">Welche Installationsart?</h2>
+        <dl>
+          <dt>Complete</dt>
+          <dd>
+            Für die Erstinstallation und wenn die Release Notes
+            <strong>Breaking</strong> wegen Partitionstabelle oder Bootloader
+            nennen. PCB-Complete überschreibt gespeicherte Konfiguration,
+            NVS-Ringspeicher und Zigbee-Daten; TPL_test Complete endet nach der
+            Test-Firmware.
+          </dd>
+          <dt>Firmware</dt>
+          <dd>
+            Aktualisiert nur den Programmcode. Zähler-Ringspeicher und
+            LittleFS bleiben erhalten.
+          </dd>
+          <dt>LittleFS</dt>
+          <dd>
+            Aktualisiert nur Web-UI und mitgelieferte Default-Konfiguration.
+            Die aktuelle Gerätekonfiguration wird überschrieben. Nicht für
+            TPL_test verfügbar.
+          </dd>
+        </dl>
+      </section>
+
+      <footer>
+        <a href="https://github.com/sneumeister/Gas-o-Meter2">
+          Projekt und Release Notes auf GitHub
+        </a>
+      </footer>
+    </main>
+  </body>
+</html>
