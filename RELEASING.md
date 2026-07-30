@@ -50,6 +50,8 @@ sollen:
 Complete setzt persistente Konfiguration, NVS-Zähler-Ringspeicher und
 Zigbee-Daten zurück. LittleFS überschreibt die aktuelle Gerätekonfiguration.
 Diese Auswirkungen müssen in den Release Notes ausdrücklich stehen.
+Bei Firmware-/LittleFS-Web-Updates muss zusätzlich darauf hingewiesen werden,
+im ESP-Web-Tools-Dialog niemals **„Erase device“** zu wählen.
 
 Der Workflow ergänzt automatisch generierte Release Notes. Bei einem
 Breaking-Release muss deshalb mindestens ein relevanter PR-/Commit-Titel mit

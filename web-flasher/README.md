@@ -23,6 +23,12 @@ Bei einem normalen Update können Firmware und LittleFS einzeln und
 nacheinander geflasht werden. `pulse_nv` und die Zigbee-Partitionen bleiben
 dabei unverändert.
 
+**Bei Firmware- und LittleFS-Teilupdates im ESP-Web-Tools-Dialog niemals
+„Erase device“ wählen.** Ohne Improv Serial kann ESP Web Tools sonst den
+gesamten Flash löschen, obwohl das Manifest nur ein Teil-Image enthält. Die
+Teil-Manifeste erzwingen deshalb eine Rückfrage und deaktivieren die
+Improv-Wartezeit.
+
 Ein PCB-Complete-Image enthält mit `0xFF` gefüllte Zwischenbereiche und setzt
 dadurch NVS, Zähler-Ringspeicher, Zigbee-Daten und LittleFS zurück.
 TPL_test Complete endet dagegen nach der Test-Firmware und enthält kein

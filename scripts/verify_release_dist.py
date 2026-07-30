@@ -23,16 +23,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def expected_files(env_name: str, version: str) -> dict[str, tuple[str, int]]:
+def expected_files(
+    env_name: str, version: str
+) -> dict[str, tuple[str, int, bool]]:
     prefix = f"gas-o-meter2_{env_name}_v{version}"
     manifests = {
-        "manifest-complete.json": (f"{prefix}_complete.bin", 0),
-        "manifest-firmware.json": (f"{prefix}_firmware.bin", 0x10000),
+        "manifest-complete.json": (f"{prefix}_complete.bin", 0, False),
+        "manifest-firmware.json": (
+            f"{prefix}_firmware.bin",
+            0x10000,
+            True,
+        ),
     }
     if env_name in PCB_ENVS:
         manifests["manifest-littlefs.json"] = (
             f"{prefix}_littlefs.bin",
             0x285000,
+            True,
         )
     return manifests
 
@@ -42,6 +49,7 @@ def validate_manifest(
     manifest_name: str,
     expected_binary: str,
     expected_offset: int,
+    prompt_before_erase: bool,
     version: str,
 ) -> list[str]:
     errors: list[str] = []
@@ -82,6 +90,16 @@ def validate_manifest(
             f"erwartet {expected_offset}"
         )
 
+    if prompt_before_erase:
+        if manifest.get("new_install_prompt_erase") is not True:
+            errors.append(
+                f"{manifest_path}: new_install_prompt_erase muss true sein"
+            )
+        if manifest.get("new_install_improv_wait_time") != 0:
+            errors.append(
+                f"{manifest_path}: new_install_improv_wait_time muss 0 sein"
+            )
+
     binary_path = env_dir / expected_binary
     if not binary_path.is_file() or binary_path.stat().st_size == 0:
         errors.append(f"Binärdatei fehlt oder ist leer: {binary_path}")
@@ -97,7 +115,9 @@ def validate_environment(version_dir: Path, env_name: str, version: str) -> list
 
     manifests = expected_files(env_name, version)
     expected_names = set(manifests)
-    expected_names.update(binary_name for binary_name, _ in manifests.values())
+    expected_names.update(
+        binary_name for binary_name, _, _ in manifests.values()
+    )
     actual_names = {path.name for path in env_dir.iterdir() if path.is_file()}
 
     missing = expected_names - actual_names
@@ -107,13 +127,18 @@ def validate_environment(version_dir: Path, env_name: str, version: str) -> list
     if unexpected:
         errors.append(f"{env_dir}: unerwartet: {', '.join(sorted(unexpected))}")
 
-    for manifest_name, (binary_name, offset) in manifests.items():
+    for manifest_name, (
+        binary_name,
+        offset,
+        prompt_before_erase,
+    ) in manifests.items():
         errors.extend(
             validate_manifest(
                 env_dir,
                 manifest_name,
                 binary_name,
                 offset,
+                prompt_before_erase,
                 version,
             )
         )

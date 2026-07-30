@@ -12,7 +12,7 @@
     <link rel="stylesheet" href="./style.css" />
     <script
       type="module"
-      src="https://unpkg.com/esp-web-tools@10.2.1/dist/web/install-button.js?module"
+      src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"
     ></script>
     <script type="module" src="./app.js"></script>
   </head>
@@ -68,6 +68,13 @@
           <strong>Achtung:</strong> TPL_test ersetzt die Produktiv-Firmware und
           dient nur dem TPL5110-/Reed-Test. Danach wieder die passende
           PCB-Firmware flashen.
+        </div>
+
+        <div id="partial-warning" class="danger" hidden>
+          <strong>Wichtig:</strong> Im ESP-Web-Tools-Dialog bei Firmware- oder
+          LittleFS-Updates niemals <em>„Erase device“</em> wählen. Ein
+          vollständiges Löschen würde Bootloader, Partitionstabelle und
+          persistente Daten entfernen.
         </div>
 
         <div id="install-wrapper" class="install-wrapper" hidden>

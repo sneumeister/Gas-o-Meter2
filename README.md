@@ -131,6 +131,9 @@ PCB-Versionen sowie `TPL_test`.
 - **LittleFS:** nur Web-UI und Default-Konfiguration; überschreibt die aktuelle
   Gerätekonfiguration
 
+Bei Firmware-/LittleFS-Teilupdates im ESP-Web-Tools-Dialog niemals
+**„Erase device“** wählen.
+
 Release-Tags `v*` bauen und veröffentlichen diese Dateien automatisch. Die
 Maintainer-Schritte stehen in [RELEASING.md](RELEASING.md).
 

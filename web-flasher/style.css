@@ -88,7 +88,8 @@ a:focus-visible {
 }
 
 .notice,
-.warning {
+.warning,
+.danger {
   margin-top: 1.2rem;
   padding: 0.9rem 1rem;
   border-radius: 0.45rem;
@@ -102,6 +103,11 @@ a:focus-visible {
 .warning {
   border-left: 0.25rem solid #d97706;
   background: #fff4dc;
+}
+
+.danger {
+  border-left: 0.25rem solid #dc2626;
+  background: #fee2e2;
 }
 
 .install-wrapper {
@@ -160,5 +166,9 @@ a {
 
   .warning {
     background: #4b3514;
+  }
+
+  .danger {
+    background: #522020;
   }
 }

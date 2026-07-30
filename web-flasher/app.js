@@ -4,6 +4,7 @@ const installWrapper = document.querySelector("#install-wrapper");
 const installButton = document.querySelector("#install-button");
 const selectionHelp = document.querySelector("#selection-help");
 const tplWarning = document.querySelector("#tpl-warning");
+const partialWarning = document.querySelector("#partial-warning");
 const littlefsOption = installTypeSelect.querySelector(
   'option[value="littlefs"]',
 );
@@ -31,6 +32,7 @@ function updateSelection() {
     installTypeSelect.value = "";
     installType = "";
   }
+  partialWarning.hidden = !["firmware", "littlefs"].includes(installType);
 
   if (!environment) {
     selectionHelp.textContent =

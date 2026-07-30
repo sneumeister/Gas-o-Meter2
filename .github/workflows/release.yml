@@ -129,6 +129,8 @@ jobs:
           Bei **Breaking**-Hinweisen (Partitionstabelle/Bootloader) Complete
           flashen. Ansonsten Firmware und/oder LittleFS einzeln aktualisieren.
           LittleFS überschreibt die aktuelle Gerätekonfiguration.
+          Bei Teilupdates im ESP-Web-Tools-Dialog niemals **„Erase device“**
+          wählen.
 
           Die LittleFS-Images enthalten nur die öffentliche Example-Konfiguration
           und keine privaten WLAN- oder MQTT-Zugangsdaten.
@@ -136,7 +138,7 @@ jobs:
 
       - name: Create or update GitHub release
         if: env.FULL_RELEASE == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: Gas-O-Meter2 ${{ env.RELEASE_TAG }}
@@ -169,11 +171,11 @@ jobs:
 
       - name: Configure GitHub Pages
         if: github.event_name == 'push'
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6.0.0
 
       - name: Upload GitHub Pages artifact
         if: github.event_name == 'push'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: pages_site
 
@@ -218,4 +220,4 @@ jobs:
       - name: Deploy GitHub Pages
         if: steps.latest.outputs.deploy == 'true'
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5.0.0

@@ -157,6 +157,7 @@ def write_manifest(
     version: str,
     binary_name: str,
     offset: int,
+    prompt_before_erase: bool = False,
 ) -> None:
     manifest = {
         "name": product_name,
@@ -168,6 +169,12 @@ def write_manifest(
             }
         ],
     }
+    if prompt_before_erase:
+        # Firmware-only and LittleFS-only installs must never silently trigger
+        # a full-chip erase when no Improv Serial device is detected.
+        manifest["new_install_prompt_erase"] = True
+        manifest["new_install_improv_wait_time"] = 0
+
     target = output_dir / manifest_name
     target.write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
@@ -247,6 +254,7 @@ def build_pcb_release(
         version,
         firmware_name,
         APP_OFFSET,
+        prompt_before_erase=True,
     )
     write_manifest(
         output_dir,
@@ -255,6 +263,7 @@ def build_pcb_release(
         version,
         littlefs_name,
         LITTLEFS_OFFSET,
+        prompt_before_erase=True,
     )
 
 
@@ -291,6 +300,7 @@ def build_tpl_release(version: str, version_dir: Path, esptool: str) -> None:
         version,
         firmware_name,
         APP_OFFSET,
+        prompt_before_erase=True,
     )
 
 
