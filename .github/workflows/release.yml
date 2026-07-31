@@ -1,0 +1,223 @@
+name: Release firmware and web flasher
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag erneut bauen (z. B. v1.0.1). Leer = Smoke-Build."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.tag || 'smoke' }}
+  # Nicht auf true setzen: Ein neuer Lauf darf keinen aktiven Pages-Deploy
+  # abbrechen, bevor dessen Ersatzartefakte bereitstehen.
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build release artifacts
+    runs-on: ubuntu-latest
+    outputs:
+      full_release: ${{ steps.metadata.outputs.full_release }}
+      version: ${{ steps.metadata.outputs.version }}
+    env:
+      FULL_RELEASE: ${{ (github.event_name == 'push' || inputs.tag != '') && 'true' || 'false' }}
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+
+    steps:
+      # Tooling is checked out separately so tags that already contain all
+      # required environments can be rebuilt with newer release scripts.
+      - name: Check out release tooling
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+
+      - name: Check out firmware source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref || (inputs.tag != '' && inputs.tag || github.sha) }}
+          path: source
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: python -m pip install --upgrade platformio esptool
+
+      - name: Resolve release metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${FULL_RELEASE}" == "true" ]]; then
+            if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+              echo "Invalid release tag: ${RELEASE_TAG}" >&2
+              exit 1
+            fi
+            VERSION="${RELEASE_TAG#v}"
+          else
+            VERSION="$(python - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path("source/include/version.h").read_text(encoding="utf-8")
+          match = re.search(r'PROJECT_VERSION\[\]\s*=\s*"([^"]+)"', text)
+          if not match:
+              raise SystemExit("PROJECT_VERSION not found")
+          print(match.group(1))
+          PY
+          )"
+          fi
+
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          REPO="${GITHUB_REPOSITORY##*/}"
+          PAGES_URL="https://${OWNER}.github.io/${REPO}/"
+
+          {
+            echo "VERSION=${VERSION}"
+            echo "PAGES_URL=${PAGES_URL}"
+            echo "version=${VERSION}"
+            echo "full_release=${FULL_RELEASE}"
+          } | tee -a "${GITHUB_ENV}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build release binaries
+        run: >-
+          python tooling/scripts/make_release_bins.py
+          --project-root source
+          --out "${{ github.workspace }}/dist"
+          --version "${VERSION}"
+
+      - name: Verify release binaries
+        run: >-
+          python tooling/scripts/verify_release_dist.py
+          --out "${{ github.workspace }}/dist"
+          --version "${VERSION}"
+
+      - name: Create release notes
+        if: env.FULL_RELEASE == 'true'
+        shell: bash
+        run: |
+          cat > release-body.md <<EOF
+          ## Firmware v${VERSION}
+
+          | Datei | Bedeutung |
+          | ----- | --------- |
+          | \`*_complete.bin\` | Erstinstallation oder Breaking-Release; ab Offset \`0x0\` flashen |
+          | \`*_firmware.bin\` | Nur Programmcode; ab Offset \`0x10000\` |
+          | \`*_littlefs.bin\` | Nur Web-UI und Default-Konfiguration; ab Offset \`0x285000\` |
+          | \`*_TPL_test_*\` | TPL5110-/Reed-Hardwaretest; keine Produktiv-Firmware |
+
+          **Web-Installation:** ${PAGES_URL}
+
+          Complete enthält bei PCB-Versionen Bootloader, Partitionstabelle,
+          Firmware und LittleFS. Es setzt persistente Konfiguration,
+          NVS-Ringspeicher und Zigbee-Daten zurück. TPL_test Complete enthält
+          kein LittleFS.
+
+          Bei **Breaking**-Hinweisen (Partitionstabelle/Bootloader) Complete
+          flashen. Ansonsten Firmware und/oder LittleFS einzeln aktualisieren.
+          LittleFS überschreibt die aktuelle Gerätekonfiguration.
+          Bei Teilupdates im ESP-Web-Tools-Dialog niemals **„Erase device“**
+          wählen.
+
+          Die LittleFS-Images enthalten nur die öffentliche Example-Konfiguration
+          und keine privaten WLAN- oder MQTT-Zugangsdaten.
+          EOF
+
+      - name: Create or update GitHub release
+        if: env.FULL_RELEASE == 'true'
+        uses: softprops/action-gh-release@v3.0.2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Gas-O-Meter2 ${{ env.RELEASE_TAG }}
+          body_path: release-body.md
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          preserve_order: true
+          files: |
+            dist/${{ env.VERSION }}/**/*.bin
+
+      - name: Stage GitHub Pages
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf pages_site
+          mkdir -p pages_site/firmware/latest
+          cp -a tooling/web-flasher/. pages_site/
+
+          # Copy environment directories directly below latest/. Do not copy
+          # dist/${VERSION} itself, which would create latest/${VERSION}/...
+          for env_dir in "dist/${VERSION}"/*; do
+            cp -a "${env_dir}" pages_site/firmware/latest/
+          done
+
+          test -f pages_site/firmware/latest/PCB_20251022/manifest-complete.json
+          test -f pages_site/firmware/latest/PCB_20260523/manifest-complete.json
+          test -f pages_site/firmware/latest/TPL_test/manifest-complete.json
+
+      - name: Configure GitHub Pages
+        if: github.event_name == 'push'
+        uses: actions/configure-pages@v6.0.0
+
+      - name: Upload GitHub Pages artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: pages_site
+
+      - name: Upload smoke-build artifact
+        if: env.FULL_RELEASE != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gas-o-meter2-dist-${{ env.VERSION }}
+          path: dist/
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy web flasher
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: web-flasher-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whether this is the newest release tag
+        id: latest
+        shell: bash
+        run: |
+          set -euo pipefail
+          LATEST_TAG="$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
+          if [[ "${GITHUB_REF_NAME}" == "${LATEST_TAG}" ]]; then
+            echo "deploy=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "Skip Pages: ${GITHUB_REF_NAME} is older than ${LATEST_TAG}"
+            echo "deploy=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Deploy GitHub Pages
+        if: steps.latest.outputs.deploy == 'true'
+        id: deployment
+        uses: actions/deploy-pages@v5.0.0
