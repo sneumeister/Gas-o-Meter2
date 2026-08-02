@@ -1526,7 +1526,7 @@ static void zigbee_maybe_send_device_annce_on_rejoin(const char* reason) {
     ESP_LOGI(TAG, "        → DEVICE_ANNCE uebersprungen (Rejoin, Stack-ZDO-Announce)");
 }
 
-/** Parent aus Neighbor Table: LQI/RSSI in Diagnostics-Cluster + coord_addr (ohne Lock). */
+/** Parent aus Neighbor Table: LQI/RSSI in Diagnostics-Cluster (ohne Lock). */
 static bool zigbee_refresh_parent_link_diagnostics_impl(bool verbose_log) {
     if (!esp_zb_bdb_dev_joined()) {
         return false;
@@ -1544,7 +1544,10 @@ static bool zigbee_refresh_parent_link_diagnostics_impl(bool verbose_log) {
         for (int i = 0; i < 8; i++) {
             parent_ieee_addr |= ((uint64_t)nbr_info.ieee_addr[i]) << (i * 8);
         }
-        zigbee_rtc.coord_addr = parent_short_addr;
+        // Der Parent kann ein Router mit beliebiger Kurzadresse sein. Die
+        // Coordinator-Adresse bleibt in einem zentralen Zigbee-Netz stets
+        // 0x0000 und darf nicht durch die Parent-Adresse ersetzt werden.
+        zigbee_rtc.coord_addr = ZIGBEE_DEFAULT_COORD_ADDR;
         if (!verbose_log) {
             ESP_LOGD(TAG, "        → Diagnostics Parent LQI=%u RSSI=%d",
                      (unsigned)diag_last_lqi, (int)diag_last_rssi);
@@ -2687,10 +2690,10 @@ bool transfer_zigbee_sync_time(void) {
     ESP_LOGI(TAG, "transfer_zigbee_sync_time: Hole Zeit vom Coordinator...");
     zigbee_time_sync_response_received = false;
     
-    // Coordinator Adresse: Normalerweise 0x0000, aber verwende zigbee_rtc.coord_addr falls gesetzt
-    uint16_t coordinator_addr = (zigbee_rtc.coord_addr != ZIGBEE_DEFAULT_COORD_ADDR) 
-                                ? zigbee_rtc.coord_addr 
-                                : 0x0000;  // Standard Coordinator Adresse
+    // In einem zentralen Zigbee-Netz hat der Coordinator immer die
+    // Kurzadresse 0x0000. Insbesondere darf hier nicht die Parent-Router-
+    // Adresse aus der Neighbor Table verwendet werden.
+    const uint16_t coordinator_addr = ZIGBEE_DEFAULT_COORD_ADDR;
     
     // Read Attribute Command für Time Cluster, Time Attribut (0x0000)
     esp_zb_zcl_read_attr_cmd_t read_cmd = {0};
@@ -2725,9 +2728,7 @@ bool transfer_zigbee_sync_time(void) {
              seq_num, coordinator_addr);
     ESP_LOGI(TAG, "  → Warte auf Antwort vom Coordinator...");
     
-    // HINWEIS: Die Response-Verarbeitung muss noch implementiert werden
-    // Die Response wird über einen Callback oder Signal-Handler verarbeitet
-    // TODO: Response-Handler für Read Attribute Response implementieren
+    // Die Response wird asynchron über read_attr_resp_callback verarbeitet.
     
     return true;
 }
