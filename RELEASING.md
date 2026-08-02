@@ -35,6 +35,12 @@ identisch sein:
 - Git-Tag: `v1.0.2`
 - gewünschter GitHub Release: `v1.0.2`
 
+`dependencies.lock` ist absichtlich versioniert. Dadurch verwenden lokale
+Builds und GitHub Actions dieselben ESP-IDF-Komponenten. Abhängigkeiten nur
+bewusst aktualisieren, anschließend Lockfile und Firmwaregröße gemeinsam
+prüfen. Auch die PIOArduino-Plattform ist in `platformio.ini` auf eine feste
+Release-Version gepinnt.
+
 ## 2. Update-Art bestimmen
 
 In PR-/Commit-Titeln und der Beschreibung klar angeben, was Nutzer flashen
@@ -75,6 +81,11 @@ Lokal ist dieselbe Prüfung möglich:
 python scripts/make_release_bins.py --version 1.0.2
 python scripts/verify_release_dist.py --version 1.0.2
 ```
+
+Die Release-Skripte brechen ab, wenn ein Firmware-Image nicht in die
+`factory`-Partition aus `partitions.csv` passt. Bei weniger als 8 KiB Reserve
+geben sie eine deutliche Warnung aus, lassen den Release aber zu. Die harte
+Größenprüfung darf für einen Release nicht umgangen werden.
 
 ## 4. Tag erstellen und Release auslösen
 
