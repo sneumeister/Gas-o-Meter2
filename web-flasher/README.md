@@ -56,3 +56,9 @@ ohne Tag ist nur ein Smoke-Build und verändert weder Release noch Pages.
 
 Die vollständige Maintainer-Anleitung steht in
 [`RELEASING.md`](../RELEASING.md).
+
+## Lizenzhinweise
+
+Der Web-Flasher zeigt über `legal.html` die Projektlizenz, den zugehörigen
+Quellcode und Drittanbieterhinweise an. Der Release-Workflow kopiert dafür
+`LICENSE`, `NOTICE` und `THIRD_PARTY_NOTICES.md` in den Pages-Build.
