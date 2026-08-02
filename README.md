@@ -181,3 +181,8 @@ Gas-O-Meter2 ist unter der [Apache License 2.0](./LICENSE) veröffentlicht.
 Copyright- und Attributionshinweise stehen in [`NOTICE`](./NOTICE). Die
 Lizenzen der verwendeten Bibliotheken dokumentiert
 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
+
+Die permissive Apache-2.0-Lizenz wurde gewählt, um mögliche Konflikte zwischen
+starkem Copyleft und den zusätzlichen Binärbedingungen der separat
+lizenzierten ZBOSS-Komponente zu vermeiden. ZBOSS und alle weiteren
+Drittanbieter-Komponenten behalten ihre jeweils eigene Lizenz.
