@@ -181,7 +181,7 @@ jobs:
 
       - name: Upload smoke-build artifact
         if: env.FULL_RELEASE != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: gas-o-meter2-dist-${{ env.VERSION }}
           path: dist/
