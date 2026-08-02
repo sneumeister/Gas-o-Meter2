@@ -8,7 +8,7 @@
 // ==========================================================
 
 const char PROJECT_NAME[] = "Gas-O-Meter2";
-const char PROJECT_VERSION[] = "1.0.2";
+const char PROJECT_VERSION[] = "1.0.3";
 const char SKETCHCOMPILE[] =
 {
    // YYYY- year
