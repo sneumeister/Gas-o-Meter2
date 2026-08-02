@@ -358,7 +358,7 @@ def main() -> int:
                     run([pio, "run", "-e", env_name, "-t", "buildfs"])
                 run([pio, "run", "-e", TPL_ENV])
 
-        esptool = resolve_command("esptool.py", "esptool")
+        esptool = resolve_command("esptool", "esptool.py")
         for env_name in PCB_ENVS:
             build_pcb_release(env_name, version, version_dir, esptool)
         build_tpl_release(version, version_dir, esptool)
