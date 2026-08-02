@@ -4,9 +4,9 @@ Gas-O-Meter2 firmware and the web flasher use third-party software. The
 versions below correspond to `dependencies.lock`, `platformio.ini` and the
 pinned web-flasher dependency for release 1.0.3.
 
-The Gas-O-Meter2 project itself is licensed under GNU GPL v3.0; see
-[`LICENSE`](./LICENSE). The notices below do not change the licenses of the
-respective third-party works.
+The Gas-O-Meter2 project itself is licensed under the Apache License 2.0; see
+[`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE). The notices below do not
+change the licenses of the respective third-party works.
 
 ## Apache License 2.0
 
@@ -21,8 +21,7 @@ The following works are provided under the Apache License 2.0:
 - ESP Web Tools 10.4.0, ESPHome contributors:
   <https://github.com/esphome/esp-web-tools/tree/10.4.0>
 
-A copy of the Apache License 2.0 is provided in
-[`LICENSES/Apache-2.0.txt`](./LICENSES/Apache-2.0.txt).
+A copy of the Apache License 2.0 is provided in [`LICENSE`](./LICENSE).
 
 ESP-IDF contains components and submodules with their own license and
 attribution notices. Their corresponding source and component-specific notices

@@ -61,4 +61,4 @@ Die vollständige Maintainer-Anleitung steht in
 
 Der Web-Flasher zeigt über `legal.html` die Projektlizenz, den zugehörigen
 Quellcode und Drittanbieterhinweise an. Der Release-Workflow kopiert dafür
-`LICENSE`, `THIRD_PARTY_NOTICES.md` und `LICENSES/` in den Pages-Build.
+`LICENSE`, `NOTICE` und `THIRD_PARTY_NOTICES.md` in den Pages-Build.

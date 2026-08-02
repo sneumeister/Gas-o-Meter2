@@ -1,7 +1,7 @@
 # Gas-O-Meter2
 
 [![Release](https://img.shields.io/github/v/release/sneumeister/Gas-o-Meter2)](https://github.com/sneumeister/Gas-o-Meter2/releases)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](./LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)
 [![ESP32-C6](https://img.shields.io/badge/MCU-ESP32--C6-red)](https://www.espressif.com/en/products/socs/esp32-c6)
 [![pioarduino](https://img.shields.io/badge/platform-pioarduino-orange)](https://github.com/pioarduino/platform-espressif32)
 [![ESP-IDF](https://img.shields.io/badge/framework-ESP--IDF%205.5-green)](https://docs.espressif.com/projects/esp-idf/)
@@ -177,7 +177,7 @@ gas-o-meter2/
 
 ## Lizenz
 
-Gas-O-Meter2 ist unter der
-[GNU General Public License v3.0](./LICENSE) veröffentlicht. Hinweise und
-Lizenztexte der verwendeten Bibliotheken stehen in
+Gas-O-Meter2 ist unter der [Apache License 2.0](./LICENSE) veröffentlicht.
+Copyright- und Attributionshinweise stehen in [`NOTICE`](./NOTICE). Die
+Lizenzen der verwendeten Bibliotheken dokumentiert
 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).

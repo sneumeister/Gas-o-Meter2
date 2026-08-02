@@ -42,9 +42,9 @@ prüfen. Auch die PIOArduino-Plattform ist in `platformio.ini` auf eine feste
 Release-Version gepinnt.
 
 Wenn Abhängigkeiten aktualisiert oder ergänzt werden, auch
-`THIRD_PARTY_NOTICES.md` und gegebenenfalls die Texte unter `LICENSES/`
-aktualisieren. Der Workflow veröffentlicht diese Hinweise zusammen mit den
-Binärdateien und kopiert sie in den Web-Flasher.
+`THIRD_PARTY_NOTICES.md` und gegebenenfalls `NOTICE` aktualisieren. Der
+Workflow veröffentlicht diese Hinweise zusammen mit den Binärdateien und
+kopiert sie in den Web-Flasher.
 
 ## 2. Update-Art bestimmen
 
