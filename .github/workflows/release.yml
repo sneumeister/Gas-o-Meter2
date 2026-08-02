@@ -37,20 +37,20 @@ jobs:
       # Tooling is checked out separately so tags that already contain all
       # required environments can be rebuilt with newer release scripts.
       - name: Check out release tooling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
           path: tooling
 
       - name: Check out firmware source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event_name == 'push' && github.ref || (inputs.tag != '' && inputs.tag || github.sha) }}
           path: source
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -181,7 +181,7 @@ jobs:
 
       - name: Upload smoke-build artifact
         if: env.FULL_RELEASE != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: gas-o-meter2-dist-${{ env.VERSION }}
           path: dist/
@@ -200,7 +200,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Check out tags
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
