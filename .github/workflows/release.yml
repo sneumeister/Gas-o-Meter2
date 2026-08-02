@@ -138,6 +138,15 @@ jobs:
 
           Die LittleFS-Images enthalten nur die öffentliche Example-Konfiguration
           und keine privaten WLAN- oder MQTT-Zugangsdaten.
+
+          **Quellcode dieses Releases:**
+          https://github.com/${GITHUB_REPOSITORY}/tree/${RELEASE_TAG}
+
+          **Lizenz und Drittanbieterhinweise:**
+          https://github.com/${GITHUB_REPOSITORY}/blob/${RELEASE_TAG}/THIRD_PARTY_NOTICES.md
+
+          Gas-O-Meter2 ist freie Software unter GPLv3 und wird ohne
+          Gewährleistung bereitgestellt, soweit gesetzlich zulässig.
           EOF
 
       - name: Create or update GitHub release
@@ -153,6 +162,9 @@ jobs:
           preserve_order: true
           files: |
             dist/${{ env.VERSION }}/**/*.bin
+            tooling/LICENSE
+            tooling/THIRD_PARTY_NOTICES.md
+            tooling/LICENSES/*.txt
 
       - name: Stage GitHub Pages
         if: github.event_name == 'push'
@@ -162,6 +174,9 @@ jobs:
           rm -rf pages_site
           mkdir -p pages_site/firmware/latest
           cp -a tooling/web-flasher/. pages_site/
+          cp tooling/LICENSE pages_site/GPL-3.0.txt
+          cp tooling/THIRD_PARTY_NOTICES.md pages_site/
+          cp -a tooling/LICENSES pages_site/
 
           # Copy environment directories directly below latest/. Do not copy
           # dist/${VERSION} itself, which would create latest/${VERSION}/...
@@ -172,6 +187,10 @@ jobs:
           test -f pages_site/firmware/latest/PCB_20251022/manifest-complete.json
           test -f pages_site/firmware/latest/PCB_20260523/manifest-complete.json
           test -f pages_site/firmware/latest/TPL_test/manifest-complete.json
+          test -f pages_site/legal.html
+          test -f pages_site/GPL-3.0.txt
+          test -f pages_site/THIRD_PARTY_NOTICES.md
+          test -f pages_site/LICENSES/Apache-2.0.txt
 
       - name: Configure GitHub Pages
         if: github.event_name == 'push'

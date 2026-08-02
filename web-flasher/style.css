@@ -128,7 +128,13 @@ dd {
 
 footer {
   padding: 1rem 0;
+  color: #536176;
+  font-size: 0.875rem;
   text-align: center;
+}
+
+footer p {
+  margin-bottom: 0.35rem;
 }
 
 a {
@@ -154,6 +160,10 @@ a {
   .eyebrow,
   a {
     color: #8fb2ff;
+  }
+
+  footer {
+    color: #aebbd0;
   }
 
   select {

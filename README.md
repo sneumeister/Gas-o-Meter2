@@ -177,4 +177,7 @@ gas-o-meter2/
 
 ## Lizenz
 
-[GNU General Public License v3.0](./LICENSE)
+Gas-O-Meter2 ist unter der
+[GNU General Public License v3.0](./LICENSE) veröffentlicht. Hinweise und
+Lizenztexte der verwendeten Bibliotheken stehen in
+[`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).

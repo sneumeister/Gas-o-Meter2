@@ -41,6 +41,11 @@ bewusst aktualisieren, anschließend Lockfile und Firmwaregröße gemeinsam
 prüfen. Auch die PIOArduino-Plattform ist in `platformio.ini` auf eine feste
 Release-Version gepinnt.
 
+Wenn Abhängigkeiten aktualisiert oder ergänzt werden, auch
+`THIRD_PARTY_NOTICES.md` und gegebenenfalls die Texte unter `LICENSES/`
+aktualisieren. Der Workflow veröffentlicht diese Hinweise zusammen mit den
+Binärdateien und kopiert sie in den Web-Flasher.
+
 ## 2. Update-Art bestimmen
 
 In PR-/Commit-Titeln und der Beschreibung klar angeben, was Nutzer flashen
