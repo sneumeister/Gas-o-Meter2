@@ -23,7 +23,6 @@ data/config.json
 
 # Automatisch generierte Dateien
 managed_components/
-dependencies.lock
 sdkconfig
 sdkconfig.*.old
 

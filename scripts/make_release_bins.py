@@ -14,6 +14,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Sequence
 
+from release_layout import LOW_FREE_WARNING_BYTES, validate_firmware_image
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BUILD_ROOT = PROJECT_ROOT / ".pio" / "build"
@@ -150,6 +152,26 @@ def find_common_artifacts(env_name: str) -> tuple[Path, Path, Path]:
     return bootloader, partitions, firmware
 
 
+def require_firmware_fit(firmware: Path) -> None:
+    fit = validate_firmware_image(
+        firmware,
+        PROJECT_ROOT / "partitions.csv",
+    )
+    message = (
+        f"{firmware.name}: {fit.image_size} Bytes, "
+        f"{fit.free_bytes} Bytes Reserve"
+    )
+    if fit.free_bytes < LOW_FREE_WARNING_BYTES:
+        print(
+            f"WARNUNG: {message}; weniger als "
+            f"{LOW_FREE_WARNING_BYTES} Bytes frei",
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        print(f"Firmwaregröße OK: {message}", flush=True)
+
+
 def write_manifest(
     output_dir: Path,
     manifest_name: str,
@@ -217,6 +239,7 @@ def build_pcb_release(
 ) -> None:
     build_dir = BUILD_ROOT / env_name
     bootloader, partitions, firmware = find_common_artifacts(env_name)
+    require_firmware_fit(firmware)
     littlefs = require_artifact(build_dir, ("littlefs.bin",))
 
     output_dir = version_dir / env_name
@@ -269,6 +292,7 @@ def build_pcb_release(
 
 def build_tpl_release(version: str, version_dir: Path, esptool: str) -> None:
     bootloader, partitions, firmware = find_common_artifacts(TPL_ENV)
+    require_firmware_fit(firmware)
     output_dir = version_dir / TPL_ENV
     output_dir.mkdir(parents=True, exist_ok=True)
     prefix = f"gas-o-meter2_{TPL_ENV}_v{version}"

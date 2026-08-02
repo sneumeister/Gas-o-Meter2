@@ -9,6 +9,12 @@ import re
 import sys
 from pathlib import Path
 
+from release_layout import (
+    LOW_FREE_WARNING_BYTES,
+    ReleaseLayoutError,
+    validate_firmware_image,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PCB_ENVS = ("PCB_20251022", "PCB_20260523")
@@ -20,6 +26,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="Version without leading v")
     parser.add_argument("--out", default="dist", help="Release output directory")
+    parser.add_argument(
+        "--project-root",
+        help="Project source directory containing partitions.csv",
+    )
     return parser.parse_args()
 
 
@@ -107,7 +117,12 @@ def validate_manifest(
     return errors
 
 
-def validate_environment(version_dir: Path, env_name: str, version: str) -> list[str]:
+def validate_environment(
+    version_dir: Path,
+    env_name: str,
+    version: str,
+    partitions_csv: Path,
+) -> list[str]:
     errors: list[str] = []
     env_dir = version_dir / env_name
     if not env_dir.is_dir():
@@ -126,6 +141,19 @@ def validate_environment(version_dir: Path, env_name: str, version: str) -> list
         errors.append(f"{env_dir}: fehlend: {', '.join(sorted(missing))}")
     if unexpected:
         errors.append(f"{env_dir}: unerwartet: {', '.join(sorted(unexpected))}")
+
+    firmware_name = manifests["manifest-firmware.json"][0]
+    try:
+        fit = validate_firmware_image(env_dir / firmware_name, partitions_csv)
+        if fit.free_bytes < LOW_FREE_WARNING_BYTES:
+            print(
+                f"WARNUNG: {env_dir / firmware_name} hat nur "
+                f"{fit.free_bytes} Bytes Reserve; weniger als "
+                f"{LOW_FREE_WARNING_BYTES} Bytes frei",
+                file=sys.stderr,
+            )
+    except ReleaseLayoutError as exc:
+        errors.append(f"{env_dir}: {exc}")
 
     for manifest_name, (
         binary_name,
@@ -156,10 +184,23 @@ def main() -> int:
     if not output_root.is_absolute():
         output_root = PROJECT_ROOT / output_root
     version_dir = output_root / version
+    project_root = (
+        Path(args.project_root).resolve()
+        if args.project_root
+        else PROJECT_ROOT
+    )
+    partitions_csv = project_root / "partitions.csv"
 
     errors: list[str] = []
     for env_name in (*PCB_ENVS, TPL_ENV):
-        errors.extend(validate_environment(version_dir, env_name, version))
+        errors.extend(
+            validate_environment(
+                version_dir,
+                env_name,
+                version,
+                partitions_csv,
+            )
+        )
 
     forbidden = {"bootloader.bin", "partition-table.bin", "partitions.bin"}
     if version_dir.exists():

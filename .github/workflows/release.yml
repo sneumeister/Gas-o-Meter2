@@ -55,7 +55,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install build tools
-        run: python -m pip install --upgrade platformio esptool
+        run: >-
+          python -m pip install --upgrade
+          platformio==6.1.18
+          esptool==5.1.0
 
       - name: Resolve release metadata
         id: metadata
@@ -102,6 +105,7 @@ jobs:
       - name: Verify release binaries
         run: >-
           python tooling/scripts/verify_release_dist.py
+          --project-root source
           --out "${{ github.workspace }}/dist"
           --version "${VERSION}"
 
