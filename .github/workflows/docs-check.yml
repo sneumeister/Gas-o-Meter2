@@ -1,0 +1,27 @@
+name: Documentation checks
+
+on:
+  pull_request:
+    paths:
+      - "**/*.md"
+      - "scripts/check_doc_translations.py"
+      - ".github/workflows/docs-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  translation-blobs:
+    name: Check translation source blobs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verify English documentation hashes
+        run: python scripts/check_doc_translations.py

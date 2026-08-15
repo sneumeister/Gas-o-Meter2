@@ -1,5 +1,7 @@
 # Node-RED BLE Integration – Gas-O-Meter2
 
+[Switch to English](README_EN.md)
+
 Node-RED Flow Templates für die BLE-Anbindung des Gas-O-Meter2: Empfang der Messdaten (Zählerstand, Batterie, Firmware) und Rückkanal zum Gerät für den Datum/Zeit-Sync per GATT-Write (0x2A2B).
 
 [![Node-RED Flow](nodered_thumb.png)](nodered.png)

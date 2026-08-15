@@ -1,24 +1,27 @@
-# Gas-O-Meter2 — Platinenversion 20251022
+<!-- translation-source: README.md -->
+<!-- translation-source-blob: b1dbfb546270c4195deabed7e4e19cfb0552897c -->
 
-[Switch to English](README_EN.md)
+# Gas-O-Meter2 — Board Version 20251022
 
-KiCAD-Projekt und Stückliste (BOM) der ersten Platinenrevision.
+[Wechsel zu Deutsch](README.md)
 
-- Akku-Spannung am **GPIO0** (Pin1/A0/D0) mittels **1:1-Spannungsteiler** (R2/R3)
-- **USB-Spannungsversorgung** durch **ADC-Heuristik** (Batteriespannung unter 2,0 V; kein VBUS-Pin)
+KiCAD project and bill of materials (BOM) for the first board revision.
 
-## Schaltplan
+- Battery voltage on **GPIO0** (Pin1/A0/D0) via **1:1 voltage divider** (R2/R3)
+- **USB supply** via **ADC heuristic** (battery voltage below 2.0 V; no VBUS pin)
+
+## Schematic
 
 [ESP32C6_gasometer (PDF)](ESP32C6_gasometer.pdf)
 
 ![Schaltplan ESP32C6_gasometer](ESP32C6_gasometer_Schaltplan.png)
 
-## Stückliste (BOM)
+## Bill of materials (BOM)
 
-Quelle: `BOM_ESP32C6_gasometer.xlsx`
+Source: `BOM_ESP32C6_gasometer.xlsx`
 
-| Reference | Qty | Beschreibung | Value | Datasheet |
-| --------- | --- | ------------ | ----- | --------- |
+| Reference | Qty | Description | Value | Datasheet |
+| --------- | --- | ----------- | ----- | --------- |
 | J1 | 1 | Generic connector, single row, 01x02 // Reed | JST-XH 1.25 2pin socket | |
 | J2 | 1 | Generic connector, single row, 01x02 // Reed | JST-XH 1.25 2pin plug | |
 | R1 | 1 | Resistor_SMD1206 | 8,2k | |
@@ -30,10 +33,10 @@ Quelle: `BOM_ESP32C6_gasometer.xlsx`
 | J3 | 1 | Generic connector, single row, 01x02 // Batterie | JST-PH 2.00 2pin socket | |
 | | 1 | Li-Polymer Battery 52x34x5,0mm | LiPo 1000mAh 523450 | |
 
-## 3D-Ansicht
+## 3D view
 
 ![ESP32C6 PCB 3D](ESP32C6_PCB_3D.png)
 
-## KiCAD-Export
+## KiCAD export
 
-Aktueller Stand: [ESP32C6_gasometer-2026-02-07_185848](ESP32C6_gasometer-2026-02-07_185848/)
+Current snapshot: [ESP32C6_gasometer-2026-02-07_185848](ESP32C6_gasometer-2026-02-07_185848/)

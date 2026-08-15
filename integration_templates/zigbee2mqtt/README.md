@@ -1,5 +1,7 @@
 # Zigbee2MQTT – External Converter
 
+[Switch to English](README_EN.md)
+
 External Converter für Gas-O-Meter2 in Zigbee2MQTT (`external_converters/gas-o-meter2.js`).
 
 Die Firmware nutzt **Simple Metering** (0x0702) für Gas und **Power Configuration** (0x0001) für die Batterie. Der Converter mappt die ZCL-Attribute auf die MQTT/HA-Exposes (siehe unten).

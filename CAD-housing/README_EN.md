@@ -1,28 +1,31 @@
-# Gehäuse Dateien zum 3D Druck #
+<!-- translation-source: README.md -->
+<!-- translation-source-blob: 15a1c2b6c1e6d2231b8d28c124cf88ab9be56a50 -->
 
-[Switch to English](README_EN.md)
+# Housing Files for 3D Printing
 
-## CAD Dateien ##
+[Wechsel zu Deutsch](README.md)
 
-CAD-dateien für PTC Creo Parametrics v11.x :  [Creo_parametrics/](./Creo_parametrics/)
+## CAD files
 
-## STEP Dateien ###
+CAD files for PTC Creo Parametrics v11.x: [Creo_parametrics/](./Creo_parametrics/)
 
-- Gehäuse: [gasmeter-case01.stp](./gasmeter-case01.stp)
-- Akkudeckel: [battcover.stp](./battcover.stp)
+## STEP files
 
-## Bilder ##
+- Housing: [gasmeter-case01.stp](./gasmeter-case01.stp)
+- Battery cover: [battcover.stp](./battcover.stp)
 
-Platz für das PCB und den Reed-Schalter:
+## Images
+
+Space for the PCB and reed switch:
 
 ![gasmeter-case01.png](./pictures/gasmeter-case01.png "gasmeter-case01.png")
-(Am "Dom" muss noch ein M6 Gewinde geschnitten werden; die Platine mit Innensechskantschraube M2x10 befestigen)
+(Cut an M6 thread in the “dome”; mount the board with an M2x10 hex socket screw)
 
-Paltz für den Akku 523450 - 3,7V / 1000mAh (5,2 x 34 x 50mm):
+Space for battery 523450 — 3.7 V / 1000 mAh (5.2 × 34 × 50 mm):
 
 ![battcover.png](./pictures/battcover.png "battcover.png")
 
-Gedruckt bei JLCPCB
+Printed at JLCPCB
 
 | Item | Data |
 | ---- | ---- |
@@ -31,7 +34,7 @@ Gedruckt bei JLCPCB
 | Colors | Black |
 | Surface Finish | 01 Sanding / General Sanding |
 
-Bilder
+Images
 ![house00.png](./pictures/house00.png "house00.png")
 ![house01.png](./pictures/house01.png "house01.png")
 ![house06.png](./pictures/house06.png "house06.png")

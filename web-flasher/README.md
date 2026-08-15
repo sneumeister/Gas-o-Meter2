@@ -1,5 +1,7 @@
 # Gas-O-Meter2 Web-Flasher
 
+[Switch to English](README_EN.md)
+
 Die GitHub-Pages-Seite installiert Gas-O-Meter2-Firmware mit
 [ESP Web Tools](https://esphome.github.io/esp-web-tools/) per Web Serial.
 PlatformIO ist für Endnutzer nicht erforderlich.
