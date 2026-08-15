@@ -1,5 +1,5 @@
 <!-- translation-source: README.md -->
-<!-- translation-source-blob: 21949b41bdc24ee2fd009df740fac1ffc5aad69e -->
+<!-- translation-source-blob: 2676b610df5a94d19a52f675fa72957313422852 -->
 
 [↓ Wechsel zu Deutsch](README.md)
 
@@ -23,7 +23,7 @@ Custom carrier PCB with a **TPL5110** microtimer for clean reed pulses, optional
 - **TPL5110** — debounces the reed contact and provides a defined counter pulse (~3.5 s); compensates for the missing Schmitt-trigger input on the ESP32-C6
 - **LP-Core (ULP)** — pulse counting on the low-power core (`ulp/ulp_main.c`); the HP core runs only on wake-up for data transfer
 - **Deep sleep** — configurable wake-up interval via `wakeup_minutes` in the config
-- **NVS ring buffer** — counter is saved only on **low battery** (< 30% / < 3.57 V); at ≥ 30% the value stays in RTC RAM (also with USB/VBUS) to reduce flash wear
+- **NVS ring buffer** — counter is saved only on **low battery** (< 30% / < 3.57V); at ≥ 30% the value stays in RTC RAM (also with USB/VBUS) to reduce flash wear
 - **Web interface** — status and configuration via LittleFS (`data/index.html`, `config.html`); not automatically available during **timer wake-up** operation
 - **Button A** — web UI and WiFi only after wake-up via **Button A** on the board; pure timer wake-up transfers data and returns to deep sleep immediately
 - **Button B** — currently **unused**
@@ -56,18 +56,18 @@ LiPo voltage curve (as stored in firmware; percentage is linearly interpolated b
 
 | Voltage | % | Without USB (battery) | With USB |
 | ------- | - | --------------------- | -------- |
-| ≥ 4.02 V | 100% | Normal: transfer, counter in RTC RAM | Normal: transfer, counter in RTC RAM (no NVS) |
-| 3.92 V | 80% | as above | as above |
-| 3.72 V | 50% | as above | as above |
-| 3.57 V | 30% | From here or below: low-battery report; counter to NVS | as left |
-| 3.42 V | 20% | Below: immediate deep sleep, **no** transfer; timer continues until 3.15 V | Protection **off** → transfer as normal |
-| ≤ 3.15 V | 0% | Timer off; only **Button A** wakes | Timer stays on |
+| ≥ 4.02V | 100% | Normal: transfer, counter in RTC RAM | Normal: transfer, counter in RTC RAM (no NVS) |
+| 3.92V | 80% | as above | as above |
+| 3.72V | 50% | as above | as above |
+| 3.57V | 30% | From here or below: low-battery report; counter to NVS | as left |
+| 3.42V | 20% | Below: immediate deep sleep, **no** transfer; timer continues until 3.15V | Protection **off** → transfer as normal |
+| ≤ 3.15V | 0% | Timer off; only **Button A** wakes | Timer stays on |
 
 **Returning to normal operation** (timer was off): USB alone does **not** wake the device. Connect USB and press **Button A** (starts web UI; wait for web timeout) — then deep sleep with timer.
 
 **USB detection by board:**
 
-- **20251022:** USB = measured voltage < 2.0 V. Between 2.0 V and 3.42 V counts as *no* USB → battery protection applies.
+- **20251022:** USB = measured voltage < 2.0V. Between 2.0V and 3.42V counts as *no* USB → battery protection applies.
 - **20260523:** USB via VBUS pin, independent of battery voltage (firmware environment `PCB_20260523`).
 
 The LP core keeps counting pulses while the chip is powered. **Button B** has no function.
