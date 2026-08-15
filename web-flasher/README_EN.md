@@ -1,9 +1,9 @@
 <!-- translation-source: README.md -->
-<!-- translation-source-blob: 63e9f091575163aae0fedb2da878e210d35877fc -->
+<!-- translation-source-blob: 3b7ef77fead411f3706302645cfc0e87d0d694fb -->
+
+[↓ Wechsel zu Deutsch](README.md)
 
 # Gas-O-Meter2 Web Flasher
-
-[Wechsel zu Deutsch](README.md)
 
 The GitHub Pages site installs Gas-O-Meter2 firmware with
 [ESP Web Tools](https://esphome.github.io/esp-web-tools/) via Web Serial.

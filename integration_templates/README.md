@@ -1,6 +1,6 @@
-# Integration Templates und Konfigurationen
+[↓ Switch to English](README_EN.md)
 
-[Switch to English](README_EN.md)
+# Integration Templates und Konfigurationen
 
 Templates für die Anbindung des Gas-O-Meter2 an externe Systeme.
 

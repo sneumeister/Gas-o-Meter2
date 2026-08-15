@@ -1,6 +1,6 @@
-# Patch: node-red-contrib-generic-ble – Crash „indexOf is not a function“
+[↓ Switch to English](PATCH-generic-ble-onMiss_EN.md)
 
-[Switch to English](PATCH-generic-ble-onMiss_EN.md)
+# Patch: node-red-contrib-generic-ble – Crash „indexOf is not a function“
 
 **Betroffene Datei (Pfad je nach Installation):**
 

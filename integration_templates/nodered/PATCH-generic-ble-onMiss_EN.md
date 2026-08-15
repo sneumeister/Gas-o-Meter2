@@ -1,9 +1,9 @@
 <!-- translation-source: PATCH-generic-ble-onMiss.md -->
-<!-- translation-source-blob: 6a42b4be4eb7ddbb766a286eb145d72f9d4a0e14 -->
+<!-- translation-source-blob: f680643b86e20f970b8cb460b91f7f3d2b0110fe -->
+
+[↓ Wechsel zu Deutsch](PATCH-generic-ble-onMiss.md)
 
 # Patch: node-red-contrib-generic-ble – Crash “indexOf is not a function”
-
-[Wechsel zu Deutsch](PATCH-generic-ble-onMiss.md)
 
 **Affected file (path depends on installation):**
 

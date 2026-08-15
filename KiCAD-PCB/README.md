@@ -1,6 +1,6 @@
-# Gas-O-Meter2 — KiCAD-Platinen
+[↓ Switch to English](README_EN.md)
 
-[Switch to English](README_EN.md)
+# Gas-O-Meter2 — KiCAD-Platinen
 
 KiCAD-Schaltpläne, Layouts und Stücklisten für die Hardware des Gas-O-Meter2 (ESP32-C6).
 
