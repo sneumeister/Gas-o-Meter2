@@ -1,5 +1,7 @@
 # Gas-O-Meter2
 
+[Switch to English](README_EN.md)
+
 [![Release](https://img.shields.io/github/v/release/sneumeister/Gas-o-Meter2)](https://github.com/sneumeister/Gas-o-Meter2/releases)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)
 [![ESP32-C6](https://img.shields.io/badge/MCU-ESP32--C6-red)](https://www.espressif.com/en/products/socs/esp32-c6)

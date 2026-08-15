@@ -1,5 +1,7 @@
 # Web-UI (Gas-O-Meter2)
 
+[Switch to English](README_WEBUI_EN.md)
+
 Das Gerät stellt nach einem **manuellen Wake-up über Taster A** ein kleines HTTP-Frontend bereit (LittleFS unter `data/`). Im **Timer-Dauerbetrieb** (Akku) wacht es nur kurz auf, überträgt ggf. Daten und geht wieder in Deep-Sleep — **ohne** Web-Server.
 
 ## Zugang und URLs

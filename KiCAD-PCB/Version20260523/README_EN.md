@@ -1,25 +1,28 @@
-# Gas-O-Meter2 — Platinenversion 20260523
+<!-- translation-source: README.md -->
+<!-- translation-source-blob: c4f0c7b82e336444112bd2da744cf1ec554e356b -->
 
-[Switch to English](README_EN.md)
+# Gas-O-Meter2 — Board Version 20260523
 
-KiCAD-Projekt und Stückliste (BOM) der zweiten Platinenrevision.
+[Wechsel zu Deutsch](README.md)
 
-- Akku-Spannung am **GPIO0** (Pin1/A0/D0) mittels **1:1-Spannungsteiler** (R2/R3)
-- **USB-Spannungsversorgung:** **VBUS** an **GPIO18** (Pin11/D10) über **asymmetrischen Spannungsteiler** (R3/R4)
-- **Freiraum** um die Onboard-Antenne zur Verbesserung der Sende-/Empfangseigenschaften
+KiCAD project and bill of materials (BOM) for the second board revision.
 
-## Schaltplan
+- Battery voltage on **GPIO0** (Pin1/A0/D0) via **1:1 voltage divider** (R2/R3)
+- **USB supply:** **VBUS** on **GPIO18** (Pin11/D10) via **asymmetric voltage divider** (R3/R4)
+- **Clearance** around the onboard antenna for better RF performance
+
+## Schematic
 
 [Schaltplan ESP32C6_gasometer (PDF)](Schaltplan_ESP32C6_gasometer.pdf)
 
 ![Schaltplan ESP32C6_gasometer](ESP32C6_gasometer_Schaltplan.png)
 
-## Stückliste (BOM)
+## Bill of materials (BOM)
 
-Quelle: `BOM_ESP32C6_gasometer.xlsx`
+Source: `BOM_ESP32C6_gasometer.xlsx`
 
-| Reference | Qty | Beschreibung | Value | Datasheet |
-| --------- | --- | ------------ | ----- | --------- |
+| Reference | Qty | Description | Value | Datasheet |
+| --------- | --- | ----------- | ----- | --------- |
 | J1 | 1 | Generic connector, single row, 01x02 // Reed | JST-XH 1.25 2pin socket | |
 | J2 | 1 | Generic connector, single row, 01x02 // Batterie | JST-XH 1.25 2pin plug | |
 | R1 | 1 | Resistor_SMD1206 | 8,2k | |
@@ -33,10 +36,10 @@ Quelle: `BOM_ESP32C6_gasometer.xlsx`
 | J3 | | JST-Conn. / Battery Connector | JST-PH 2.00 2pin socket | |
 | | 1 | Li-Polymer Battery 52x34x5,0mm | LiPo 1000mAh 523450 | |
 
-## 3D-Ansicht
+## 3D view
 
 ![ESP32C6 PCB 3D](ESP32C6_PCB_3D.png)
 
-## KiCAD-Export
+## KiCAD export
 
-Aktueller Stand: [ESP32C6_gasometer-2026-07-11_162129](ESP32C6_gasometer-2026-07-11_162129/)
+Current snapshot: [ESP32C6_gasometer-2026-07-11_162129](ESP32C6_gasometer-2026-07-11_162129/)
