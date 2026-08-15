@@ -1,5 +1,5 @@
 <!-- translation-source: README.md -->
-<!-- translation-source-blob: 3b7ef77fead411f3706302645cfc0e87d0d694fb -->
+<!-- translation-source-blob: bb0e9c8bf89f92d02ba627e2eaa7192a994a913a -->
 
 [↓ Wechsel zu Deutsch](README.md)
 
@@ -8,6 +8,9 @@
 The GitHub Pages site installs Gas-O-Meter2 firmware with
 [ESP Web Tools](https://esphome.github.io/esp-web-tools/) via Web Serial.
 PlatformIO is not required for end users.
+
+The install page itself is bilingual: German at `/`, English at
+[`index_en.html`](./index_en.html).
 
 ## Browser and connection
 

@@ -6,6 +6,9 @@ Die GitHub-Pages-Seite installiert Gas-O-Meter2-Firmware mit
 [ESP Web Tools](https://esphome.github.io/esp-web-tools/) per Web Serial.
 PlatformIO ist für Endnutzer nicht erforderlich.
 
+Die Installationsseite selbst ist zweisprachig: deutsch unter `/`, englisch unter
+[`index_en.html`](./index_en.html).
+
 ## Browser und Verbindung
 
 - Firefox ab Version 151 auf Desktop-Systemen, Chrome oder Edge verwenden.
