@@ -6,7 +6,10 @@ PlatformIO ist für Endnutzer nicht erforderlich.
 
 ## Browser und Verbindung
 
-- Chrome oder Edge verwenden.
+- Firefox ab Version 151 auf Desktop-Systemen, Chrome oder Edge verwenden.
+- Firefox fordert beim ersten Verbinden zur Installation einer automatisch
+  erzeugten, seitenspezifischen Berechtigungs-Erweiterung auf. Eine zusätzliche
+  Drittanbieter-Erweiterung oder native Hilfsanwendung ist nicht erforderlich.
 - Die Seite muss über HTTPS aufgerufen werden.
 - XIAO ESP32-C6 über ein USB-Datenkabel verbinden.
 - Falls kein Port erscheint: Kabel, USB-Treiber und Boot-Modus prüfen.

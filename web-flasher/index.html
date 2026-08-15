@@ -23,8 +23,14 @@
         <h1>Gas-O-Meter2 Web-Flasher</h1>
         <p>
           Firmware ohne PlatformIO direkt im Browser installieren. Unterstützt
-          werden Chrome und Edge über HTTPS.
+          werden Firefox ab Version 151 (Desktop), Chrome und Edge über HTTPS.
         </p>
+        <div class="notice">
+          <strong>Firefox:</strong> Beim ersten Verbinden fordert Firefox zur
+          Installation einer automatisch erzeugten, seitenspezifischen
+          Berechtigungs-Erweiterung auf. Danach den seriellen Port auswählen.
+          Eine zusätzliche Drittanbieter-Erweiterung ist nicht erforderlich.
+        </div>
       </header>
 
       <section class="card" aria-labelledby="selection-heading">
@@ -81,7 +87,7 @@
           <esp-web-install-button id="install-button">
             <span slot="unsupported">
               Web Serial wird von diesem Browser nicht unterstützt. Bitte
-              Chrome oder Edge verwenden.
+              Firefox ab Version 151 (Desktop), Chrome oder Edge verwenden.
             </span>
             <span slot="not-allowed">
               Web Serial ist hier nicht verfügbar. Die Seite muss über HTTPS
