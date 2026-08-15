@@ -121,7 +121,10 @@ Standard-Environment in [`platformio.ini`](platformio.ini): `PCB_20251022`
 
 Ohne PlatformIO kann die Firmware über den
 [Gas-O-Meter2 Web-Flasher](https://sneumeister.github.io/Gas-o-Meter2/)
-installiert werden (Chrome/Edge, USB-Datenkabel). Unterstützt werden beide
+installiert werden (Firefox ab Version 151 auf Desktop-Systemen, Chrome oder
+Edge; USB-Datenkabel erforderlich). Firefox installiert beim ersten Zugriff
+eine seitenspezifische Berechtigungs-Erweiterung; eine zusätzliche
+Drittanbieter-Erweiterung ist nicht notwendig. Unterstützt werden beide
 PCB-Versionen sowie `TPL_test`.
 
 - **Complete:** Erstinstallation oder ein in den Release Notes als
