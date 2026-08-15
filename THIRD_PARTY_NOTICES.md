@@ -1,8 +1,8 @@
 # Third-party notices
 
 Gas-O-Meter2 firmware and the web flasher use third-party software. The
-versions below correspond to `dependencies.lock`, `platformio.ini` and the
-pinned web-flasher dependency for release 1.0.3.
+versions below correspond to the pinned entries in `dependencies.lock`,
+`platformio.ini` and the web-flasher dependency for the current source tree.
 
 The Gas-O-Meter2 project itself is licensed under the Apache License 2.0; see
 [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE). The notices below do not
