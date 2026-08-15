@@ -20,7 +20,7 @@ Custom Carrier-PCB mit **TPL5110**-Mikrotimer für saubere Reed-Impulse, optiona
 - **TPL5110** — entprellt den Reed-Kontakt und liefert ein definiertes Zähler-Signal (~3,5 s); kompensiert den fehlenden Schmitt-Trigger-Eingang am ESP32-C6
 - **LP-Core (ULP)** — Pulszählung im Low-Power-Core (`ulp/ulp_main.c`); der HP-Core ist nur bei Wake-up zur Datenübertragung aktiv
 - **Deep-Sleep** — konfigurierbares Wake-up-Intervall über `wakeup_minutes` in der Config
-- **NVS Ring-Buffer** — Sicherung des Zählerstands nur bei **Low-Akku** (< 30 % / < 3,57 V); bei Akku ≥ 30 % bleibt der Stand im RTC-RAM (auch bei USB/VBUS), um den Flash zu schonen
+- **NVS Ring-Buffer** — Sicherung des Zählerstands nur bei **Low-Akku** (< 30% / < 3,57V); bei Akku ≥ 30% bleibt der Stand im RTC-RAM (auch bei USB/VBUS), um den Flash zu schonen
 - **Web-Interface** — Status und Konfiguration über LittleFS (`data/index.html`, `config.html`); im **Dauerbetrieb** (Timer-Wake-up) nicht automatisch erreichbar
 - **Taster A** — Web-UI und WiFi nur nach Wake-up über **Taster A** auf der Platine; bei reinem Timer-Wake-up erfolgt nur die Datenübertragung, danach sofort Deep-Sleep
 - **Taster B** — derzeit **ohne Funktion**
@@ -53,18 +53,18 @@ LiPo-Spannungsreihe (wie in der Firmware hinterlegt; %-Anzeige wird dazwischen l
 
 | Spannung | % | Ohne USB (Akku) | Mit USB |
 | -------- | - | --------------- | ------- |
-| ≥ 4,02 V | 100 % | Normal: Transfer, Zähler im RTC-RAM | Normal: Transfer, Zähler im RTC-RAM (kein NVS) |
-| 3,92 V | 80 % | wie oben | wie oben |
-| 3,72 V | 50 % | wie oben | wie oben |
-| 3,57 V | 30 % | Ab hier bzw. darunter: Low-Battery-Meldung; Zähler in NVS | wie links |
-| 3,42 V | 20 % | Darunter: Sofort Deep-Sleep, **kein** Transfer; Timer weiter bis 3,15 V | Schutz greift **nicht** → Transfer wie normal |
-| ≤ 3,15 V | 0 % | Timer aus; nur **Taster A** weckt | Timer bleibt an |
+| ≥ 4,02V | 100% | Normal: Transfer, Zähler im RTC-RAM | Normal: Transfer, Zähler im RTC-RAM (kein NVS) |
+| 3,92V | 80% | wie oben | wie oben |
+| 3,72V | 50% | wie oben | wie oben |
+| 3,57V | 30% | Ab hier bzw. darunter: Low-Battery-Meldung; Zähler in NVS | wie links |
+| 3,42V | 20% | Darunter: Sofort Deep-Sleep, **kein** Transfer; Timer weiter bis 3,15V | Schutz greift **nicht** → Transfer wie normal |
+| ≤ 3,15V | 0% | Timer aus; nur **Taster A** weckt | Timer bleibt an |
 
 **Zurück in den Normalbetrieb** (Timer war aus): USB allein weckt **nicht**. USB anstecken und **Taster A** drücken (startet Web-UI; warten bis Web-Timeout) — danach Deep-Sleep mit Timer.
 
 **USB-Erkennung nach Platine:**
 
-- **20251022:** USB = gemessene Spannung < 2,0 V. Zwischen 2,0 V und 3,42 V gilt *kein* USB → Akkuschutz greift.
+- **20251022:** USB = gemessene Spannung < 2,0V. Zwischen 2,0V und 3,42V gilt *kein* USB → Akkuschutz greift.
 - **20260523:** USB über VBUS-Pin, unabhängig von der Akkuspannung (Firmware-Environment `PCB_20260523`).
 
 Der LP-Core zählt Impulse weiter, solange der Chip versorgt ist. **Taster B** hat aktuell keine Funktion.
