@@ -1,9 +1,9 @@
 <!-- translation-source: README.md -->
-<!-- translation-source-blob: c4f0c7b82e336444112bd2da744cf1ec554e356b -->
+<!-- translation-source-blob: 1e98588e5097565264d01e840f41fa663bcdbc6c -->
+
+[↓ Wechsel zu Deutsch](README.md)
 
 # Gas-O-Meter2 — Board Version 20260523
-
-[Wechsel zu Deutsch](README.md)
 
 KiCAD project and bill of materials (BOM) for the second board revision.
 

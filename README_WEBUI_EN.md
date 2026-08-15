@@ -1,9 +1,9 @@
 <!-- translation-source: README_WEBUI.md -->
-<!-- translation-source-blob: 8d73e32c50d9de1c6fe0f405ec789419438e2e91 -->
+<!-- translation-source-blob: 1854c8557221ee1901f57a44fe5551bafff50b54 -->
+
+[↓ Wechsel zu Deutsch](README_WEBUI.md)
 
 # Web UI (Gas-O-Meter2)
-
-[Wechsel zu Deutsch](README_WEBUI.md)
 
 After a **manual wake-up via Button A**, the device serves a small HTTP frontend (LittleFS under `data/`). In **timer continuous operation** (battery) it wakes briefly, may transfer data, and returns to deep sleep — **without** a web server.
 

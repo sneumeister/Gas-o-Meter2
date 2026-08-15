@@ -1,9 +1,9 @@
 <!-- translation-source: README.md -->
-<!-- translation-source-blob: 6ff5cf987f5acb2f0a5f61edfd4d2af333f69a9b -->
+<!-- translation-source-blob: ecb3cbf2889b34609b8f58106e2a631507cf84a0 -->
+
+[↓ Wechsel zu Deutsch](README.md)
 
 # Node-RED BLE Integration – Gas-O-Meter2
-
-[Wechsel zu Deutsch](README.md)
 
 Node-RED flow templates for BLE connectivity with Gas-O-Meter2: receive measurement data (meter reading, battery, firmware) and a return path to the device for date/time sync via GATT write (0x2A2B).
 

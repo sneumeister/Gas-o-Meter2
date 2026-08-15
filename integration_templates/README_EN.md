@@ -1,9 +1,9 @@
 <!-- translation-source: README.md -->
-<!-- translation-source-blob: 972988974594c753b47dd333572d2766d738ae7a -->
+<!-- translation-source-blob: 7275a348cebe17c5e8549226a54e9b4d4ef2db75 -->
+
+[↓ Wechsel zu Deutsch](README.md)
 
 # Integration Templates and Configurations
-
-[Wechsel zu Deutsch](README.md)
 
 Templates for connecting Gas-O-Meter2 to external systems.
 

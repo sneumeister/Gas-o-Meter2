@@ -1,6 +1,6 @@
-# Gas-O-Meter2 — Platinenversion 20251022
+[↓ Switch to English](README_EN.md)
 
-[Switch to English](README_EN.md)
+# Gas-O-Meter2 — Platinenversion 20251022
 
 KiCAD-Projekt und Stückliste (BOM) der ersten Platinenrevision.
 

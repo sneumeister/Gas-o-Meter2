@@ -1,6 +1,6 @@
-# Gas-O-Meter2
+[↓ Switch to English](README_EN.md)
 
-[Switch to English](README_EN.md)
+# Gas-O-Meter2
 
 [![Release](https://img.shields.io/github/v/release/sneumeister/Gas-o-Meter2)](https://github.com/sneumeister/Gas-o-Meter2/releases)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)

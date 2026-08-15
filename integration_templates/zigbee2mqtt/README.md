@@ -1,6 +1,6 @@
-# Zigbee2MQTT – External Converter
+[↓ Switch to English](README_EN.md)
 
-[Switch to English](README_EN.md)
+# Zigbee2MQTT – External Converter
 
 External Converter für Gas-O-Meter2 in Zigbee2MQTT (`external_converters/gas-o-meter2.js`).
 
