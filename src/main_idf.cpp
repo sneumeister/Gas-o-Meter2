@@ -310,6 +310,12 @@ static bool wake_allows_web_ui(esp_sleep_wakeup_cause_t reason) {
            reason == ESP_SLEEP_WAKEUP_EXT1 || reason == ESP_SLEEP_WAKEUP_UNDEFINED;
 }
 
+/** 1-s-Pause vor erster Log-Ausgabe: Serial-Monitor nach Flash/Reboot oder Taster-Wake. */
+static bool wake_needs_serial_monitor_delay(esp_sleep_wakeup_cause_t reason) {
+    return reason == ESP_SLEEP_WAKEUP_UNDEFINED || reason == ESP_SLEEP_WAKEUP_GPIO ||
+           reason == ESP_SLEEP_WAKEUP_EXT0 || reason == ESP_SLEEP_WAKEUP_EXT1;
+}
+
 /** true = jetzt transfer_data() ausführen (Timer-Wake-up, Intervall aus Config). */
 static bool timer_wake_should_transfer(bool config_available) {
     if (!config_available || config_rtc.transfer_minutes == 255) {
@@ -4371,9 +4377,12 @@ extern "C" void app_main(void) {
     esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
     // WiFi-Debug-Nachrichten reduzieren (muss ganz am Anfang stehen)
     SET_WIFI_LOG_LEVEL();
-    
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    
+
+    const esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+    if (wake_needs_serial_monitor_delay(wakeup_reason)) {
+        vTaskDelay(pdMS_TO_TICKS(1000));  // Serial-Monitor nach Flash/Reboot/Taster
+    }
+
     // Antennenumschaltung initialisieren (interne Antenne als Standard)
     INIT_ANTENNA_SWITCH(ANTENNA_INTERNAL);
 
@@ -4388,9 +4397,8 @@ extern "C" void app_main(void) {
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     io_conf.intr_type = GPIO_INTR_DISABLE;
     gpio_config(&io_conf);
-    
-    // Power-On vs. Wake-up erkennen
-    esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+
+    // Power-On vs. Wake-up erkennen (wakeup_reason bereits oben gelesen)
     isPowerOn = (wakeup_reason == ESP_SLEEP_WAKEUP_UNDEFINED);
     
     // Wake-up Count nur bei Deep-Sleep-Wake-up erhöhen (nicht bei ESP.restart())
