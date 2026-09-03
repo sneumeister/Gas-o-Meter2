@@ -4377,6 +4377,11 @@ extern "C" void app_main(void) {
     esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
     // WiFi-Debug-Nachrichten reduzieren (muss ganz am Anfang stehen)
     SET_WIFI_LOG_LEVEL();
+#ifdef GOM_ZIGBEE_DEBUG_LOG
+    esp_log_level_set("transfer_zigbee", ESP_LOG_DEBUG);
+    esp_log_level_set("transfer", ESP_LOG_DEBUG);
+    ESP_LOGW(TAG, "ZigBee-Debug-Log aktiv (GOM_ZIGBEE_DEBUG_LOG)");
+#endif
 
     const esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
     if (wake_needs_serial_monitor_delay(wakeup_reason)) {
