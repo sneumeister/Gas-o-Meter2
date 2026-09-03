@@ -21,6 +21,7 @@
 #include "esp_sleep.h"
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
+#include "driver/uart.h"
 #include "ulp_lp_core.h"  // LP-Core Management APIs
 #include <time.h>
 #include "nvs.h"
@@ -51,6 +52,18 @@
 
 // Logging-Tag
 static const char *TAG = "gas-o-meter";
+
+/** UART-TX leeren vor Deep-Sleep/Reboot (ersetzt feste 200-ms-Pause). */
+static void console_flush_before_poweroff(void) {
+    fflush(stdout);
+#if CONFIG_ESP_CONSOLE_UART
+    const esp_err_t err = uart_wait_tx_done((uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM,
+                                            pdMS_TO_TICKS(500));
+    if (err != ESP_OK && err != ESP_ERR_TIMEOUT) {
+        ESP_LOGW(TAG, "console_flush_before_poweroff: uart_wait_tx_done: %s", esp_err_to_name(err));
+    }
+#endif
+}
 
 // LP-Core Binary Header (generiert durch ulp_embed_binary in src/CMakeLists.txt)
 // ulp_embed_binary() erstellt automatisch ulp_main.h mit:
@@ -1002,8 +1015,7 @@ void shutdown_resources(bool for_imminent_restart) {
     }
     
     ESP_LOGI(TAG, "Alle Ressourcen freigegeben");
-    fflush(stdout);
-    vTaskDelay(pdMS_TO_TICKS(200));  // Pause, damit Log-Output gesendet wird
+    console_flush_before_poweroff();
 }
 
 // ============================================
@@ -1021,8 +1033,7 @@ void perform_reboot(const char* reason) {
     shutdown_resources(true);
     
     ESP_LOGI(TAG, "Starte Reboot...");
-    fflush(stdout);
-    vTaskDelay(pdMS_TO_TICKS(200));
+    console_flush_before_poweroff();
     esp_restart();
 }
 
@@ -1256,8 +1267,8 @@ void enter_deep_sleep_with_gpio_and_timer_wakeup(bool enable_timer = true) {
             ESP_LOGI(TAG, "  - Timer: DEAKTIVIERT (Akku-Schutz)");
         }
     }
-    fflush(stdout);
-    
+    console_flush_before_poweroff();
+
     esp_deep_sleep_start();
     // Ab hier wird Code nicht mehr ausgeführt
 }
