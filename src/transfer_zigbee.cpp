@@ -156,12 +156,12 @@ bool zigbee_config_load_from_nvs(bool is_power_on) {
         // Deep-Sleep-Wake-up: RTC-RAM ist noch vorhanden → prüfe Gültigkeit
         if (zigbee_rtc.joined || ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
             // RTC-RAM enthält gültige Daten → verwenden
-            ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Deep-Sleep-Wake-up → verwende RTC-RAM (joined: %s, network_addr: 0x%04X)",
+            ESP_LOGD(TAG, "zigbee_config_load_from_nvs: Deep-Sleep-Wake-up → verwende RTC-RAM (joined: %s, network_addr: 0x%04X)",
                      zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr);
             return true;
         } else {
             // RTC-RAM enthält ungültige Daten (z.B. beim ersten Deep-Sleep-Wake-up nach Power-On) → aus NVS laden
-            ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Deep-Sleep-Wake-up, aber RTC-RAM ungültig → lade aus NVS");
+            ESP_LOGD(TAG, "zigbee_config_load_from_nvs: Deep-Sleep-Wake-up, aber RTC-RAM ungültig → lade aus NVS");
             // Weiter mit NVS-Laden (siehe unten)
         }
     }
@@ -182,28 +182,28 @@ bool zigbee_config_load_from_nvs(bool is_power_on) {
     nvs_handle_t nvs_handle;
     esp_err_t err;
     
-    ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Versuche NVS-Namespace '%s' zu öffnen...", ZIGBEE_NVS_NAMESPACE);
+    ESP_LOGD(TAG, "zigbee_config_load_from_nvs: Versuche NVS-Namespace '%s' zu öffnen...", ZIGBEE_NVS_NAMESPACE);
     err = nvs_open(ZIGBEE_NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
-        ESP_LOGI(TAG, "zigbee_config_load_from_nvs: NVS-Namespace '%s' existiert nicht (noch nicht gepaart, err=%s) → RTC-RAM auf Default-Werte gesetzt", 
+        ESP_LOGD(TAG, "zigbee_config_load_from_nvs: NVS-Namespace '%s' existiert nicht (noch nicht gepaart, err=%s) → RTC-RAM auf Default-Werte gesetzt", 
                  ZIGBEE_NVS_NAMESPACE, esp_err_to_name(err));
         // RTC-RAM ist bereits auf Default-Werte gesetzt
         return true;  // Kein Fehler, einfach noch nicht gepaart
     }
-    ESP_LOGI(TAG, "zigbee_config_load_from_nvs: NVS-Namespace '%s' erfolgreich geöffnet", ZIGBEE_NVS_NAMESPACE);
+    ESP_LOGD(TAG, "zigbee_config_load_from_nvs: NVS-Namespace '%s' erfolgreich geöffnet", ZIGBEE_NVS_NAMESPACE);
     
     // Lade alle Werte aus NVS
     size_t required_size = sizeof(zigbee_rtc_t);
-    ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Versuche Config-Blob zu laden (Key: '%s', erwartete Size: %zu Bytes)...", 
+    ESP_LOGD(TAG, "zigbee_config_load_from_nvs: Versuche Config-Blob zu laden (Key: '%s', erwartete Size: %zu Bytes)...", 
              ZIGBEE_NVS_KEY_CONFIG, sizeof(zigbee_rtc_t));
     err = nvs_get_blob(nvs_handle, ZIGBEE_NVS_KEY_CONFIG, &zigbee_rtc, &required_size);
     nvs_close(nvs_handle);
     
     if (err == ESP_OK && required_size == sizeof(zigbee_rtc_t)) {
-        ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Config-Blob erfolgreich geladen (Size: %zu Bytes)", required_size);
+        ESP_LOGD(TAG, "zigbee_config_load_from_nvs: Config-Blob erfolgreich geladen (Size: %zu Bytes)", required_size);
         // Validiere geladene Daten
         if (zigbee_rtc.joined && ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
-            ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Config aus NVS geladen (joined: %s, network_addr: 0x%04X, pan_id: 0x%04X, channel: %d, extended_addr=0x%016llX)",
+            ESP_LOGD(TAG, "zigbee_config_load_from_nvs: Config aus NVS geladen (joined: %s, network_addr: 0x%04X, pan_id: 0x%04X, channel: %d, extended_addr=0x%016llX)",
                      zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id, zigbee_rtc.channel,
                      (unsigned long long)zigbee_rtc.extended_addr);
             return true;
@@ -216,10 +216,10 @@ bool zigbee_config_load_from_nvs(bool is_power_on) {
         }
     } else {
         if (err != ESP_OK) {
-            ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Config nicht in NVS gefunden (nvs_get_blob fehlgeschlagen: %s, Size: %zu, erwartet: %zu) → RTC-RAM auf Default-Werte gesetzt",
+            ESP_LOGD(TAG, "zigbee_config_load_from_nvs: Config nicht in NVS gefunden (nvs_get_blob fehlgeschlagen: %s, Size: %zu, erwartet: %zu) → RTC-RAM auf Default-Werte gesetzt",
                      esp_err_to_name(err), required_size, sizeof(zigbee_rtc_t));
         } else {
-            ESP_LOGI(TAG, "zigbee_config_load_from_nvs: Config nicht in NVS gefunden (Size-Mismatch: %zu != %zu) → RTC-RAM auf Default-Werte gesetzt",
+            ESP_LOGD(TAG, "zigbee_config_load_from_nvs: Config nicht in NVS gefunden (Size-Mismatch: %zu != %zu) → RTC-RAM auf Default-Werte gesetzt",
                      required_size, sizeof(zigbee_rtc_t));
         }
         // RTC-RAM ist bereits auf Default-Werte gesetzt
@@ -251,7 +251,7 @@ bool zigbee_config_save_to_nvs(bool* wrote_flash) {
                      ZIGBEE_NVS_NAMESPACE, esp_err_to_name(err));
             return false;
         }
-        ESP_LOGI(TAG, "zigbee_config_save_to_nvs: NVS-Namespace '%s' erfolgreich erstellt", ZIGBEE_NVS_NAMESPACE);
+        ESP_LOGD(TAG, "zigbee_config_save_to_nvs: NVS-Namespace '%s' erfolgreich erstellt", ZIGBEE_NVS_NAMESPACE);
     }
     
     // Wear-Leveling: Prüfe ob sich Daten geändert haben – nur schreiben wenn nötig
@@ -269,7 +269,7 @@ bool zigbee_config_save_to_nvs(bool* wrote_flash) {
     }
     
     // Speichere gesamte Config-Struktur als Blob
-    ESP_LOGI(TAG, "zigbee_config_save_to_nvs: Speichere Config: joined=%s, network_addr=0x%04X, pan_id=0x%04X, channel=%d, extended_addr=0x%016llX",
+    ESP_LOGD(TAG, "zigbee_config_save_to_nvs: Speichere Config: joined=%s, network_addr=0x%04X, pan_id=0x%04X, channel=%d, extended_addr=0x%016llX",
              zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id, zigbee_rtc.channel,
              (unsigned long long)zigbee_rtc.extended_addr);
     err = nvs_set_blob(nvs_handle, ZIGBEE_NVS_KEY_CONFIG, &zigbee_rtc, sizeof(zigbee_rtc_t));
@@ -279,7 +279,7 @@ bool zigbee_config_save_to_nvs(bool* wrote_flash) {
         nvs_close(nvs_handle);
         return false;
     }
-    ESP_LOGI(TAG, "zigbee_config_save_to_nvs: nvs_set_blob erfolgreich (Size: %zu Bytes)", sizeof(zigbee_rtc_t));
+    ESP_LOGD(TAG, "zigbee_config_save_to_nvs: nvs_set_blob erfolgreich (Size: %zu Bytes)", sizeof(zigbee_rtc_t));
     
     // Commit
     err = nvs_commit(nvs_handle);
@@ -288,7 +288,7 @@ bool zigbee_config_save_to_nvs(bool* wrote_flash) {
         nvs_close(nvs_handle);
         return false;
     }
-    ESP_LOGI(TAG, "zigbee_config_save_to_nvs: nvs_commit erfolgreich");
+    ESP_LOGD(TAG, "zigbee_config_save_to_nvs: nvs_commit erfolgreich");
     nvs_close(nvs_handle);
 
     nvs_handle_t verify_handle;
@@ -304,7 +304,7 @@ bool zigbee_config_save_to_nvs(bool* wrote_flash) {
                 verify_data.pan_id == zigbee_rtc.pan_id &&
                 verify_data.channel == zigbee_rtc.channel &&
                 verify_data.extended_addr == zigbee_rtc.extended_addr) {
-                ESP_LOGI(TAG, "zigbee_config_save_to_nvs: Verifikation erfolgreich ✓ (joined=%s, addr=0x%04X, pan_id=0x%04X, channel=%d, extended_addr=0x%016llX)",
+                ESP_LOGD(TAG, "zigbee_config_save_to_nvs: Verifikation erfolgreich ✓ (joined=%s, addr=0x%04X, pan_id=0x%04X, channel=%d, extended_addr=0x%016llX)",
                          verify_data.joined ? "true" : "false", verify_data.network_addr, verify_data.pan_id, verify_data.channel,
                          (unsigned long long)verify_data.extended_addr);
             } else {
@@ -325,8 +325,12 @@ bool zigbee_config_save_to_nvs(bool* wrote_flash) {
         ESP_LOGW(TAG, "zigbee_config_save_to_nvs: Verifikation: NVS-Namespace konnte nicht geöffnet werden: %s", esp_err_to_name(err));
     }
     
-    ESP_LOGI(TAG, "zigbee_config_save_to_nvs: Config in NVS gespeichert (joined: %s, network_addr: 0x%04X, pan_id: 0x%04X, channel: %d)",
+    ESP_LOGD(TAG, "zigbee_config_save_to_nvs: Config in NVS gespeichert (joined: %s, network_addr: 0x%04X, pan_id: 0x%04X, channel: %d)",
              zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id, zigbee_rtc.channel);
+    if (wrote_flash == nullptr || *wrote_flash) {
+        ESP_LOGI(TAG, "ZigBee NVS config saved (addr=0x%04X, pan=0x%04X, ch=%u)",
+                 zigbee_rtc.network_addr, zigbee_rtc.pan_id, (unsigned)zigbee_rtc.channel);
+    }
     return true;
 }
 
@@ -361,16 +365,16 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
     
     switch (sig_type) {
         case ESP_ZB_ZDO_SIGNAL_SKIP_STARTUP:
-            ESP_LOGI(TAG, "ZigBee Signal: SKIP_STARTUP (Stack initialisiert)");
+            ESP_LOGD(TAG, "ZigBee Signal: SKIP_STARTUP (Stack initialisiert)");
             stack_ready_signal_received = true;
             // HINWEIS: Extended Address wird im DEVICE_FIRST_START Handler gelesen
             // (zu diesem Zeitpunkt ist sie möglicherweise noch nicht verfügbar)
             break;
             
         case ESP_ZB_BDB_SIGNAL_DEVICE_FIRST_START: {
-            ESP_LOGI(TAG, "ZigBee Signal: DEVICE_FIRST_START (Status: %s)", esp_err_to_name(err_status));
+            ESP_LOGD(TAG, "ZigBee Signal: DEVICE_FIRST_START (Status: %s)", esp_err_to_name(err_status));
             if (err_status == ESP_OK) {
-                ESP_LOGI(TAG, "        → Device gestartet (Factory-New: %s)", 
+                ESP_LOGD(TAG, "        → Device gestartet (Factory-New: %s)", 
                          esp_zb_bdb_is_factory_new() ? "ja" : "nein");
                 
                 // Extended Address (IEEE Address) jetzt lesen (nach DEVICE_FIRST_START)
@@ -383,7 +387,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 for (int i = 0; i < 8; i++) {
                     zigbee_rtc.extended_addr |= ((uint64_t)ieee_addr[i]) << (i * 8);
                 }
-                ESP_LOGI(TAG, "        → Extended Address (IEEE) gelesen: 0x%016llX", (unsigned long long)zigbee_rtc.extended_addr);
+                ESP_LOGD(TAG, "        → Extended Address (IEEE) gelesen: 0x%016llX", (unsigned long long)zigbee_rtc.extended_addr);
                 
                 esp_zb_zcl_status_t attr_status;
                 
@@ -397,14 +401,14 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 //          Hier aktualisieren wir nur die Werte (falls sich etwas geändert hat)
                 //          Die persistente Variable wird automatisch vom Cluster verwendet
                 //          Der externe Converter (gas-o-meter2.js) liest diese Werte beim Pairing für Skalierung
-                ESP_LOGI(TAG, "        → Aktualisiere Metering Cluster Attribute (Multiplier/Divisor)...");
+                ESP_LOGD(TAG, "        → Aktualisiere Metering Cluster Attribute (Multiplier/Divisor)...");
                 
                 // Direkt die persistente Variable aktualisieren (der Cluster verwendet einen Pointer darauf)
                 metering_multiplier = ZIGBEE_METERING_MULTIPLIER;
                 metering_divisor = ZIGBEE_METERING_DIVISOR;
-                ESP_LOGI(TAG, "        → Multiplier/Divisor aktualisiert: Multiplier=%u, Divisor=%u", 
+                ESP_LOGD(TAG, "        → Multiplier/Divisor aktualisiert: Multiplier=%u, Divisor=%u", 
                          metering_multiplier, metering_divisor);
-                ESP_LOGI(TAG, "        → Externer Converter (gas-o-meter2.js) liest diese Werte beim Pairing für Skalierung");
+                ESP_LOGD(TAG, "        → Externer Converter (gas-o-meter2.js) liest diese Werte beim Pairing für Skalierung");
                 
                 // Optional: Versuche auch esp_zb_zcl_set_attribute_val() (kann fehlschlagen, wenn Attribut read-only ist)
                 // Aber die direkte Variable-Aktualisierung sollte ausreichen
@@ -431,12 +435,12 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
         }
             
         case ESP_ZB_BDB_SIGNAL_DEVICE_REBOOT:
-            ESP_LOGI(TAG, "ZigBee Signal: DEVICE_REBOOT (Status: %s)", esp_err_to_name(err_status));
+            ESP_LOGD(TAG, "ZigBee Signal: DEVICE_REBOOT (Status: %s)", esp_err_to_name(err_status));
             if (err_status == ESP_OK) {
                 // Stack wurde erfolgreich reinitialisiert
                 // Automatischer Rejoin wird intern vom Stack gestartet, wenn gespeicherte Netzwerk-Informationen vorhanden sind
-                ESP_LOGI(TAG, "        → Stack reinitialisiert, automatischer Rejoin wird intern versucht...");
-                ESP_LOGI(TAG, "        → Warte bis zu %d ms auf automatischen Rejoin (konfigurierbar via ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS)", 
+                ESP_LOGD(TAG, "        → Stack reinitialisiert, automatischer Rejoin wird intern versucht...");
+                ESP_LOGD(TAG, "        → Warte bis zu %d ms auf automatischen Rejoin (konfigurierbar via ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS)", 
                          ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS);
                 // Nur waehrend aktiver Pairing-/Rejoin-Schleife in ensure_joined
                 const bool in_rejoin = zigbee_rejoin_in_progress && !rejoin_successful;
@@ -454,20 +458,25 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             
         case ESP_ZB_BDB_SIGNAL_STEERING:
             if (err_status == ESP_OK) {
-                ESP_LOGI(TAG, "ZigBee Signal: STEERING erfolgreich (Join laut SDK abgeschlossen)");
-                ESP_LOGI(TAG, "        → PAN ID: 0x%04X, Channel: %d, Short Address: 0x%04X",
+                if (zigbee_pairing_in_progress || zigbee_rejoin_in_progress) {
+                    ESP_LOGI(TAG, "ZigBee STEERING OK (PAN 0x%04X, ch %d, addr 0x%04X)",
+                             esp_zb_get_pan_id(), esp_zb_get_current_channel(), esp_zb_get_short_address());
+                } else {
+                    ESP_LOGD(TAG, "ZigBee Signal: STEERING erfolgreich (Join laut SDK abgeschlossen)");
+                }
+                ESP_LOGD(TAG, "        → PAN ID: 0x%04X, Channel: %d, Short Address: 0x%04X",
                          esp_zb_get_pan_id(), esp_zb_get_current_channel(), esp_zb_get_short_address());
                 steering_successful = true;  // Flag: ensure_joined wartet ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS
-                ESP_LOGI(TAG, "        → STEERING OK - ensure_joined wartet bis %d ms vor Join-Pruefung",
+                ESP_LOGD(TAG, "        → STEERING OK - ensure_joined wartet bis %d ms vor Join-Pruefung",
                          ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS);
                 
                 // esp_zb_bdb_dev_joined() kann kurz nach STEERING noch false sein
                 if (esp_zb_bdb_dev_joined()) {
                     uint16_t network_addr = esp_zb_get_short_address();
-                    ESP_LOGI(TAG, "        → Device bereits joined (0x%04X) → DEVICE_ANNCE", network_addr);
+                    ESP_LOGD(TAG, "        → Device bereits joined (0x%04X) → DEVICE_ANNCE", network_addr);
                     zigbee_send_device_annce_if_needed("steering_joined");
                 } else {
-                    ESP_LOGI(TAG, "        → esp_zb_bdb_dev_joined() noch false (Stack-Stabilisierung folgt)");
+                    ESP_LOGD(TAG, "        → esp_zb_bdb_dev_joined() noch false (Stack-Stabilisierung folgt)");
                 }
             } else {
                 ESP_LOGW(TAG, "ZigBee Signal: STEERING fehlgeschlagen (Status: %s)", esp_err_to_name(err_status));
@@ -483,14 +492,14 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             break;
             
         case ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE:
-            ESP_LOGI(TAG, "ZigBee Signal: DEVICE_ANNCE");
+            ESP_LOGD(TAG, "ZigBee Signal: DEVICE_ANNCE");
             // Prüfe, ob Device erfolgreich joined ist
             if (esp_zb_bdb_dev_joined()) {
                 zigbee_stack_device_annce_received = true;
                 uint16_t network_addr = esp_zb_get_short_address();
-                ESP_LOGI(TAG, "        → Device erfolgreich joined (Network Address: 0x%04X)", network_addr);
+                ESP_LOGD(TAG, "        → Device erfolgreich joined (Network Address: 0x%04X)", network_addr);
                 
-                ESP_LOGI(TAG, "        → Lese Parent-Informationen aus Neighbor Table...");
+                ESP_LOGD(TAG, "        → Lese Parent-Informationen aus Neighbor Table...");
                 zigbee_refresh_parent_link_diagnostics_impl(true);
                 
                 // Prüfe, ob es ein Pairing (factory-new) oder Rejoin war
@@ -499,7 +508,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                 // den vorherigen Status über zigbee_rtc.joined
                 if (!zigbee_rtc.joined || (zigbee_pairing_in_progress && !pairing_successful)) {
                     // Erstes Pairing (auch nach LEAVE/Re-Join mit neuer Short Address)
-                    ESP_LOGI(TAG, "        → Pairing erfolgreich abgeschlossen");
+                    ESP_LOGI(TAG, "ZigBee Pairing OK (addr=0x%04X)", network_addr);
+                    ESP_LOGD(TAG, "        → Pairing erfolgreich abgeschlossen");
                     pairing_successful = true;
                     zigbee_pairing_in_progress = false;
                     zigbee_web_steering_clear_request();
@@ -528,10 +538,10 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                     }
                     // NVS-Schreiben deferren (kein vTaskDelay/NVS im Signal-Handler – blockiert Zigbee-Stack)
                     zigbee_nvs_save_pending = true;
-                    ESP_LOGI(TAG, "        → ZigBee-Config NVS-Speichern angefordert (Pairing, Main-Loop)");
+                    ESP_LOGD(TAG, "        → ZigBee-Config NVS-Speichern angefordert (Pairing, Main-Loop)");
                 } else {
                     // Device war bereits joined -> Rejoin
-                    ESP_LOGI(TAG, "        → Rejoin erfolgreich abgeschlossen");
+                    ESP_LOGD(TAG, "        → Rejoin erfolgreich abgeschlossen");
                     zigbee_web_steering_clear_request();
                     rejoin_successful = true;
                     // RTC-Status aktualisieren (falls sich etwas geändert hat)
@@ -539,7 +549,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
                     zigbee_rtc.pan_id = esp_zb_get_pan_id();
                     zigbee_rtc.channel = esp_zb_get_current_channel();
                     zigbee_nvs_save_pending = true;
-                    ESP_LOGI(TAG, "        → ZigBee-Config NVS-Speichern angefordert (Rejoin, Main-Loop)");
+                    ESP_LOGD(TAG, "        → ZigBee-Config NVS-Speichern angefordert (Rejoin, Main-Loop)");
                 }
             } else {
                 ESP_LOGW(TAG, "        → DEVICE_ANNCE empfangen, aber Device nicht joined");
@@ -547,7 +557,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             break;
             
         case ESP_ZB_ZDO_SIGNAL_LEAVE:
-            ESP_LOGI(TAG, "ZigBee Signal: LEAVE (Status: %s)", esp_err_to_name(err_status));
+            ESP_LOGD(TAG, "ZigBee Signal: LEAVE (Status: %s)", esp_err_to_name(err_status));
             /* Pairing: kurzer Join + LEAVE hinterlaesst joined=true/0x258F in RTC → blockiert ANNCE bei 0x1AC4 */
             if (zigbee_pairing_in_progress && !pairing_successful) {
                 ESP_LOGW(TAG, "        → LEAVE waehrend Pairing: RTC-Join zuruecksetzen (vor erneutem Steering)");
@@ -559,9 +569,9 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct) {
             
         case ESP_ZB_ZDO_SIGNAL_PRODUCTION_CONFIG_READY:
             if (err_status == ESP_OK) {
-                ESP_LOGI(TAG, "ZigBee Signal: PRODUCTION_CONFIG_READY (Production Configuration geladen)");
+                ESP_LOGD(TAG, "ZigBee Signal: PRODUCTION_CONFIG_READY (Production Configuration geladen)");
             } else {
-                ESP_LOGI(TAG, "ZigBee Signal: PRODUCTION_CONFIG_READY (Keine Production Configuration vorhanden - normal für End Devices)");
+                ESP_LOGD(TAG, "ZigBee Signal: PRODUCTION_CONFIG_READY (Keine Production Configuration vorhanden - normal für End Devices)");
             }
             break;
 
@@ -631,17 +641,17 @@ static void read_attr_resp_callback(esp_zb_zcl_cmd_read_attr_resp_message_t *mes
                     const char *delta_sign = (delta_sec >= 0) ? "+" : "";
                     const char *delta_hint = (delta_sec > 0) ? " (ESP32 hinterher)"
                                      : (delta_sec < 0) ? " (ESP32 voreilend)" : " (synchron)";
-                    ESP_LOGI(TAG, "========== AKTUELLE ZEIT (Coordinator) ==========");
-                    printf("  Datum/Zeit (UTC): %04d-%02d-%02d %02d:%02d:%02d\n",
-                           timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                           timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-                    ESP_LOGI(TAG, "  Delta ESP32 ↔ Zigbee: %s%lld s%s",
+                    ESP_LOGD(TAG, "Coordinator UTC: %04d-%02d-%02d %02d:%02d:%02d (delta %s%lld s)",
+                             timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                             timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
+                             delta_sign, (long long)delta_sec);
+                    ESP_LOGD(TAG, "  Delta ESP32 ↔ Zigbee: %s%lld s%s",
                              delta_sign, (long long)delta_sec, delta_hint);
-                    ESP_LOGI(TAG, "  Zigbee UTC: %lu s | Unix: %lu", (unsigned long)utc_time, (unsigned long)zigbee_unix);
+                    ESP_LOGD(TAG, "  Zigbee UTC: %lu s | Unix: %lu", (unsigned long)utc_time, (unsigned long)zigbee_unix);
                     // Harte Zeitkorrektur (settimeofday) – gemeinsame Sub-Routine für NTP/ZigBee/BLE
                     zigbee_time_sync_response_received = true;
                     time_sync_set_hard(zigbee_unix, "ZigBee");
-                    ESP_LOGI(TAG, "================================================");
+                    ESP_LOGD(TAG, "================================================");
                 } else {
                     ESP_LOGW(TAG, "  Coordinator-Zeit: Konvertierung fehlgeschlagen (UTC: %lu)", (unsigned long)utc_time);
                 }
@@ -666,10 +676,8 @@ static void zigbee_process_pending_nvs_save(void) {
     if (zigbee_config_save_to_nvs(&wrote)) {
         zigbee_nvs_save_pending = false;
         if (wrote) {
-            ESP_LOGI(TAG,
-                     "        → ZigBee-Config in NVS gespeichert (deferred, joined=%s, addr=0x%04X, pan=0x%04X, ch=%u)",
-                     zigbee_rtc.joined ? "true" : "false", zigbee_rtc.network_addr, zigbee_rtc.pan_id,
-                     (unsigned)zigbee_rtc.channel);
+            ESP_LOGI(TAG, "ZigBee NVS config saved (deferred, addr=0x%04X, pan=0x%04X, ch=%u)",
+                     zigbee_rtc.network_addr, zigbee_rtc.pan_id, (unsigned)zigbee_rtc.channel);
         } else {
             ESP_LOGD(TAG, "        → ZigBee-Config bereits in NVS (deferred, unveraendert)");
         }
@@ -684,11 +692,11 @@ static void zigbee_process_pending_nvs_save(void) {
  * @param pvParameters Task-Parameter (nicht verwendet)
  */
 static void zigbee_main_task(void *pvParameters) {
-    ESP_LOGI(TAG, "ZigBee Main Loop Task gestartet");
+    ESP_LOGD(TAG, "ZigBee Main Loop Task gestartet");
     
     // Warte auf Stack-Initialisierung, wenn noch nicht initialisiert
     if (!zigbee_initialized) {
-        ESP_LOGI(TAG, "        → Warte auf Stack-Initialisierung (SKIP_STARTUP Signal)...");
+        ESP_LOGD(TAG, "        → Warte auf Stack-Initialisierung (SKIP_STARTUP Signal)...");
         stack_ready_signal_received = false;  // Flag zurücksetzen
         stack_init_failed = false;  // Fehler-Flag zurücksetzen
         const uint32_t timeout_ms = ZIGBEE_INIT_TIMEOUT_MS;
@@ -719,7 +727,7 @@ static void zigbee_main_task(void *pvParameters) {
             return;
         }
         
-        ESP_LOGI(TAG, "        → Stack-Initialisierung abgeschlossen (SKIP_STARTUP Signal erhalten nach %d ms)", elapsed_ms);
+        ESP_LOGI(TAG, "ZigBee stack ready (%d ms)", elapsed_ms);
         zigbee_initialized = true;
         stack_ready_signal_received = false;  // Flag zurücksetzen
     }
@@ -731,7 +739,7 @@ static void zigbee_main_task(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(ZIGBEE_MAIN_TASK_DELAY_MS));
     }
     
-    ESP_LOGI(TAG, "ZigBee Main Loop Task beendet");
+    ESP_LOGD(TAG, "ZigBee Main Loop Task beendet");
     zigbee_main_task_handle = NULL;
     vTaskDelete(NULL);
 }
@@ -746,7 +754,7 @@ static void zigbee_main_task(void *pvParameters) {
  * @return esp_zb_ep_list_t* Endpoint-Liste oder NULL bei Fehler
  */
 static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
-    ESP_LOGI(TAG, "Erstelle Custom Endpoint mit Clusters...");
+    ESP_LOGD(TAG, "Erstelle Custom Endpoint mit Clusters...");
     
     // Endpoint-Liste erstellen
     esp_zb_ep_list_t *ep_list = esp_zb_ep_list_create();
@@ -806,7 +814,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     esp_zb_basic_cluster_add_attr(basic_cluster, 
                                    ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID, 
                                    manufacturer_name);
-    ESP_LOGI(TAG, "  → Manufacturer Name hinzugefügt: %s (Länge: %d)", manufacturer_name_str, manufacturer_name_len);
+    ESP_LOGD(TAG, "  → Manufacturer Name hinzugefügt: %s (Länge: %d)", manufacturer_name_str, manufacturer_name_len);
     
     // Model ID im ZCL Pascal-Format vorbereiten
     const char* model_id_str = ZIGBEE_MODEL_ID;
@@ -821,7 +829,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     esp_zb_basic_cluster_add_attr(basic_cluster, 
                                    ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID, 
                                    model_id);
-    ESP_LOGI(TAG, "  → Model ID hinzugefügt: %s (Länge: %d)", model_id_str, model_id_len);
+    ESP_LOGD(TAG, "  → Model ID hinzugefügt: %s (Länge: %d)", model_id_str, model_id_len);
     
     // Application Version (Firmware-Version) hinzufügen (Attribute ID: 0x0001)
     // WICHTIG: appVersion ist uint8_t (0-255), nicht ein String
@@ -837,7 +845,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     esp_zb_basic_cluster_add_attr(basic_cluster, 
                                    ESP_ZB_ZCL_ATTR_BASIC_APPLICATION_VERSION_ID, 
                                    &app_version);
-    ESP_LOGI(TAG, "  → Application Version hinzugefügt: %u (aus PROJECT_VERSION: %s)", app_version, PROJECT_VERSION);
+    ESP_LOGD(TAG, "  → Application Version hinzugefügt: %u (aus PROJECT_VERSION: %s)", app_version, PROJECT_VERSION);
     
     // Software Build ID (Firmware-Version als String) hinzufügen (Attribute ID: 0x4000)
     // WICHTIG: swBuildId ist ein String im ZCL Pascal-Format (Längenbyte + String)
@@ -853,7 +861,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     esp_zb_basic_cluster_add_attr(basic_cluster, 
                                    ESP_ZB_ZCL_ATTR_BASIC_SW_BUILD_ID, 
                                    sw_build_id);
-    ESP_LOGI(TAG, "  → Software Build ID hinzugefügt: %s (Länge: %d)", sw_build_id_str, sw_build_id_len);
+    ESP_LOGD(TAG, "  → Software Build ID hinzugefügt: %s (Länge: %d)", sw_build_id_str, sw_build_id_len);
     
     // Power Source (0x03 = Battery) wird über basic_cfg gesetzt (esp_zb_basic_cluster_create)
     
@@ -862,7 +870,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
         ESP_LOGE(TAG, "Fehler beim Hinzufügen des Basic Clusters: %s", esp_err_to_name(err));
         return NULL;
     }
-    ESP_LOGI(TAG, "  → Basic Cluster hinzugefügt (Endpoint: %d)", ZIGBEE_ENDPOINT_ID);
+    ESP_LOGD(TAG, "  → Basic Cluster hinzugefügt (Endpoint: %d)", ZIGBEE_ENDPOINT_ID);
     
     // Power Configuration Cluster manuell erstellen (Branch zigbee_reporting_fix)
     // WICHTIG: esp_zb_power_config_cluster_create() legt intern bereits Default-Attribute
@@ -871,7 +879,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     //          Access-Flags lassen sich nicht mehr aendern -> Reporting funktioniert nicht.
     //          Loesung: leere Attribute-Liste anlegen und ALLE Battery-Attribute selbst
     //          mit READ_ONLY | REPORTING registrieren (analog zum Metering-Cluster unten).
-    ESP_LOGI(TAG, "  → Erstelle Power Configuration Cluster manuell (REPORTABLE Flags fuer Battery-Attribute)...");
+    ESP_LOGD(TAG, "  → Erstelle Power Configuration Cluster manuell (REPORTABLE Flags fuer Battery-Attribute)...");
     esp_zb_attribute_list_t *power_config_cluster = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG);
     if (power_config_cluster == NULL) {
         ESP_LOGE(TAG, "Fehler beim Erstellen des Power Configuration Clusters");
@@ -891,7 +899,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
         ESP_LOGE(TAG, "Battery Percentage Attribut konnte nicht hinzugefuegt werden: %s", esp_err_to_name(err));
         return NULL;
     }
-    ESP_LOGI(TAG, "  → Battery Percentage Attribut hinzugefuegt (REPORTABLE, Initial: %u = %.1f%%)",
+    ESP_LOGD(TAG, "  → Battery Percentage Attribut hinzugefuegt (REPORTABLE, Initial: %u = %.1f%%)",
              battery_percentage_remaining, battery_percentage_remaining / 2.0f);
 
     // Battery Voltage (Attribute ID: 0x0020, uint8 in 100mV Einheiten)
@@ -907,7 +915,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
         ESP_LOGE(TAG, "Battery Voltage Attribut konnte nicht hinzugefuegt werden: %s", esp_err_to_name(err));
         return NULL;
     }
-    ESP_LOGI(TAG, "  → Battery Voltage Attribut hinzugefuegt (REPORTABLE, Initial: %u = %.1fV)",
+    ESP_LOGD(TAG, "  → Battery Voltage Attribut hinzugefuegt (REPORTABLE, Initial: %u = %.1fV)",
              battery_voltage_zigbee, battery_voltage_zigbee / 10.0f);
 
     // Battery Alarm State (Attribute ID: 0x003E, 32-bit Bitmap; Bit 0 = Low Voltage Alarm)
@@ -923,7 +931,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
         ESP_LOGE(TAG, "Battery Alarm State Attribut konnte nicht hinzugefuegt werden: %s", esp_err_to_name(err));
         return NULL;
     }
-    ESP_LOGI(TAG, "  → Battery Alarm State Attribut hinzugefuegt (REPORTABLE, Initial: 0x%08lX, Bit 0 = Low Voltage Alarm)",
+    ESP_LOGD(TAG, "  → Battery Alarm State Attribut hinzugefuegt (REPORTABLE, Initial: 0x%08lX, Bit 0 = Low Voltage Alarm)",
              (unsigned long)battery_alarm_state);
     
     err = esp_zb_cluster_list_add_power_config_cluster(cluster_list, power_config_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
@@ -931,14 +939,14 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
         ESP_LOGE(TAG, "Fehler beim Hinzufügen des Power Configuration Clusters: %s", esp_err_to_name(err));
         return NULL;
     }
-    ESP_LOGI(TAG, "  → Power Configuration Cluster hinzugefügt (Endpoint: %d)", ZIGBEE_ENDPOINT_ID);
+    ESP_LOGD(TAG, "  → Power Configuration Cluster hinzugefügt (Endpoint: %d)", ZIGBEE_ENDPOINT_ID);
     
     // Metering Cluster manuell erstellen (wie im Referenzcode: IgnacioHR/ZigbeeGasCounter)
     // WICHTIG: Wir erstellen den Cluster manuell, um volle Kontrolle über Access-Flags zu haben
     //          (insbesondere ESP_ZB_ZCL_ATTR_ACCESS_REPORTING für CurrentSummationDelivered)
     //          esp_zb_metering_cluster_create() erstellt das Attribut bereits, daher können wir
     //          die Access-Flags nicht nachträglich ändern
-    ESP_LOGI(TAG, "  → Erstelle Metering Cluster manuell (für volle Kontrolle über Access-Flags)...");
+    ESP_LOGD(TAG, "  → Erstelle Metering Cluster manuell (für volle Kontrolle über Access-Flags)...");
     esp_zb_attribute_list_t *metering_cluster = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_METERING);
     if (metering_cluster == NULL) {
         ESP_LOGE(TAG, "Fehler beim Erstellen des Metering Clusters");
@@ -976,7 +984,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
         ESP_LOGW(TAG, "  → Access-Flags können nicht nachträglich geändert werden - Attribut ist möglicherweise NICHT als REPORTABLE markiert");
         ESP_LOGW(TAG, "  → LÖSUNG: Cluster muss ohne automatische Attribut-Erstellung erstellt werden");
     } else {
-        ESP_LOGI(TAG, "  → CurrentSummationDelivered Attribut hinzugefügt (REPORTABLE, Initial: low=%lu, high=%u)", 
+        ESP_LOGD(TAG, "  → CurrentSummationDelivered Attribut hinzugefügt (REPORTABLE, Initial: low=%lu, high=%u)", 
                  current_summation_delivered.low, current_summation_delivered.high);
     }
     
@@ -992,7 +1000,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "  → Warnung: Status Attribut konnte nicht hinzugefügt werden: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "  → Status Attribut hinzugefügt (Initial: 0x%02X)", device_status);
+        ESP_LOGD(TAG, "  → Status Attribut hinzugefügt (Initial: 0x%02X)", device_status);
     }
     
     // Unit of Measure Attribut (0x0300)
@@ -1007,7 +1015,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "  → Warnung: Unit of Measure Attribut konnte nicht hinzugefügt werden: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "  → Unit of Measure Attribut hinzugefügt (Initial: 0x%02X = m³)", unit_of_measure);
+        ESP_LOGD(TAG, "  → Unit of Measure Attribut hinzugefügt (Initial: 0x%02X = m³)", unit_of_measure);
     }
     
     // Summation Formatting Attribut (0x0303)
@@ -1022,7 +1030,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "  → Warnung: Summation Formatting Attribut konnte nicht hinzugefügt werden: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "  → Summation Formatting Attribut hinzugefügt (Initial: 0x%02X)", summation_formatting);
+        ESP_LOGD(TAG, "  → Summation Formatting Attribut hinzugefügt (Initial: 0x%02X)", summation_formatting);
     }
     
     // Metering Device Type Attribut (0x0306)
@@ -1037,7 +1045,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "  → Warnung: Metering Device Type Attribut konnte nicht hinzugefügt werden: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "  → Metering Device Type Attribut hinzugefügt (Initial: 0x%02X = Gas Meter)", metering_device_type);
+        ESP_LOGD(TAG, "  → Metering Device Type Attribut hinzugefügt (Initial: 0x%02X = Gas Meter)", metering_device_type);
     }
     
     // Extended Status Attribut (0x0307) - Optional
@@ -1052,7 +1060,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "  → Warnung: Extended Status Attribut konnte nicht hinzugefügt werden: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "  → Extended Status Attribut hinzugefügt (Initial: 0x%016llX)", (unsigned long long)device_extended_status);
+        ESP_LOGD(TAG, "  → Extended Status Attribut hinzugefügt (Initial: 0x%016llX)", (unsigned long long)device_extended_status);
     }
     
     // Multiplier Attribut explizit mit Pointer auf persistente Variable hinzufügen
@@ -1069,7 +1077,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     if (err != ESP_OK && err != ESP_ERR_INVALID_ARG) {
         ESP_LOGW(TAG, "  → Warnung: Multiplier Attribut konnte nicht hinzugefügt werden: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "  → Multiplier Attribut hinzugefügt (Initial: %u)", metering_multiplier);
+        ESP_LOGD(TAG, "  → Multiplier Attribut hinzugefügt (Initial: %u)", metering_multiplier);
     }
     
     // Divisor Attribut explizit mit Pointer auf persistente Variable hinzufügen
@@ -1086,7 +1094,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     if (err != ESP_OK && err != ESP_ERR_INVALID_ARG) {
         ESP_LOGW(TAG, "  → Warnung: Divisor Attribut konnte nicht hinzugefügt werden: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "  → Divisor Attribut hinzugefügt (Initial: %u)", metering_divisor);
+        ESP_LOGD(TAG, "  → Divisor Attribut hinzugefügt (Initial: %u)", metering_divisor);
     }
     // WICHTIG: Verwende esp_zb_cluster_list_add_metering_cluster() (Standard-Funktion)
     //          Die Attribute wurden bereits VORHER mit korrekten Access-Flags hinzugefügt
@@ -1096,7 +1104,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
         ESP_LOGE(TAG, "Fehler beim Hinzufügen des Metering Clusters: %s", esp_err_to_name(err));
         return NULL;
     }
-    ESP_LOGI(TAG, "  → Metering Cluster zur Cluster-Liste hinzugefügt (Attribute wurden bereits mit REPORTABLE-Flag hinzugefügt)");
+    ESP_LOGD(TAG, "  → Metering Cluster zur Cluster-Liste hinzugefügt (Attribute wurden bereits mit REPORTABLE-Flag hinzugefügt)");
     
     // HINWEIS: Multiplier und Divisor Attribute werden NICHT hier gesetzt!
     // Grund: Der ZigBee-Stack ist zu diesem Zeitpunkt noch nicht vollständig initialisiert.
@@ -1108,15 +1116,15 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     //          Der Converter wendet divisor/multiplier automatisch an für Skalierung.
     //          HA erkennt automatisch: device_class: gas, state_class: total_increasing (durch unit: 'm³')
     
-    ESP_LOGI(TAG, "  → Metering Cluster hinzugefügt (Endpoint: %d, Unit: m³, Multiplier: %d, Divisor: %d)", 
+    ESP_LOGD(TAG, "  → Metering Cluster hinzugefügt (Endpoint: %d, Unit: m³, Multiplier: %d, Divisor: %d)", 
              ZIGBEE_ENDPOINT_ID, ZIGBEE_METERING_MULTIPLIER, ZIGBEE_METERING_DIVISOR);
-    ESP_LOGI(TAG, "  → HINWEIS: Multiplier/Divisor werden im SKIP_STARTUP Handler gesetzt (nach Stack-Start)");
-    ESP_LOGI(TAG, "  → CurrentSummationDelivered ist als REPORTABLE markiert (Zigbee2MQTT kann Reporting konfigurieren)");
-    ESP_LOGI(TAG, "  → Externer Converter (gas-o-meter2.js) liest divisor/multiplier für Skalierung");
-    ESP_LOGI(TAG, "  → Device sendet Daten bei jeder Datenübertragung (transfer_zigbee_send_data())");
+    ESP_LOGD(TAG, "  → HINWEIS: Multiplier/Divisor werden im SKIP_STARTUP Handler gesetzt (nach Stack-Start)");
+    ESP_LOGD(TAG, "  → CurrentSummationDelivered ist als REPORTABLE markiert (Zigbee2MQTT kann Reporting konfigurieren)");
+    ESP_LOGD(TAG, "  → Externer Converter (gas-o-meter2.js) liest divisor/multiplier für Skalierung");
+    ESP_LOGD(TAG, "  → Device sendet Daten bei jeder Datenübertragung (transfer_zigbee_send_data())");
 
     // Diagnostics Cluster: Last LQI/RSSI (Z2M liest 0x011C/0x011D bei Interview)
-    ESP_LOGI(TAG, "  → Erstelle Diagnostics Cluster (Last LQI/RSSI)...");
+    ESP_LOGD(TAG, "  → Erstelle Diagnostics Cluster (Last LQI/RSSI)...");
     esp_zb_attribute_list_t *diagnostics_cluster =
         esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_DIAGNOSTICS);
     if (diagnostics_cluster == NULL) {
@@ -1151,10 +1159,10 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
         ESP_LOGE(TAG, "Fehler beim Hinzufuegen des Diagnostics Clusters: %s", esp_err_to_name(err));
         return NULL;
     }
-    ESP_LOGI(TAG, "  → Diagnostics Cluster hinzugefuegt (Last LQI/RSSI fuer Z2M)");
+    ESP_LOGD(TAG, "  → Diagnostics Cluster hinzugefuegt (Last LQI/RSSI fuer Z2M)");
 
     // OTA Upgrade Cluster (Client) – Platzhalter; Cluster-Liste beim Pairing fixieren
-    ESP_LOGI(TAG, "  → Erstelle OTA Upgrade Cluster (Client, Platzhalter)...");
+    ESP_LOGD(TAG, "  → Erstelle OTA Upgrade Cluster (Client, Platzhalter)...");
     esp_zb_ota_cluster_cfg_t ota_cfg = {
         .ota_upgrade_file_version = RING_BUFFER_VERSION,
         .ota_upgrade_manufacturer = ZIGBEE_OTA_MANUFACTURER_ID,
@@ -1171,7 +1179,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
         ESP_LOGE(TAG, "Fehler beim Hinzufuegen des OTA Clusters: %s", esp_err_to_name(err));
         return NULL;
     }
-    ESP_LOGI(TAG, "  → OTA Cluster hinzugefuegt (Client, FileVersion=0x%08lX)",
+    ESP_LOGD(TAG, "  → OTA Cluster hinzugefuegt (Client, FileVersion=0x%08lX)",
              (unsigned long)ota_cfg.ota_upgrade_file_version);
 
     // Time Cluster hinzufügen (Client-Rolle für Zeit-Synchronisation)
@@ -1180,7 +1188,7 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
     //          Der Time Cluster wird nicht explizit zur Liste hinzugefügt, da wir nur Read Attribute Requests senden
     //          und keine Server-Funktionalität benötigen. Der Read Attribute Request funktioniert auch ohne
     //          expliziten Cluster in der Liste, da wir die Cluster-ID direkt im Request angeben.
-    ESP_LOGI(TAG, "  → Time Cluster wird für Zeit-Synchronisation verwendet (Read Attribute Request ohne explizite Cluster-Registrierung)");
+    ESP_LOGD(TAG, "  → Time Cluster wird für Zeit-Synchronisation verwendet (Read Attribute Request ohne explizite Cluster-Registrierung)");
     
     // Cluster-Liste zum Endpoint hinzufügen
     err = esp_zb_ep_list_add_ep(ep_list, cluster_list, endpoint_config);
@@ -1188,8 +1196,9 @@ static esp_zb_ep_list_t* create_gas_meter_endpoint(void) {
         ESP_LOGE(TAG, "Fehler beim Hinzufügen des Endpoints zur Liste: %s", esp_err_to_name(err));
         return NULL;
     }
-    ESP_LOGI(TAG, "Endpoint erstellt (Endpoint: %d, Profile: 0x%04X, Device: 0x%04X)",
+    ESP_LOGD(TAG, "Endpoint erstellt (Endpoint: %d, Profile: 0x%04X, Device: 0x%04X)",
              endpoint_config.endpoint, endpoint_config.app_profile_id, endpoint_config.app_device_id);
+    ESP_LOGI(TAG, "ZigBee endpoint %u (Metering+Battery+Basic)", (unsigned)endpoint_config.endpoint);
     
     return ep_list;
 }
@@ -1220,7 +1229,7 @@ void transfer_zigbee_prepare_cluster_attrs(const transfer_data_t* data) {
         battery_alarm_state &= 0xFFFFFFFE;
     }
 
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "Cluster-RAM fuer Endpoint: summ=%lu (low=%lu), batt=%u (%.1f%%), battV=%u (%.2fV)",
              (unsigned long)data->pulse_counter,
              (unsigned long)current_summation_delivered.low,
@@ -1248,10 +1257,12 @@ bool transfer_zigbee_init(void) {
     }
 
     zigbee_can_sleep_sync_init();
+
+    ESP_LOGI(TAG, "ZigBee init (keep_alive=%d ms)", ZIGBEE_KEEP_ALIVE_DEFAULT);
     
-    ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "ZigBee-Stack Initialisierung");
-    ESP_LOGI(TAG, "========================================");
+    ESP_LOGD(TAG, "========================================");
+    ESP_LOGD(TAG, "ZigBee-Stack Initialisierung");
+    ESP_LOGD(TAG, "========================================");
     
     esp_err_t err;  // Fehler-Variable für alle ZigBee-Stack-Operationen
     
@@ -1265,12 +1276,12 @@ bool transfer_zigbee_init(void) {
                                     ESP_ZB_TRACE_SUBSYSTEM_NWK | 
                                     ESP_ZB_TRACE_SUBSYSTEM_BDB | 
                                     ESP_ZB_TRACE_SUBSYSTEM_MAC);
-        ESP_LOGI(TAG, "  [0/5] ZigBee Trace-Logging aktiviert (NWK + BDB + MAC, Level: DEBUG)");
-        ESP_LOGI(TAG, "        → MAC-Trace aktiviert für Association Request/Response Debugging");
+        ESP_LOGD(TAG, "  [0/5] ZigBee Trace-Logging aktiviert (NWK + BDB + MAC, Level: DEBUG)");
+        ESP_LOGD(TAG, "        → MAC-Trace aktiviert für Association Request/Response Debugging");
     #endif
     
     // [1/5] ZigBee-Stack Konfiguration
-    ESP_LOGI(TAG, "  [1/5] ZigBee-Stack wird konfiguriert...");
+    ESP_LOGD(TAG, "  [1/5] ZigBee-Stack wird konfiguriert...");
     
     // End Device Timeout: Verwende ESP_ZB_ED_AGING_TIMEOUT_64MIN falls verfügbar, sonst SDK Default
     // WICHTIG: keep_alive muss kleiner als ed_timeout sein!
@@ -1289,33 +1300,33 @@ bool transfer_zigbee_init(void) {
         zb_nwk_cfg.nwk_cfg.zed_cfg.ed_timeout = ESP_ZB_ED_AGING_TIMEOUT_64MIN;  // 64 Minuten (empfohlen)
     #endif
     
-    ESP_LOGI(TAG, "        → Device Type: End Device (ZED)");
+    ESP_LOGD(TAG, "        → Device Type: End Device (ZED)");
     #ifdef ESP_ZB_ED_AGING_TIMEOUT_64MIN
-        ESP_LOGI(TAG, "        → End Device Timeout: 64 Minuten (ESP_ZB_ED_AGING_TIMEOUT_64MIN)");
+        ESP_LOGD(TAG, "        → End Device Timeout: 64 Minuten (ESP_ZB_ED_AGING_TIMEOUT_64MIN)");
     #else
-        ESP_LOGI(TAG, "        → End Device Timeout: SDK Default (nicht explizit gesetzt)");
+        ESP_LOGD(TAG, "        → End Device Timeout: SDK Default (nicht explizit gesetzt)");
     #endif
-    ESP_LOGI(TAG, "        → Keep Alive: %d ms (Poll-Intervall)", ZIGBEE_KEEP_ALIVE_DEFAULT);
+    ESP_LOGD(TAG, "        → Keep Alive: %d ms (Poll-Intervall)", ZIGBEE_KEEP_ALIVE_DEFAULT);
     
     // [2/5] Stack initialisieren
-    ESP_LOGI(TAG, "  [2/5] Stack wird initialisiert...");
+    ESP_LOGD(TAG, "  [2/5] Stack wird initialisiert...");
     esp_zb_init(&zb_nwk_cfg);  // Gibt void zurück (keine Fehlerbehandlung möglich)
-    ESP_LOGI(TAG, "        → Stack initialisiert");
+    ESP_LOGD(TAG, "        → Stack initialisiert");
     
     // Sleepy End Device: Radio aus wenn idle (Coordinator pollt / Parent CSL)
     esp_zb_set_rx_on_when_idle(false);
-    ESP_LOGI(TAG, "        → RX-on-when-idle deaktiviert (Sleepy ED – RX nur bei Join/Steering in ensure_joined)");
+    ESP_LOGD(TAG, "        → RX-on-when-idle deaktiviert (Sleepy ED – RX nur bei Join/Steering in ensure_joined)");
     
     // TX Power setzen (nach Stack-Initialisierung)
     const int8_t zigbee_tx_power_dbm = transfer_zigbee_get_tx_power_dbm();
     esp_zb_set_tx_power(zigbee_tx_power_dbm);
     int8_t current_tx_power = 0;
     esp_zb_get_tx_power(&current_tx_power);
-    ESP_LOGI(TAG, "        → TX Power gesetzt: %d dBm (requested: %d dBm)", current_tx_power, zigbee_tx_power_dbm);
+    ESP_LOGD(TAG, "        → TX Power gesetzt: %d dBm (requested: %d dBm)", current_tx_power, zigbee_tx_power_dbm);
     
     // Stabilisierungszeit nach TX Power Setzung (RF-Operationen benötigen Zeit zur Stabilisierung)
     vTaskDelay(pdMS_TO_TICKS(ZIGBEE_TX_POWER_STABILIZE_MS));
-    ESP_LOGI(TAG, "        → TX Power Stabilisierung: %d ms", ZIGBEE_TX_POWER_STABILIZE_MS);
+    ESP_LOGD(TAG, "        → TX Power Stabilisierung: %d ms", ZIGBEE_TX_POWER_STABILIZE_MS);
     
     // Minimum LQI für Network Join setzen
     // WICHTIG: Bei LQI=0 kann Join fehlschlagen, wenn Minimum LQI > 0 ist
@@ -1323,13 +1334,13 @@ bool transfer_zigbee_init(void) {
     // 32 = Standard (empfohlen für Produktion, verhindert instabile Verbindungen)
     esp_zb_secur_network_min_join_lqi_set(ZIGBEE_MIN_JOIN_LQI);
     uint8_t current_min_lqi = esp_zb_secur_network_min_join_lqi_get();
-    ESP_LOGI(TAG, "        → Minimum LQI für Join gesetzt: %u (0 = deaktiviert)", current_min_lqi);
+    ESP_LOGD(TAG, "        → Minimum LQI für Join gesetzt: %u (0 = deaktiviert)", current_min_lqi);
     
     // HINWEIS: Extended Address wird erst nach SKIP_STARTUP Signal gelesen
     // (zu diesem Zeitpunkt ist sie noch nicht verfügbar)
     
     // [3/5] Device Endpoint mit Clusters erstellen und registrieren
-    ESP_LOGI(TAG, "  [3/5] Device Endpoint wird erstellt...");
+    ESP_LOGD(TAG, "  [3/5] Device Endpoint wird erstellt...");
     esp_zb_ep_list_t *ep_list = create_gas_meter_endpoint();
     if (ep_list == NULL) {
         ESP_LOGE(TAG, "        → Fehler beim Erstellen des Endpoints");
@@ -1342,32 +1353,32 @@ bool transfer_zigbee_init(void) {
         ESP_LOGE(TAG, "        → Fehler bei esp_zb_device_register(): %s", esp_err_to_name(err));
         return false;
     }
-    ESP_LOGI(TAG, "        → Device Endpoint registriert");
+    ESP_LOGD(TAG, "        → Device Endpoint registriert");
     
     // [4/5] Signal Handler und Callbacks registrieren
-    ESP_LOGI(TAG, "  [4/5] Signal Handler und Callbacks werden registriert...");
-    ESP_LOGI(TAG, "        → Signal Handler registriert (automatisch)");
+    ESP_LOGD(TAG, "  [4/5] Signal Handler und Callbacks werden registriert...");
+    ESP_LOGD(TAG, "        → Signal Handler registriert (automatisch)");
     // Read Attribute Response: für Time Cluster (Zeit vom Coordinator)
     esp_zb_core_action_handler_register(zigbee_core_action_callback);
-    ESP_LOGI(TAG, "        → Read-Attribute-Response Handler registriert (Time Cluster → Serial)");
+    ESP_LOGD(TAG, "        → Read-Attribute-Response Handler registriert (Time Cluster → Serial)");
     
     // Primary Network Channel setzen
-    ESP_LOGI(TAG, "        → Setze Primary Network Channel...");
+    ESP_LOGD(TAG, "        → Setze Primary Network Channel...");
     esp_err_t channel_err = esp_zb_set_primary_network_channel_set(ZIGBEE_PRIMARY_CHANNEL_MASK);
     if (channel_err != ESP_OK) {
         ESP_LOGW(TAG, "        → Fehler beim Setzen des Channel Masks: %s", esp_err_to_name(channel_err));
     } else {
-        ESP_LOGI(TAG, "        → Primary Network Channel gesetzt (Mask: 0x%08lX)", (unsigned long)ZIGBEE_PRIMARY_CHANNEL_MASK);
+        ESP_LOGD(TAG, "        → Primary Network Channel gesetzt (Mask: 0x%08lX)", (unsigned long)ZIGBEE_PRIMARY_CHANNEL_MASK);
     }
     
     // [5/5] Stack starten
-    ESP_LOGI(TAG, "  [5/5] Stack wird gestartet...");
+    ESP_LOGD(TAG, "  [5/5] Stack wird gestartet...");
     err = esp_zb_start(false);  // false = nicht als Coordinator
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "        → Fehler bei esp_zb_start(): %s", esp_err_to_name(err));
         return false;
     }
-    ESP_LOGI(TAG, "        → Stack gestartet");
+    ESP_LOGD(TAG, "        → Stack gestartet");
     
     // Extended Address (IEEE Address) versuchen zu lesen (nach esp_zb_start)
     // WICHTIG: Laut SDK-Dokumentation ist die Extended Address nach esp_zb_init() verfügbar,
@@ -1382,7 +1393,7 @@ bool transfer_zigbee_init(void) {
     }
     if (temp_extended_addr != 0) {
         zigbee_rtc.extended_addr = temp_extended_addr;
-        ESP_LOGI(TAG, "        → Extended Address (IEEE) gelesen: 0x%016llX", (unsigned long long)zigbee_rtc.extended_addr);
+        ESP_LOGD(TAG, "        → Extended Address (IEEE) gelesen: 0x%016llX", (unsigned long long)zigbee_rtc.extended_addr);
     } else {
         ESP_LOGW(TAG, "        → Extended Address noch nicht verfügbar (wird im DEVICE_FIRST_START Handler gelesen)");
     }
@@ -1390,42 +1401,42 @@ bool transfer_zigbee_init(void) {
     // Node Descriptor konfigurieren (nach esp_zb_start, vor Pairing)
     // WICHTIG: Diese Werte werden vom Coordinator beim Interview abgefragt (Node Descriptor Request)
     // und sind essentiell für erfolgreiches Interview. Ohne diese Einstellungen schlägt das Interview fehl.
-    ESP_LOGI(TAG, "        → Setze Node Descriptor (Power Source / Manufacturer Code)...");
+    ESP_LOGD(TAG, "        → Setze Node Descriptor (Power Source / Manufacturer Code)...");
     
     // Power Source setzen: false = Battery Powered (da das Device batteriebetrieben ist)
     // WICHTIG: Muss nach esp_zb_start() aufgerufen werden!
     esp_zb_set_node_descriptor_power_source(false);  // false = Battery Powered
-    ESP_LOGI(TAG, "        → Node Descriptor Power Source gesetzt: Battery Powered");
+    ESP_LOGD(TAG, "        → Node Descriptor Power Source gesetzt: Battery Powered");
     
     // Manufacturer Code setzen (optional, aber empfohlen für Interview)
     // WICHTIG: Muss nach esp_zb_start() aufgerufen werden!
     // Verwende einen Standard-Manufacturer-Code (0x0000 = nicht spezifiziert, oder eigener Code)
     uint16_t manufacturer_code = 0x0000;  // 0x0000 = nicht spezifiziert (kann später angepasst werden)
     esp_zb_set_node_descriptor_manufacturer_code(manufacturer_code);
-    ESP_LOGI(TAG, "        → Node Descriptor Manufacturer Code gesetzt: 0x%04X", manufacturer_code);
+    ESP_LOGD(TAG, "        → Node Descriptor Manufacturer Code gesetzt: 0x%04X", manufacturer_code);
     
     // Stabilisierungszeit nach Node Descriptor Setzung (RF-Operationen benötigen Zeit zur Stabilisierung)
     vTaskDelay(pdMS_TO_TICKS(ZIGBEE_NODE_DESC_STABILIZE_MS));
-    ESP_LOGI(TAG, "        → Node Descriptor Stabilisierung: %d ms", ZIGBEE_NODE_DESC_STABILIZE_MS);
+    ESP_LOGD(TAG, "        → Node Descriptor Stabilisierung: %d ms", ZIGBEE_NODE_DESC_STABILIZE_MS);
     
     // Stabilisierungszeit nach Stack-Start (wichtig für zuverlässiges Pairing)
     // WICHTIG: Stack muss vollständig initialisiert sein, bevor Pairing gestartet wird
     vTaskDelay(pdMS_TO_TICKS(ZIGBEE_STACK_START_STABILIZE_MS));
-    ESP_LOGI(TAG, "        → Stack-Start Stabilisierung: %d ms (vor Pairing)", ZIGBEE_STACK_START_STABILIZE_MS);
+    ESP_LOGD(TAG, "        → Stack-Start Stabilisierung: %d ms (vor Pairing)", ZIGBEE_STACK_START_STABILIZE_MS);
     
     // ZigBee Main Loop Task starten (wartet selbst auf Stack-Initialisierung)
-    ESP_LOGI(TAG, "        → Starte ZigBee Main Loop Task...");
+    ESP_LOGD(TAG, "        → Starte ZigBee Main Loop Task...");
     stack_ready_signal_received = false;  // Flag zurücksetzen
     xTaskCreate(zigbee_main_task, "zigbee_main", ZIGBEE_MAIN_TASK_STACK_SIZE, NULL, ZIGBEE_MAIN_TASK_PRIORITY, &zigbee_main_task_handle);
     if (zigbee_main_task_handle == NULL) {
         ESP_LOGE(TAG, "        → Fehler beim Erstellen des ZigBee Main Loop Tasks");
         return false;
     }
-    ESP_LOGI(TAG, "        → ZigBee Main Loop Task gestartet (wartet auf SKIP_STARTUP Signal)");
+    ESP_LOGD(TAG, "        → ZigBee Main Loop Task gestartet (wartet auf SKIP_STARTUP Signal)");
     
-    ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "ZigBee-Stack Initialisierung gestartet (asynchron)");
-    ESP_LOGI(TAG, "========================================");
+    ESP_LOGD(TAG, "========================================");
+    ESP_LOGD(TAG, "ZigBee-Stack Initialisierung gestartet (asynchron)");
+    ESP_LOGD(TAG, "========================================");
     
     // WICHTIG: zigbee_initialized wird vom Task gesetzt, wenn SKIP_STARTUP Signal kommt
     // NICHT hier setzen, da Stack noch nicht vollständig initialisiert ist!
@@ -1509,21 +1520,21 @@ static void zigbee_send_device_annce_if_needed(const char* reason) {
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     if (last_device_annce_sent_ms != 0 &&
         zigbee_elapsed_ms(now_ms, last_device_annce_sent_ms) < ZIGBEE_DEVICE_ANNCE_MIN_INTERVAL_MS) {
-        ESP_LOGI(TAG, "        → DEVICE_ANNCE uebersprungen (Debounce %lu ms, reason=%s)",
+        ESP_LOGD(TAG, "        → DEVICE_ANNCE uebersprungen (Debounce %lu ms, reason=%s)",
                  (unsigned long)ZIGBEE_DEVICE_ANNCE_MIN_INTERVAL_MS, reason);
         return;
     }
     esp_zb_zdo_device_announcement_req();
     last_device_annce_sent_ms = now_ms;
     zigbee_network_info_t info = zigbee_read_network_info_locked();
-    ESP_LOGI(TAG, "        → DEVICE_ANNCE gesendet (Addr 0x%04X, reason=%s)",
+    ESP_LOGD(TAG, "        → DEVICE_ANNCE gesendet (Addr 0x%04X, reason=%s)",
              info.network_addr, reason);
 }
 
 /** Rejoin: Stack sendet ZDO Device Announce selbst – kein esp_zb_zdo_device_announcement_req (vermeidet Z2M-Doppel-Event). */
 static void zigbee_maybe_send_device_annce_on_rejoin(const char* reason) {
     (void)reason;
-    ESP_LOGI(TAG, "        → DEVICE_ANNCE uebersprungen (Rejoin, Stack-ZDO-Announce)");
+    ESP_LOGD(TAG, "        → DEVICE_ANNCE uebersprungen (Rejoin, Stack-ZDO-Announce)");
 }
 
 /** Parent aus Neighbor Table: LQI/RSSI in Diagnostics-Cluster (ohne Lock). */
@@ -1554,13 +1565,13 @@ static bool zigbee_refresh_parent_link_diagnostics_impl(bool verbose_log) {
             return true;
         }
         const char* parent_type = (parent_short_addr == 0x0000) ? "Coordinator" : "Router";
-        ESP_LOGI(TAG, "        → Parent gefunden:");
-        ESP_LOGI(TAG, "           → Typ: %s", parent_type);
-        ESP_LOGI(TAG, "           → Network Address: 0x%04X", parent_short_addr);
-        ESP_LOGI(TAG, "           → Extended Address: 0x%016llX", (unsigned long long)parent_ieee_addr);
-        ESP_LOGI(TAG, "           → LQI=%u, RSSI=%d dBm", (unsigned)diag_last_lqi, (int)diag_last_rssi);
+        ESP_LOGD(TAG, "        → Parent gefunden:");
+        ESP_LOGD(TAG, "           → Typ: %s", parent_type);
+        ESP_LOGD(TAG, "           → Network Address: 0x%04X", parent_short_addr);
+        ESP_LOGD(TAG, "           → Extended Address: 0x%016llX", (unsigned long long)parent_ieee_addr);
+        ESP_LOGD(TAG, "           → LQI=%u, RSSI=%d dBm", (unsigned)diag_last_lqi, (int)diag_last_rssi);
         if (parent_short_addr != 0x0000) {
-            ESP_LOGI(TAG, "           → HINWEIS: Device ist ueber Router verbunden (nicht direkt mit Coordinator)");
+            ESP_LOGD(TAG, "           → HINWEIS: Device ist ueber Router verbunden (nicht direkt mit Coordinator)");
         }
         return true;
     }
@@ -1612,17 +1623,17 @@ static void zigbee_wait_for_first_pairing_interview(void) {
     uint32_t waited_ms = 0;
 
     if (zigbee_stack_device_annce_received) {
-        ESP_LOGI(TAG, "  [3.5/4] DEVICE_ANNCE bereits empfangen → Post-Announce-Fenster (%lu s)",
+        ESP_LOGD(TAG, "  [3.5/4] DEVICE_ANNCE bereits empfangen → Post-Announce-Fenster (%lu s)",
                  (unsigned long)(ZIGBEE_INTERVIEW_POST_ANNCE_MS / 1000));
     } else {
-        ESP_LOGI(TAG, "  [3.5/4] Warte auf DEVICE_ANNCE (max %lu s)...",
+        ESP_LOGD(TAG, "  [3.5/4] Warte auf DEVICE_ANNCE (max %lu s)...",
                  (unsigned long)(ZIGBEE_INTERVIEW_ANNCE_WAIT_MAX_MS / 1000));
         while (waited_ms < ZIGBEE_INTERVIEW_ANNCE_WAIT_MAX_MS && !zigbee_stack_device_annce_received) {
             vTaskDelay(pdMS_TO_TICKS(poll_ms));
             waited_ms += poll_ms;
         }
         if (zigbee_stack_device_annce_received) {
-            ESP_LOGI(TAG, "        → DEVICE_ANNCE nach %lu ms", (unsigned long)waited_ms);
+            ESP_LOGD(TAG, "        → DEVICE_ANNCE nach %lu ms", (unsigned long)waited_ms);
         } else {
             ESP_LOGW(TAG, "        → DEVICE_ANNCE Timeout nach %lu ms → Post-Announce-Fenster trotzdem",
                      (unsigned long)waited_ms);
@@ -1632,7 +1643,7 @@ static void zigbee_wait_for_first_pairing_interview(void) {
     const uint32_t post_annce_ms = s_zigbee_web_transfer_busy
         ? ZIGBEE_INTERVIEW_POST_ANNCE_WEB_MS
         : ZIGBEE_INTERVIEW_POST_ANNCE_MS;
-    ESP_LOGI(TAG, "        → Post-Announce: Z2M Interview/Configure (%lu s%s)",
+    ESP_LOGD(TAG, "        → Post-Announce: Z2M Interview/Configure (%lu s%s)",
              (unsigned long)(post_annce_ms / 1000),
              s_zigbee_web_transfer_busy ? ", Web" : "");
     waited_ms = 0;
@@ -1640,7 +1651,7 @@ static void zigbee_wait_for_first_pairing_interview(void) {
         vTaskDelay(pdMS_TO_TICKS(poll_ms));
         waited_ms += poll_ms;
     }
-    ESP_LOGI(TAG, "        → Interview-Wartezeit abgeschlossen");
+    ESP_LOGD(TAG, "        → Interview-Wartezeit abgeschlossen");
     zigbee_stack_device_annce_received = false;
     // RX war fuer Pairing/Interview noetig (Z2M Downlink); ab send_data-Schritt 4 Sleepy ED
     zigbee_restore_sleepy_rx_on_when_idle();
@@ -1670,14 +1681,14 @@ static void zigbee_update_rtc_from_stack(void) {
 
 static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairing,
                                             uint32_t *poll_elapsed_ms_out) {
-    ESP_LOGI(TAG, "        → DEVICE_REBOOT: Poll Join (%s, max %lu ms)...",
+    ESP_LOGD(TAG, "        → DEVICE_REBOOT: Poll Join (%s, max %lu ms)...",
              for_pairing ? "Pairing" : "Rejoin", (unsigned long)timeout_ms);
     uint32_t elapsed_ms = 0;
     const uint32_t poll_ms = ZIGBEE_STEERING_POLL_INTERVAL_MS;
     while (elapsed_ms < timeout_ms) {
         if (zigbee_is_joined_with_valid_network()) {
             zigbee_network_info_t info = zigbee_read_network_info_locked();
-            ESP_LOGI(TAG, "        → Join nach DEVICE_REBOOT OK (nach %lu ms), Addr 0x%04X, PAN 0x%04X",
+            ESP_LOGD(TAG, "        → Join nach DEVICE_REBOOT OK (nach %lu ms), Addr 0x%04X, PAN 0x%04X",
                      (unsigned long)elapsed_ms, info.network_addr, info.pan_id);
             bool was_rtc_joined = zigbee_rtc.joined;
             zigbee_update_rtc_from_stack();
@@ -1691,7 +1702,7 @@ static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairin
             }
             zigbee_push_cluster_vals_to_stack_if_joined();
             if (zigbee_config_save_to_nvs(NULL)) {
-                ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (nach DEVICE_REBOOT Poll)");
+                ESP_LOGD(TAG, "        → ZigBee-Config in NVS gespeichert (nach DEVICE_REBOOT Poll)");
             }
             if (for_pairing) {
                 zigbee_send_device_annce_if_needed("device_reboot_poll");
@@ -1706,7 +1717,7 @@ static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairin
         vTaskDelay(pdMS_TO_TICKS(poll_ms));
         elapsed_ms += poll_ms;
         if (elapsed_ms % 5000 == 0 && elapsed_ms > 0) {
-            ESP_LOGI(TAG, "        → Warte Join nach DEVICE_REBOOT... (%lu ms / %lu ms)",
+            ESP_LOGD(TAG, "        → Warte Join nach DEVICE_REBOOT... (%lu ms / %lu ms)",
                      (unsigned long)elapsed_ms, (unsigned long)timeout_ms);
         }
     }
@@ -1722,14 +1733,14 @@ static bool zigbee_poll_joined_after_reboot(uint32_t timeout_ms, bool for_pairin
 /** Nur vor Network Steering (Beacon Scan) – nicht fuer BDB INITIALIZATION noetig. */
 static void zigbee_enable_rx_before_steering(void) {
     esp_zb_set_rx_on_when_idle(true);
-    ESP_LOGI(TAG, "        → RX-on-when-idle vor Network Steering aktiviert (Status: %s)",
+    ESP_LOGD(TAG, "        → RX-on-when-idle vor Network Steering aktiviert (Status: %s)",
              esp_zb_get_rx_on_when_idle() ? "true" : "false");
     vTaskDelay(pdMS_TO_TICKS(100));
 }
 
 static void zigbee_restore_sleepy_rx_on_when_idle(void) {
     esp_zb_set_rx_on_when_idle(false);
-    ESP_LOGI(TAG, "        → RX-on-when-idle deaktiviert (Sleepy ED, Status: %s)",
+    ESP_LOGD(TAG, "        → RX-on-when-idle deaktiviert (Sleepy ED, Status: %s)",
              esp_zb_get_rx_on_when_idle() ? "true" : "false");
 }
 
@@ -1750,7 +1761,7 @@ static void zigbee_restore_primary_channel_mask(void) {
  * Aequivalent zu esp_zb_zdo_rejoin_network(false) – diese API ist in esp-zigbee-lib 1.x nicht exportiert.
  */
 static bool zigbee_try_direct_bdb_rejoin(uint32_t timeout_ms, uint32_t *elapsed_ms_out) {
-    ESP_LOGI(TAG, "        → Direkter Rejoin (INITIALIZATION, Ch %u, PAN 0x%04X, kein Full-Scan)",
+    ESP_LOGD(TAG, "        → Direkter Rejoin (INITIALIZATION, Ch %u, PAN 0x%04X, kein Full-Scan)",
              (unsigned)zigbee_rtc.channel, zigbee_rtc.pan_id);
 
     const uint32_t channel_mask = (1UL << zigbee_rtc.channel);
@@ -1792,13 +1803,13 @@ static bool zigbee_try_direct_bdb_rejoin(uint32_t timeout_ms, uint32_t *elapsed_
         }
         if (rejoin_successful || zigbee_is_joined_with_valid_network()) {
             if (!rejoin_successful) {
-                ESP_LOGI(TAG, "        → Direkter Rejoin OK (nach %lu ms)", (unsigned long)elapsed_ms);
+                ESP_LOGD(TAG, "        → Direkter Rejoin OK (nach %lu ms)", (unsigned long)elapsed_ms);
                 zigbee_update_rtc_from_stack();
                 rejoin_successful = true;
                 zigbee_push_cluster_vals_to_stack_if_joined();
                 zigbee_maybe_send_device_annce_on_rejoin("direct_bdb_rejoin");
                 if (zigbee_config_save_to_nvs(NULL)) {
-                    ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (direkter Rejoin)");
+                    ESP_LOGD(TAG, "        → ZigBee-Config in NVS gespeichert (direkter Rejoin)");
                 }
             }
             zigbee_restore_primary_channel_mask();
@@ -1825,7 +1836,7 @@ static bool zigbee_try_direct_bdb_rejoin(uint32_t timeout_ms, uint32_t *elapsed_
  * @return true wenn Join erkannt (Steering entbehrlich)
  */
 static bool zigbee_wait_stack_ready_after_failed_direct_rejoin(uint32_t max_wait_ms, uint32_t *elapsed_ms_out) {
-    ESP_LOGI(TAG, "        → INITIALIZATION ohne Join – warte DEVICE_REBOOT/Join (max %lu ms)",
+    ESP_LOGD(TAG, "        → INITIALIZATION ohne Join – warte DEVICE_REBOOT/Join (max %lu ms)",
              (unsigned long)max_wait_ms);
     uint32_t waited_ms = 0;
     const uint32_t poll_ms = ZIGBEE_AUTO_REJOIN_POLL_INTERVAL_MS;
@@ -1833,13 +1844,13 @@ static bool zigbee_wait_stack_ready_after_failed_direct_rejoin(uint32_t max_wait
     while (waited_ms < max_wait_ms) {
         if (rejoin_successful || zigbee_is_joined_with_valid_network()) {
             if (!rejoin_successful) {
-                ESP_LOGI(TAG, "        → Join nach INITIALIZATION-Timeout (nach %lu ms)", (unsigned long)waited_ms);
+                ESP_LOGD(TAG, "        → Join nach INITIALIZATION-Timeout (nach %lu ms)", (unsigned long)waited_ms);
                 zigbee_update_rtc_from_stack();
                 rejoin_successful = true;
                 zigbee_push_cluster_vals_to_stack_if_joined();
                 zigbee_maybe_send_device_annce_on_rejoin("direct_rejoin_post_fail");
                 if (zigbee_config_save_to_nvs(NULL)) {
-                    ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (Join nach INIT-Timeout)");
+                    ESP_LOGD(TAG, "        → ZigBee-Config in NVS gespeichert (Join nach INIT-Timeout)");
                 }
             }
             if (elapsed_ms_out) {
@@ -1848,7 +1859,7 @@ static bool zigbee_wait_stack_ready_after_failed_direct_rejoin(uint32_t max_wait
             return true;
         }
         if (device_rebooted_during_rejoin) {
-            ESP_LOGI(TAG, "        → DEVICE_REBOOT nach INITIALIZATION-Timeout (nach %lu ms)",
+            ESP_LOGD(TAG, "        → DEVICE_REBOOT nach INITIALIZATION-Timeout (nach %lu ms)",
                      (unsigned long)waited_ms);
             const uint32_t reboot_poll_ms = (max_wait_ms > waited_ms) ? (max_wait_ms - waited_ms) : poll_ms;
             uint32_t poll_elapsed_ms = 0;
@@ -1885,7 +1896,7 @@ static bool zigbee_try_handle_reboot_in_steering_wait(bool for_pairing,
     if (!device_rebooted_during_rejoin) {
         return false;
     }
-    ESP_LOGI(TAG, "        → DEVICE_REBOOT waehrend Steering erkannt → warte auf internen Rejoin...");
+    ESP_LOGD(TAG, "        → DEVICE_REBOOT waehrend Steering erkannt → warte auf internen Rejoin...");
     uint32_t poll_elapsed_ms = 0;
     if (zigbee_poll_joined_after_reboot(ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS, for_pairing,
                                         &poll_elapsed_ms)) {
@@ -1920,15 +1931,15 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
     zigbee_pairing_in_progress = false;
 
     // Status-Prüfung: factory-new? joined?
-    ESP_LOGI(TAG, "transfer_zigbee_ensure_joined: Prüfe ZigBee-Status...");
+    ESP_LOGD(TAG, "transfer_zigbee_ensure_joined: Prüfe ZigBee-Status...");
     bool is_factory_new = esp_zb_bdb_is_factory_new();
     zigbee_network_info_t net_info = zigbee_read_network_info_locked();
     bool is_joined = net_info.joined;
     
-    ESP_LOGI(TAG, "        → Factory-New: %s", is_factory_new ? "ja" : "nein");
-    ESP_LOGI(TAG, "        → Joined: %s", is_joined ? "ja" : "nein");
-    ESP_LOGI(TAG, "        → zigbee_rtc.joined: %s", zigbee_rtc.joined ? "true" : "false");
-    ESP_LOGI(TAG, "        → zigbee_rtc.network_addr: 0x%04X", zigbee_rtc.network_addr);
+    ESP_LOGD(TAG, "        → Factory-New: %s", is_factory_new ? "ja" : "nein");
+    ESP_LOGD(TAG, "        → Joined: %s", is_joined ? "ja" : "nein");
+    ESP_LOGD(TAG, "        → zigbee_rtc.joined: %s", zigbee_rtc.joined ? "true" : "false");
+    ESP_LOGD(TAG, "        → zigbee_rtc.network_addr: 0x%04X", zigbee_rtc.network_addr);
     
     // WICHTIG: Prüfe auch zigbee_rtc.joined (aus NVS/RTC-RAM)
     // Wenn zigbee_rtc.joined=true, aber esp_zb_bdb_dev_joined()=false, bedeutet das:
@@ -1937,8 +1948,8 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
     // - Device muss Rejoin machen, aber wir wissen, dass es bereits gepaart war
     // In diesem Fall sollten wir NICHT versuchen, Pairing zu machen, sondern Rejoin
     if (zigbee_rtc.joined && ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr)) {
-        ESP_LOGI(TAG, "        → Device war bereits gepaart (Config in NVS/RTC-RAM vorhanden)");
-        ESP_LOGI(TAG, "        → Passive Auto-Rejoin (max %d ms), danach ZDO-Rejoin oder Steering",
+        ESP_LOGD(TAG, "        → Device war bereits gepaart (Config in NVS/RTC-RAM vorhanden)");
+        ESP_LOGD(TAG, "        → Passive Auto-Rejoin (max %d ms), danach ZDO-Rejoin oder Steering",
                  ZIGBEE_AUTO_REJOIN_PASSIVE_WAIT_MS);
         const uint32_t passive_wait_ms = ZIGBEE_AUTO_REJOIN_PASSIVE_WAIT_MS;
         const uint32_t poll_interval_ms = ZIGBEE_AUTO_REJOIN_POLL_INTERVAL_MS;
@@ -1952,18 +1963,18 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
         }
         
         if (is_joined) {
-            ESP_LOGI(TAG, "        → Passiver Auto-Rejoin erfolgreich (nach %d ms)", elapsed_ms);
+            ESP_LOGD(TAG, "        → Passiver Auto-Rejoin erfolgreich (nach %d ms)", elapsed_ms);
             uint16_t prev_addr = zigbee_rtc.network_addr;
             uint16_t prev_pan = zigbee_rtc.pan_id;
             uint8_t prev_ch = zigbee_rtc.channel;
             zigbee_update_rtc_from_stack();
             if (zigbee_rtc.network_addr != prev_addr || zigbee_rtc.pan_id != prev_pan
                     || zigbee_rtc.channel != prev_ch) {
-                ESP_LOGI(TAG, "        → Netzwerk geaendert (Addr 0x%04X -> 0x%04X, PAN 0x%04X, Ch %u)",
+                ESP_LOGD(TAG, "        → Netzwerk geaendert (Addr 0x%04X -> 0x%04X, PAN 0x%04X, Ch %u)",
                          prev_addr, zigbee_rtc.network_addr, zigbee_rtc.pan_id,
                          (unsigned)zigbee_rtc.channel);
                 if (zigbee_config_save_to_nvs(NULL)) {
-                    ESP_LOGI(TAG, "        → ZigBee-Config in NVS gespeichert (passiver Rejoin)");
+                    ESP_LOGD(TAG, "        → ZigBee-Config in NVS gespeichert (passiver Rejoin)");
                 }
             }
             // Rejoin: Interview-Flag nur verwerfen wenn kein erstes Pairing in diesem Zyklus
@@ -1971,6 +1982,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             if (!pairing_successful) {
                 first_pairing_after_join = false;
             }
+            ESP_LOGI(TAG, "ZigBee Rejoin OK (%d ms, addr=0x%04X)", elapsed_ms, zigbee_rtc.network_addr);
             return TRANSFER_STATUS_OK;
         } else {
             ESP_LOGW(TAG, "        → Passiver Auto-Rejoin nicht erfolgreich (nach %d ms) → ZDO-Rejoin/Steering",
@@ -1981,7 +1993,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
     
     // Wenn bereits joined, nichts zu tun
     if (is_joined) {
-        ESP_LOGI(TAG, "        → Device bereits joined → Kein Pairing/Rejoin nötig");
+        ESP_LOGD(TAG, "        → Device bereits joined → Kein Pairing/Rejoin nötig");
         
         // WICHTIG: Synchronisiere zigbee_rtc mit Stack-Status, falls nicht synchron
         // Dies kann passieren, wenn DEVICE_ANNCE Signal nicht empfangen wurde (z.B. nach fehlgeschlagener configure)
@@ -1996,18 +2008,18 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             // Wenn zigbee_rtc.joined = false war, war es definitiv ein erstes Pairing
             bool is_first_pairing = was_not_joined && !is_factory_new;
             if (is_first_pairing) {
-                ESP_LOGI(TAG, "        → Erstes Pairing erkannt (Device war factory-new und hat gerade gejoint)");
+                ESP_LOGD(TAG, "        → Erstes Pairing erkannt (Device war factory-new und hat gerade gejoint)");
             }
             
             zigbee_update_rtc_from_stack();
             
             // RTC war leer, Stack joined → Interview-Fenster in send_data
-            ESP_LOGI(TAG, "        → Device hat gerade gejoint → first_pairing_after_join (Interview-Wartezeit in send_data)");
+            ESP_LOGD(TAG, "        → Device hat gerade gejoint → first_pairing_after_join (Interview-Wartezeit in send_data)");
             first_pairing_after_join = true;
             
             // In NVS speichern
             if (zigbee_config_save_to_nvs(NULL)) {
-                ESP_LOGI(TAG, "        → zigbee_rtc erfolgreich synchronisiert und in NVS gespeichert");
+                ESP_LOGD(TAG, "        → zigbee_rtc erfolgreich synchronisiert und in NVS gespeichert");
             } else {
                 ESP_LOGE(TAG, "        → FEHLER: zigbee_rtc synchronisiert, aber konnte nicht in NVS gespeichert werden!");
             }
@@ -2015,7 +2027,8 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             // RTC synchron, kein Pairing in diesem Zyklus – veraltetes Interview-Flag verwerfen
             first_pairing_after_join = false;
         }
-        
+
+        ESP_LOGI(TAG, "ZigBee joined (addr=0x%04X)", zigbee_rtc.network_addr);
         return TRANSFER_STATUS_OK;
     }
     
@@ -2037,7 +2050,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
     
     if (is_factory_new) {
         // Pairing-Logik mit Retry-Mechanismus
-        ESP_LOGI(TAG, "        → Device ist factory-new → Starte Pairing...");
+        ESP_LOGD(TAG, "        → Device ist factory-new → Starte Pairing...");
         zigbee_pairing_in_progress = true;
         // rx_on_when_idle wird in ensure_joined vor Steering temporaer aktiviert
         
@@ -2051,7 +2064,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             steering_successful = false;
             
             if (steering_attempt > 0) {
-                ESP_LOGI(TAG, "        → Retry-Versuch %d/%d (nach %d ms Wartezeit)...", 
+                ESP_LOGD(TAG, "        → Retry-Versuch %d/%d (nach %d ms Wartezeit)...", 
                          steering_attempt, steering_retry_count, steering_retry_timer_ms);
                 vTaskDelay(pdMS_TO_TICKS(steering_retry_timer_ms));
                 elapsed_ms += steering_retry_timer_ms;
@@ -2063,14 +2076,14 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             // um sicherzustellen, dass es wirklich aktiv ist (Timing-Sicherheit)
             esp_zb_set_rx_on_when_idle(true);
             bool rx_on_when_idle_status = esp_zb_get_rx_on_when_idle();
-            ESP_LOGI(TAG, "        → RX-on-when-idle vor Network Steering aktiviert (Status: %s)", 
+            ESP_LOGD(TAG, "        → RX-on-when-idle vor Network Steering aktiviert (Status: %s)", 
                      rx_on_when_idle_status ? "true" : "false");
             
             // WICHTIG: Kurze Verzögerung nach rx_on_when_idle, damit der Stack Zeit hat, es zu aktivieren
             // Dies reduziert "Have not got nwk key - authentication failed" Fehler beim ersten Pairing-Versuch
             const uint32_t rx_on_when_idle_stabilize_ms = 100;  // 100ms Verzögerung
             vTaskDelay(pdMS_TO_TICKS(rx_on_when_idle_stabilize_ms));
-            ESP_LOGI(TAG, "        → RX-on-when-idle Stabilisierung: %d ms", rx_on_when_idle_stabilize_ms);
+            ESP_LOGD(TAG, "        → RX-on-when-idle Stabilisierung: %d ms", rx_on_when_idle_stabilize_ms);
             
             esp_err_t comm_err = esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
             if (comm_err != ESP_OK) {
@@ -2080,7 +2093,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 continue;  // Nächster Retry-Versuch
             }
             
-            ESP_LOGI(TAG, "        → Network Steering gestartet (Versuch %d/%d, Timeout: %d ms)", 
+            ESP_LOGD(TAG, "        → Network Steering gestartet (Versuch %d/%d, Timeout: %d ms)", 
                      steering_attempt + 1, steering_retry_count , pairing_timeout_ms);
             cycle_start_ms = elapsed_ms;
             
@@ -2100,7 +2113,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 vTaskDelay(pdMS_TO_TICKS(steering_poll_interval_ms));
                 elapsed_ms += steering_poll_interval_ms;
                 if (steering_failed) {
-                    ESP_LOGI(TAG, "        → Network Steering fehlgeschlagen erkannt (nach %d ms) → Breche sofort ab", 
+                    ESP_LOGD(TAG, "        → Network Steering fehlgeschlagen erkannt (nach %d ms) → Breche sofort ab", 
                              elapsed_ms - steering_wait_start_ms);
                     break;
                 }
@@ -2112,7 +2125,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             }
             
             if (steering_successful) {
-                ESP_LOGI(TAG, "        → STEERING OK - warte %d ms (Stack-Stabilisierung vor Join-Pruefung)",
+                ESP_LOGD(TAG, "        → STEERING OK - warte %d ms (Stack-Stabilisierung vor Join-Pruefung)",
                          ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS);
                 vTaskDelay(pdMS_TO_TICKS(ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS));
                 elapsed_ms += ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS;
@@ -2135,7 +2148,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 if (steering_successful && !direct_check_started) {
                     direct_check_started = true;
                     direct_check_start_ms = elapsed_ms;
-                    ESP_LOGI(TAG, "        → Warte %d ms vor direkter Join-Prüfung (State-Update-Zeit)...", direct_check_delay_ms);
+                    ESP_LOGD(TAG, "        → Warte %d ms vor direkter Join-Prüfung (State-Update-Zeit)...", direct_check_delay_ms);
                 }
                 
                 // Direkte Prüfung nur nach Verzögerung und wenn Network Steering erfolgreich war
@@ -2145,10 +2158,10 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                     
                     if (join_info.joined && !pairing_successful && has_valid_network_addr) {
                         // Join OK, pairing_successful noch nicht (z. B. ANNCE blockiert durch alte RTC-Addr)
-                        ESP_LOGI(TAG, "        → Device ist joined (direkte Prüfung), aber DEVICE_ANNCE Signal kam nicht");
-                        ESP_LOGI(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X",
+                        ESP_LOGD(TAG, "        → Device ist joined (direkte Prüfung), aber DEVICE_ANNCE Signal kam nicht");
+                        ESP_LOGD(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X",
                                  join_info.network_addr, join_info.pan_id);
-                        ESP_LOGI(TAG, "        → Setze Pairing-Status manuell...");
+                        ESP_LOGD(TAG, "        → Setze Pairing-Status manuell...");
                         
                         // Status manuell setzen (wie im DEVICE_ANNCE Handler)
                         pairing_successful = true;
@@ -2159,7 +2172,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                         zigbee_send_device_annce_if_needed("pairing_direct_check");
                         
                         if (zigbee_config_save_to_nvs(NULL)) {
-                            ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (manuell nach direkter Prüfung)");
+                            ESP_LOGD(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (manuell nach direkter Prüfung)");
                         } else {
                             ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config konnte nicht in NVS gespeichert werden!");
                         }
@@ -2181,7 +2194,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             }
             
             if (pairing_successful) {
-                ESP_LOGI(TAG, "        → Pairing erfolgreich (Versuch %d, nach %d ms)", 
+                ESP_LOGD(TAG, "        → Pairing erfolgreich (Versuch %d, nach %d ms)", 
                          steering_attempt + 1, elapsed_ms - cycle_start_ms);
                 pairing_completed = true;
                 break;
@@ -2207,10 +2220,10 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             zigbee_network_info_t join_info = zigbee_read_network_info_locked();
             
             if (join_info.joined && zigbee_network_info_valid(&join_info)) {
-                ESP_LOGI(TAG, "        → WICHTIG: Device ist jetzt doch joined (zwischenzeitlich erfolgreich gejoint)!");
-                ESP_LOGI(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X",
+                ESP_LOGD(TAG, "        → WICHTIG: Device ist jetzt doch joined (zwischenzeitlich erfolgreich gejoint)!");
+                ESP_LOGD(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X",
                          join_info.network_addr, join_info.pan_id);
-                ESP_LOGI(TAG, "        → Setze Pairing-Status nachträglich...");
+                ESP_LOGD(TAG, "        → Setze Pairing-Status nachträglich...");
                 
                 // Status nachträglich setzen (wie im DEVICE_ANNCE Handler)
                 pairing_successful = true;
@@ -2220,7 +2233,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 zigbee_send_device_annce_if_needed("pairing_timeout_fallback");
                 
                 if (zigbee_config_save_to_nvs(NULL)) {
-                    ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (nachträglich nach fehlgeschlagenem Pairing)");
+                    ESP_LOGD(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (nachträglich nach fehlgeschlagenem Pairing)");
                 } else {
                     ESP_LOGE(TAG, "        → FEHLER: ZigBee-Config konnte nicht in NVS gespeichert werden!");
                 }
@@ -2236,7 +2249,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
         }
     } else {
         // Rejoin: zuerst ZDO-Rejoin (kein Scan), bei Fehler Network Steering
-        ESP_LOGI(TAG, "        → Device ist nicht factory-new, aber nicht joined → Starte Rejoin...");
+        ESP_LOGD(TAG, "        → Device ist nicht factory-new, aber nicht joined → Starte Rejoin...");
         zigbee_rejoin_in_progress = true;
 
         uint32_t steering_attempt = 0;
@@ -2250,7 +2263,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             device_rebooted_during_rejoin = false;
             
             if (steering_attempt > 0) {
-                ESP_LOGI(TAG, "        → Retry-Versuch %d/%d (nach %d ms Wartezeit)...", 
+                ESP_LOGD(TAG, "        → Retry-Versuch %d/%d (nach %d ms Wartezeit)...", 
                          steering_attempt, steering_retry_count, steering_retry_timer_ms);
                 vTaskDelay(pdMS_TO_TICKS(steering_retry_timer_ms));
                 elapsed_ms += steering_retry_timer_ms;
@@ -2259,7 +2272,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             if (ZIGBEE_RTC_HAS_DIRECT_REJOIN_CTX()) {
                 uint32_t direct_elapsed_ms = 0;
                 if (zigbee_try_direct_bdb_rejoin(ZIGBEE_DIRECT_REJOIN_TIMEOUT_MS, &direct_elapsed_ms)) {
-                    ESP_LOGI(TAG, "        → Rejoin erfolgreich (direkter Rejoin, %lu ms)",
+                    ESP_LOGD(TAG, "        → Rejoin erfolgreich (direkter Rejoin, %lu ms)",
                              (unsigned long)direct_elapsed_ms);
                     zigbee_finalize_rejoin_success();
                     rejoin_completed = true;
@@ -2273,7 +2286,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 uint32_t post_fail_wait_ms = 0;
                 if (zigbee_wait_stack_ready_after_failed_direct_rejoin(
                         ZIGBEE_DIRECT_REJOIN_POST_FAIL_WAIT_MS, &post_fail_wait_ms)) {
-                    ESP_LOGI(TAG, "        → Rejoin erfolgreich nach INITIALIZATION-Timeout (+%lu ms)",
+                    ESP_LOGD(TAG, "        → Rejoin erfolgreich nach INITIALIZATION-Timeout (+%lu ms)",
                              (unsigned long)post_fail_wait_ms);
                     zigbee_finalize_rejoin_success();
                     rejoin_completed = true;
@@ -2286,7 +2299,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                     break;
                 }
             } else {
-                ESP_LOGI(TAG, "        → Kein gueltiger RTC-Kontext (Ch/PAN) → Network Steering");
+                ESP_LOGD(TAG, "        → Kein gueltiger RTC-Kontext (Ch/PAN) → Network Steering");
             }
 
             zigbee_enable_rx_before_steering();
@@ -2298,7 +2311,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 continue;  // Nächster Retry-Versuch
             }
             
-            ESP_LOGI(TAG, "        → Network Steering gestartet (Rejoin, Versuch %d/%d, Timeout: %d ms)", 
+            ESP_LOGD(TAG, "        → Network Steering gestartet (Rejoin, Versuch %d/%d, Timeout: %d ms)", 
                      steering_attempt + 1, steering_retry_count , rejoin_timeout_ms);
             cycle_start_ms = elapsed_ms;
             
@@ -2318,7 +2331,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 vTaskDelay(pdMS_TO_TICKS(steering_poll_interval_ms));
                 elapsed_ms += steering_poll_interval_ms;
                 if (steering_failed) {
-                    ESP_LOGI(TAG, "        → Network Steering fehlgeschlagen erkannt (nach %d ms) → Breche sofort ab", 
+                    ESP_LOGD(TAG, "        → Network Steering fehlgeschlagen erkannt (nach %d ms) → Breche sofort ab", 
                              elapsed_ms - steering_wait_start_ms);
                     break;
                 }
@@ -2332,7 +2345,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             }
             
             if (steering_successful) {
-                ESP_LOGI(TAG, "        → STEERING OK - warte %d ms (Stack-Stabilisierung vor Join-Pruefung)",
+                ESP_LOGD(TAG, "        → STEERING OK - warte %d ms (Stack-Stabilisierung vor Join-Pruefung)",
                          ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS);
                 vTaskDelay(pdMS_TO_TICKS(ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS));
                 elapsed_ms += ZIGBEE_STEERING_TO_ASSOCIATION_DELAY_MS;
@@ -2358,7 +2371,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 // wurde der Stack neu initialisiert und startet automatisch einen Rejoin
                 // In diesem Fall sollten wir auf den automatischen Rejoin warten (ähnlich wie beim automatischen Rejoin am Anfang)
                 if (device_rebooted_during_rejoin) {
-                    ESP_LOGI(TAG, "        → DEVICE_REBOOT waehrend Rejoin erkannt → Poll Join...");
+                    ESP_LOGD(TAG, "        → DEVICE_REBOOT waehrend Rejoin erkannt → Poll Join...");
                     uint32_t poll_elapsed_ms = 0;
                     if (zigbee_poll_joined_after_reboot(ZIGBEE_AUTO_REJOIN_WAIT_TIMEOUT_MS, false,
                                                         &poll_elapsed_ms)) {
@@ -2393,7 +2406,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 if (steering_successful && !direct_check_started) {
                     direct_check_started = true;
                     direct_check_start_ms = elapsed_ms;
-                    ESP_LOGI(TAG, "        → Warte %d ms vor direkter Rejoin-Prüfung (State-Update-Zeit)...", direct_check_delay_ms);
+                    ESP_LOGD(TAG, "        → Warte %d ms vor direkter Rejoin-Prüfung (State-Update-Zeit)...", direct_check_delay_ms);
                 }
                 
                 // Direkte Prüfung nur nach Verzögerung und wenn Network Steering erfolgreich war
@@ -2408,7 +2421,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                     if (!direct_check_started) {
                         direct_check_started = true;
                         direct_check_start_ms = elapsed_ms;
-                        ESP_LOGI(TAG, "        → Fallback: Prüfe Rejoin-Status (Network Steering nicht erfolgreich, aber %d ms vergangen)", 
+                        ESP_LOGD(TAG, "        → Fallback: Prüfe Rejoin-Status (Network Steering nicht erfolgreich, aber %d ms vergangen)", 
                                  elapsed_ms - cycle_start_ms);
                     }
                     if ((elapsed_ms - direct_check_start_ms) >= direct_check_delay_ms) {
@@ -2423,16 +2436,16 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                     if (join_info.joined && !rejoin_successful && has_valid_network) {
                         // Device ist rejoined, aber rejoin_successful wurde noch nicht gesetzt
                         // (DEVICE_ANNCE Signal kam nicht, aber Rejoin war erfolgreich)
-                        ESP_LOGI(TAG, "        → Device ist rejoined (direkte Prüfung), aber DEVICE_ANNCE Signal kam nicht");
-                        ESP_LOGI(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X",
+                        ESP_LOGD(TAG, "        → Device ist rejoined (direkte Prüfung), aber DEVICE_ANNCE Signal kam nicht");
+                        ESP_LOGD(TAG, "        → Network Address: 0x%04X, PAN ID: 0x%04X",
                                  join_info.network_addr, join_info.pan_id);
-                        ESP_LOGI(TAG, "        → Setze Rejoin-Status manuell...");
+                        ESP_LOGD(TAG, "        → Setze Rejoin-Status manuell...");
                         
                         rejoin_successful = true;
                         zigbee_update_rtc_from_stack();
                         zigbee_maybe_send_device_annce_on_rejoin("rejoin_direct_check");
                         if (zigbee_config_save_to_nvs(NULL)) {
-                            ESP_LOGI(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (manuell nach direkter Prüfung, Rejoin)");
+                            ESP_LOGD(TAG, "        → ZigBee-Config erfolgreich in NVS gespeichert (manuell nach direkter Prüfung, Rejoin)");
                         } else {
                             ESP_LOGW(TAG, "        → Warnung: ZigBee-Config konnte nicht in NVS gespeichert werden (Rejoin)");
                         }
@@ -2445,7 +2458,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
                 
                 // Logging alle 5 Sekunden, um Fortschritt zu zeigen (verhindert "hängt"-Eindruck)
                 if ((elapsed_ms - cycle_start_ms) % 5000 == 0 && (elapsed_ms - cycle_start_ms) > 0) {
-                    ESP_LOGI(TAG, "        → Warte auf Rejoin... (%d ms / %d ms Timeout, Versuch %d/%d)", 
+                    ESP_LOGD(TAG, "        → Warte auf Rejoin... (%d ms / %d ms Timeout, Versuch %d/%d)", 
                              elapsed_ms - cycle_start_ms, rejoin_timeout_ms, steering_attempt + 1, steering_retry_count + 1);
                 }
             }
@@ -2459,7 +2472,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             }
             
             if (rejoin_successful) {
-                ESP_LOGI(TAG, "        → Rejoin erfolgreich (Versuch %d, nach %d ms)", 
+                ESP_LOGD(TAG, "        → Rejoin erfolgreich (Versuch %d, nach %d ms)", 
                          steering_attempt + 1, elapsed_ms - cycle_start_ms);
                 zigbee_finalize_rejoin_success();
                 rejoin_completed = true;
@@ -2473,7 +2486,7 @@ transfer_status_t transfer_zigbee_ensure_joined(void) {
             steering_attempt++;
             // Weiter mit Retry, falls noch Versuche übrig sind (steering_attempt <= steering_retry_count)
             if (steering_attempt <= steering_retry_count) {
-                ESP_LOGI(TAG, "        → Retry-Versuch %d/%d wird gestartet...", steering_attempt, steering_retry_count);
+                ESP_LOGD(TAG, "        → Retry-Versuch %d/%d wird gestartet...", steering_attempt, steering_retry_count);
                 continue;  // Nächster Retry-Versuch
             } else {
                 // Keine weiteren Versuche mehr
@@ -2549,130 +2562,88 @@ transfer_status_t transfer_zigbee_send_data(const transfer_data_t* data) {
         ESP_LOGE(TAG, "transfer_zigbee_send_data: data ist NULL");
         return TRANSFER_STATUS_UNKNOWN_ERROR;
     }
-    
-    ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "ZigBee-Datenübertragung");
-    ESP_LOGI(TAG, "========================================");
-    
-    // [1/4] Warte auf Stack-Initialisierung (mit Timeout)
+
+    uint32_t init_wait_ms = 0;
     if (!zigbee_initialized) {
-        ESP_LOGI(TAG, "  [1/4] Warte auf ZigBee-Stack Initialisierung...");
         const uint32_t timeout_ms = ZIGBEE_INIT_TIMEOUT_MS;
         const uint32_t poll_interval_ms = ZIGBEE_INIT_POLL_INTERVAL_MS;
         uint32_t elapsed_ms = 0;
-        
+
         while (!zigbee_initialized && elapsed_ms < timeout_ms) {
             vTaskDelay(pdMS_TO_TICKS(poll_interval_ms));
             elapsed_ms += poll_interval_ms;
         }
-        
+
         if (!zigbee_initialized) {
-            ESP_LOGE(TAG, "        → Timeout: ZigBee-Stack nicht initialisiert (nach %d ms)", timeout_ms);
-        return TRANSFER_STATUS_INIT_FAILED;
+            ESP_LOGE(TAG, "ZigBee-Stack nicht initialisiert (Timeout %d ms)", timeout_ms);
+            return TRANSFER_STATUS_INIT_FAILED;
+        }
+        init_wait_ms = elapsed_ms;
     }
-    
-        ESP_LOGI(TAG, "        → ZigBee-Stack initialisiert (nach %d ms)", elapsed_ms);
-    } else {
-        ESP_LOGI(TAG, "  [1/4] ZigBee-Stack bereits initialisiert");
-    }
-    
-    // Cluster-RAM: idempotent (auch in transfer.cpp vor init); einmal pro send_data
+
     transfer_zigbee_prepare_cluster_attrs(data);
 
-    // [2/4] Stelle sicher, dass Device mit Netzwerk verbunden ist (Pairing/Rejoin)
-    ESP_LOGI(TAG, "  [2/4] Stelle sicher, dass Device mit ZigBee-Netzwerk verbunden ist...");
-    
-    // WICHTIG: Prüfe, ob Device bereits joined war (vor ensure_joined) - nur für Logging
-    bool was_already_joined_in_rtc = zigbee_rtc.joined && ZIGBEE_IS_NETWORK_ADDR_VALID(zigbee_rtc.network_addr);
-    bool was_joined_in_stack_before = zigbee_read_network_info_locked().joined;
-    
     transfer_status_t join_status = transfer_zigbee_ensure_joined();
     if (join_status != TRANSFER_STATUS_OK) {
-        ESP_LOGE(TAG, "        → Fehler beim Verbinden mit ZigBee-Netzwerk");
-        ESP_LOGW(TAG, "        → Zeit-Synchronisation wird übersprungen (Device nicht verbunden)");
+        ESP_LOGE(TAG, "ZigBee join fehlgeschlagen");
         return join_status;
     }
-    ESP_LOGI(TAG, "        → Device ist mit ZigBee-Netzwerk verbunden");
     zigbee_refresh_parent_link_diagnostics(false);
 
-    // Logging: Art der Verbindung (für Diagnose)
-    bool rejoin_just_happened = was_already_joined_in_rtc && !was_joined_in_stack_before
-        && zigbee_read_network_info_locked().joined;
-    if (rejoin_just_happened) {
-        ESP_LOGI(TAG, "        → Rejoin erkannt → Stack sendet Reports automatisch bei Wertänderung");
-    } else if (was_already_joined_in_rtc && was_joined_in_stack_before) {
-        ESP_LOGI(TAG, "        → Device war bereits verbunden → Stack sendet Reports automatisch");
-    } else if (first_pairing_after_join) {
-        ESP_LOGI(TAG, "        → Erstes Pairing erkannt → Stack sendet Reports nach Z2M-Configure");
-    } else {
-        ESP_LOGI(TAG, "        → Normale Verbindung → Stack sendet Reports automatisch");
-    }
+    const bool explicit_battery = first_pairing_after_join
+        || (ZIGBEE_EXPLICIT_BATTERY_REPORT_ON_REJOIN != 0);
+    bool rep_summ = false;
+    bool rep_pct = false;
+    bool rep_v = false;
+    bool rep_alarm = false;
 
-    // [3/4] Cluster-RAM (prepare_cluster_attrs) + explizite Reports – kein set_attribute_val (TZ-292)
-    ESP_LOGI(TAG, "  [3/4] Sende Daten:");
-    ESP_LOGI(TAG, "        → pulse_counter: %lu", data->pulse_counter);
-    ESP_LOGI(TAG, "        → battery_percent: %.1f%%", data->battery_percent);
-    ESP_LOGI(TAG, "        → battery_voltage: %.2fV", data->battery_voltage);
-    ESP_LOGI(TAG, "        → firmware_version: %s", data->firmware_version ? data->firmware_version : "N/A");
-    ESP_LOGI(TAG, "        → CurrentSummationDelivered (Cluster-RAM): %lu (low: %lu, high: %u)",
-             data->pulse_counter, current_summation_delivered.low, current_summation_delivered.high);
-
-    {
-        const bool explicit_battery = first_pairing_after_join
-            || (ZIGBEE_EXPLICIT_BATTERY_REPORT_ON_REJOIN != 0);
-        bool rep_summ = false;
-        bool rep_pct = false;
-        bool rep_v = false;
-        bool rep_alarm = false;
-
-        esp_zb_lock_acquire(portMAX_DELAY);
-        rep_summ = send_attribute_report_locked(
-            ZIGBEE_CLUSTER_METERING, ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED);
-        if (explicit_battery) {
-            rep_pct = send_attribute_report_locked(
-                ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_PERCENT);
-            if (data->battery_voltage > 0.0f) {
-                rep_v = send_attribute_report_locked(
-                    ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_VOLTAGE);
-                rep_alarm = send_attribute_report_locked(
-                    ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_ALARM_STATE);
-            }
+    esp_zb_lock_acquire(portMAX_DELAY);
+    rep_summ = send_attribute_report_locked(
+        ZIGBEE_CLUSTER_METERING, ZIGBEE_ATTR_METERING_CURRENT_SUMMATION_DELIVERED);
+    if (explicit_battery) {
+        rep_pct = send_attribute_report_locked(
+            ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_PERCENT);
+        if (data->battery_voltage > 0.0f) {
+            rep_v = send_attribute_report_locked(
+                ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_VOLTAGE);
+            rep_alarm = send_attribute_report_locked(
+                ZIGBEE_CLUSTER_BATTERY, ZIGBEE_ATTR_BATTERY_ALARM_STATE);
         }
-        esp_zb_lock_release();
-
-        ESP_LOGI(TAG, "        → Explizite Reports: summ=%s pct=%s v=%s alarm=%s",
-                 rep_summ ? "ok" : "fail",
-                 explicit_battery ? (rep_pct ? "ok" : "fail") : "skip",
-                 (explicit_battery && data->battery_voltage > 0.0f) ? (rep_v ? "ok" : "fail") : "skip",
-                 (explicit_battery && data->battery_voltage > 0.0f) ? (rep_alarm ? "ok" : "fail") : "skip");
     }
-    
-    // [3.5/4] Erstes Pairing: DEVICE_ANNCE + Post-Announce-Fenster (statt fix 90 s)
+    esp_zb_lock_release();
+
+    ESP_LOGI(TAG, "ZigBee TX: pulse=%lu batt=%.0f%% init_wait=%lums",
+             (unsigned long)data->pulse_counter, data->battery_percent, (unsigned long)init_wait_ms);
+    ESP_LOGI(TAG, "Reports summ=%s pct=%s v=%s alarm=%s",
+             rep_summ ? "ok" : "fail",
+             explicit_battery ? (rep_pct ? "ok" : "fail") : "skip",
+             (explicit_battery && data->battery_voltage > 0.0f) ? (rep_v ? "ok" : "fail") : "skip",
+             (explicit_battery && data->battery_voltage > 0.0f) ? (rep_alarm ? "ok" : "fail") : "skip");
+
+    if (!rep_summ) {
+        ESP_LOGW(TAG, "ZigBee metering report fehlgeschlagen");
+    }
+
     if (first_pairing_after_join) {
         zigbee_wait_for_first_pairing_interview();
         first_pairing_after_join = false;
     }
-    
-    // [4/4] Zeit-Synchronisation mit Coordinator
-    ESP_LOGI(TAG, "  [4/4] Synchronisiere Zeit mit Coordinator...");
+
+    const char *time_sync_result = "skip";
     if (transfer_zigbee_sync_time()) {
-        ESP_LOGI(TAG, "        → Zeit-Synchronisation Request gesendet (max %d ms auf Response)",
-                 ZIGBEE_TIME_SYNC_WAIT_MS);
         zigbee_wait_for_time_sync_response();
         if (zigbee_time_sync_response_received) {
-            ESP_LOGI(TAG, "        → Zeit-Synchronisation erfolgreich");
+            time_sync_result = "ok";
         } else {
-            ESP_LOGW(TAG, "        → Zeit-Synchronisation: keine Antwort innerhalb %d ms (nicht kritisch)",
-                     ZIGBEE_TIME_SYNC_WAIT_MS);
+            time_sync_result = "timeout";
+            ESP_LOGW(TAG, "ZigBee Zeit-Sync: keine Antwort innerhalb %d ms", ZIGBEE_TIME_SYNC_WAIT_MS);
         }
     } else {
-        ESP_LOGW(TAG, "        → Zeit-Synchronisation fehlgeschlagen (Request nicht gesendet, nicht kritisch)");
+        time_sync_result = "fail";
+        ESP_LOGW(TAG, "ZigBee Zeit-Sync: Request nicht gesendet");
     }
-    
-    ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "ZigBee-Datenübertragung abgeschlossen");
-    ESP_LOGI(TAG, "========================================");
-    
+    ESP_LOGI(TAG, "Zeit-Sync %s", time_sync_result);
+
     return TRANSFER_STATUS_OK;
 }
 
@@ -2687,7 +2658,7 @@ bool transfer_zigbee_sync_time(void) {
         return false;
     }
     
-    ESP_LOGI(TAG, "transfer_zigbee_sync_time: Hole Zeit vom Coordinator...");
+    ESP_LOGD(TAG, "transfer_zigbee_sync_time: Hole Zeit vom Coordinator...");
     zigbee_time_sync_response_received = false;
     
     // In einem zentralen Zigbee-Netz hat der Coordinator immer die
@@ -2724,9 +2695,9 @@ bool transfer_zigbee_sync_time(void) {
         return false;
     }
     
-    ESP_LOGI(TAG, "  → Read Attribute Request gesendet (Time Cluster, Seq: %u, Coordinator: 0x%04X)", 
+    ESP_LOGD(TAG, "  → Read Attribute Request gesendet (Time Cluster, Seq: %u, Coordinator: 0x%04X)", 
              seq_num, coordinator_addr);
-    ESP_LOGI(TAG, "  → Warte auf Antwort vom Coordinator...");
+    ESP_LOGD(TAG, "  → Warte auf Antwort vom Coordinator...");
     
     // Die Response wird asynchron über read_attr_resp_callback verarbeitet.
     
@@ -2773,23 +2744,20 @@ void transfer_zigbee_deinit(void) {
         zigbee_nvs_save_pending = false;
     }
     
-    ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "ZigBee beenden (Main Loop stoppen)");
-    ESP_LOGI(TAG, "========================================");
-    
+    ESP_LOGI(TAG, "ZigBee deinit");
+
     // ZigBee Main Loop Task beenden
     if (zigbee_main_task_handle != NULL) {
-        ESP_LOGI(TAG, "  [1/2] ZigBee Main Loop Task wird beendet...");
+        ESP_LOGD(TAG, "  [1/2] ZigBee Main Loop Task wird beendet...");
         zigbee_initialized = false;  // Signal zum Beenden
         vTaskDelay(pdMS_TO_TICKS(ZIGBEE_DEINIT_DELAY_MS));  // Warten, bis Task beendet ist
         zigbee_main_task_handle = NULL;
-        ESP_LOGI(TAG, "        → Task beendet");
+        ESP_LOGD(TAG, "        → Task beendet");
     }
     
     // Kein esp_zb_deinit() (nicht in esp-zigbee-lib) – nur Main-Loop-Task stoppen.
     // Nach Factory-Reset folgt ohnehin Reboot (Web-UX); danach frischer Stack-Start.
-    ESP_LOGI(TAG, "  [2/2] ZigBee Main Loop gestoppt (kein vollstaendiger Stack-Teardown)");
-    ESP_LOGI(TAG, "========================================");
+    ESP_LOGD(TAG, "  [2/2] ZigBee Main Loop gestoppt (kein vollstaendiger Stack-Teardown)");
 
     zigbee_initialized = false;
     stack_ready_signal_received = false;  // Flag zurücksetzen
@@ -2955,7 +2923,7 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode) {
     }
     
     factory_reset_in_progress = true;  // Flag setzen
-    ESP_LOGI(TAG, "ZigBee Factory-Reset wird durchgeführt...");
+    ESP_LOGD(TAG, "ZigBee Factory-Reset wird durchgeführt...");
     
     // 1. NVS-Namespace "zigbee_config" löschen
     nvs_handle_t nvs_handle;
@@ -2964,7 +2932,7 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode) {
         err = nvs_erase_all(nvs_handle);
         if (err == ESP_OK) {
             nvs_commit(nvs_handle);
-            ESP_LOGI(TAG, "  → NVS-Namespace '%s' gelöscht", ZIGBEE_NVS_NAMESPACE);
+            ESP_LOGD(TAG, "  → NVS-Namespace '%s' gelöscht", ZIGBEE_NVS_NAMESPACE);
         }
         nvs_close(nvs_handle);
     }
@@ -2974,7 +2942,7 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode) {
     if (zb_storage != NULL) {
         err = esp_partition_erase_range(zb_storage, 0, zb_storage->size);
         if (err == ESP_OK) {
-            ESP_LOGI(TAG, "  → Partition 'zb_storage' gelöscht");
+            ESP_LOGD(TAG, "  → Partition 'zb_storage' gelöscht");
         } else {
             ESP_LOGW(TAG, "  → Fehler beim Löschen von 'zb_storage': %s", esp_err_to_name(err));
         }
@@ -2985,7 +2953,7 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode) {
     if (zb_fct != NULL) {
         err = esp_partition_erase_range(zb_fct, 0, zb_fct->size);
         if (err == ESP_OK) {
-            ESP_LOGI(TAG, "  → Partition 'zb_fct' gelöscht");
+            ESP_LOGD(TAG, "  → Partition 'zb_fct' gelöscht");
         } else {
             ESP_LOGW(TAG, "  → Fehler beim Löschen von 'zb_fct': %s", esp_err_to_name(err));
         }
@@ -3002,20 +2970,20 @@ bool transfer_zigbee_factory_reset(const char* transfer_mode) {
     zigbee_nvs_save_pending = false;
 
     if (zigbee_config_save_to_nvs(NULL)) {
-        ESP_LOGI(TAG, "  → Zurueckgesetzte zigbee_rtc in NVS gespeichert");
+        ESP_LOGD(TAG, "  → Zurueckgesetzte zigbee_rtc in NVS gespeichert");
     } else {
         ESP_LOGW(TAG, "  → Zurueckgesetzte zigbee_rtc konnte nicht in NVS gespeichert werden");
     }
     
-    ESP_LOGI(TAG, "  → ZigBee Factory-Reset abgeschlossen");
+    ESP_LOGD(TAG, "  → ZigBee Factory-Reset abgeschlossen");
     
     // 5. ZigBee Main Loop stoppen (kein esp_zb_deinit; Reboot ueber Web-UX reicht)
     if (zigbee_initialized) {
-        ESP_LOGI(TAG, "  → ZigBee Main Loop wird gestoppt...");
+        ESP_LOGD(TAG, "  → ZigBee Main Loop wird gestoppt...");
         transfer_zigbee_deinit();
-        ESP_LOGI(TAG, "  → Main Loop gestoppt (Stack-Reset erfolgt beim Geraete-Reboot)");
+        ESP_LOGD(TAG, "  → Main Loop gestoppt (Stack-Reset erfolgt beim Geraete-Reboot)");
     } else {
-        ESP_LOGI(TAG, "  → ZigBee-Stack war nicht initialisiert");
+        ESP_LOGD(TAG, "  → ZigBee-Stack war nicht initialisiert");
     }
     
     factory_reset_in_progress = false;  // Flag zurücksetzen

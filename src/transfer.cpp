@@ -32,7 +32,7 @@ bool transfer_init(const char* transfer_mode) {
     current_transfer_mode = transfer_mode;
     transfer_initialized = true;
     
-    ESP_LOGI(TAG, "transfer_init: Transfer-Modus initialisiert: %s", transfer_mode);
+    ESP_LOGD(TAG, "transfer_init: Transfer-Modus initialisiert: %s", transfer_mode);
     
     // Mode-spezifische Initialisierung wird in transfer_data() gemacht
     return true;
@@ -105,7 +105,7 @@ void transfer_deinit(void) {
         transfer_mqtt_deinit();
     }
     
-    ESP_LOGI(TAG, "transfer_deinit: Transfer-Modus deinitialisiert (Mode: %s)", current_transfer_mode);
+    ESP_LOGD(TAG, "transfer_deinit: Transfer-Modus deinitialisiert (Mode: %s)", current_transfer_mode);
     current_transfer_mode = TRANSFER_MODE_NONE;
     transfer_initialized = false;
 }
