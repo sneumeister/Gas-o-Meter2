@@ -141,10 +141,9 @@
 // LP-Core Konfiguration
 // LP-Core Intervall = REED_MIN_PULSE_DURATION - 0.5 Sekunden (um sicherzustellen, dass Pulse erkannt werden)
 #define LP_CORE_INTERVAL_US   (REED_MIN_PULSE_DURATION_US - (500 * 1000ULL))  // 0.5 Sekunden = 500ms = 500000µs
-// Watchdog: muss länger sein als LP_CORE_INTERVAL_US (2,5 s HIGH-Pfad) plus Reserve
+// Erster Check erfolgt beim Task-Start; bei länger aktivem HP-Core danach alle 6 s.
+// Muss länger sein als LP_CORE_INTERVAL_US (2,5 s HIGH-Pfad) plus Reserve.
 #define LP_CORE_WATCHDOG_MS   6000
-// ulp_lp_core_running > diesen Wert = RTC-Müll (normaler Betrieb inkrementiert schnell, bleibt klein)
-#define LP_CORE_RUNNING_SANITY_MAX  1000000U
 
 // ============================================
 // Wake-up Konfiguration

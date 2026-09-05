@@ -190,6 +190,7 @@ RTC_DATA_ATTR config_rtc_t config_rtc = {
 RTC_DATA_ATTR int wakeupCount = 0;  // Zählt nur Deep-Sleep-Wake-ups (nicht ESP.restart())
 RTC_DATA_ATTR uint32_t timer_wake_count = 0;  // Nur Timer-Wake-ups (für Übertragungs-Intervall)
 RTC_DATA_ATTR bool isPowerOn = false;
+RTC_DATA_ATTR uint32_t last_lp_core_running = 0;  // Letzter vom Watchdog geprüfter LP-Heartbeat
 
 // Hostname-Zugriff für transfer_ble.cpp (BLE Device Name = Hostname)
 const char* transfer_ble_get_hostname(void) {
@@ -646,86 +647,49 @@ bool write_ulp_pulse_counter_to_ring_buffer() {
 
 
 // FreeRTOS Task für LP-Core Watchdog
-static bool lp_core_running_sane(uint32_t value)
-{
-    return value <= LP_CORE_RUNNING_SANITY_MAX;
-}
-
 void lp_core_watchdog_task(void *parameter) {
-    uint32_t last_lp_core_value = 0;
     uint8_t retry_count = 0;
     const uint8_t MAX_RETRIES = 3;
     
     ESP_LOGI(TAG, "LP-Core Watchdog Task gestartet");
-
-    uint32_t running = *(volatile uint32_t *)&ulp_lp_core_running;
-    if (!lp_core_running_sane(running)) {
-        ESP_LOGW(TAG, "ulp_lp_core_running=%lu (ungültig, kein LP-Start) → zurücksetzen",
-                 (unsigned long)running);
-        *(volatile uint32_t *)&ulp_lp_core_running = 0;
-    } else if (running > 0) {
-        ESP_LOGI(TAG, "LP-Core Watchdog: vorhandener Zähler %lu (Prüfung folgt)",
-                 (unsigned long)running);
-    }
     
-    // Initialisiere last_lp_core_value mit aktuellem Wert
-    last_lp_core_value = *(volatile uint32_t *)&ulp_lp_core_running;
-    
-    // Kombinierte Start- und Watchdog-Schleife
-    // Wenn ulp_lp_core_running == 0 ODER Counter erhöht sich nicht → versuche LP-Core zu starten
-    // Wenn nach MAX_RETRIES immer noch nicht erfolgreich → Task beenden
+    // Prüft sofort beim Task-Start und danach alle LP_CORE_WATCHDOG_MS.
+    // last_lp_core_running liegt im RTC-RAM und überlebt den HP-Deep-Sleep.
     while (1) {
-        // Prüfe ob LP-Core läuft (ulp_lp_core_running == 0 bedeutet: nicht gestartet oder gestoppt)
-    if (*(volatile uint32_t *)&ulp_lp_core_running == 0) {
-            // LP-Core läuft nicht → versuche zu starten
-            retry_count++;
-            ESP_LOGW(TAG, "LP-Core läuft nicht (ulp_lp_core_running == 0) → Starte LP-Core... (Versuch %d/%d)", 
-                     retry_count, MAX_RETRIES);
-            
-            if (retry_count >= MAX_RETRIES) {
-                ESP_LOGE(TAG, "FEHLER: LP-Core konnte nach %d Versuchen nicht gestartet werden. Watch-Dog-Task beendet!", MAX_RETRIES);
-            vTaskDelete(NULL);
-            return;
-        }
-            
-            // Versuche LP-Core zu starten
-            if (start_lp_core()) {
-                // start_lp_core() gab true zurück - warte auf Watchdog-Timeout und prüfe dann
-        last_lp_core_value = *(volatile uint32_t *)&ulp_lp_core_running;
-                ESP_LOGI(TAG, "LP-Core Start aufgerufen (Zähler: %lu) - warte auf Watchdog-Timeout für Prüfung...", last_lp_core_value);
-            } else {
-                // start_lp_core() gab false zurück
-                ESP_LOGE(TAG, "FEHLER: LP-Core Start fehlgeschlagen (start_lp_core() gab false zurück)!");
-                // Kurz warten und erneut versuchen
-                vTaskDelay(pdMS_TO_TICKS(1000));
-                continue;
-            }
+        const uint32_t current_lp_core_running =
+            *(volatile uint32_t *)&ulp_lp_core_running;
+
+        // uint32_t-Subtraktion bleibt auch beim Überlauf korrekt:
+        // 0 = unverändert, jeder andere Wert = LP-Core hat Fortschritt gemacht.
+        if (current_lp_core_running - last_lp_core_running) {
+            last_lp_core_running = current_lp_core_running;
+            retry_count = 0;
         } else {
-            // LP-Core sollte laufen (ulp_lp_core_running > 0) → Watchdog-Prüfung
-            // Warte LP_CORE_WATCHDOG_MS bevor Prüfung (gibt LP-Core Zeit, Counter zu erhöhen)
-        vTaskDelay(pdMS_TO_TICKS(LP_CORE_WATCHDOG_MS));
-        
-        uint32_t current_lp_core_value = *(volatile uint32_t *)&ulp_lp_core_running;
-        
-        // Prüfe ob Zähler sich erhöht hat
-        if (current_lp_core_value == last_lp_core_value) {
-            // Zähler hat sich nicht erhöht → LP-Core läuft nicht mehr!
-            ESP_LOGW(TAG, "WARNUNG: LP-Core Watchdog-Timeout! (Zähler: %lu, erwartet: > %lu)", 
-                     current_lp_core_value, last_lp_core_value);
-                ESP_LOGI(TAG, "Setze ulp_lp_core_running auf 0 und versuche LP-Core neu zu starten...");
-            
-                // Setze ulp_lp_core_running auf 0, damit wir in die Start-Schleife kommen
-                *(volatile uint32_t *)&ulp_lp_core_running = 0;
-                retry_count = 0;  // Reset Retry-Counter für Neustart-Versuche
-                continue;  // Gehe zurück in Start-Schleife
-            } else {
-                // Zähler hat sich erhöht → LP-Core läuft korrekt
-            // ESP_LOGI(TAG, "LP-Core Watchdog OK (Zähler: %lu → %lu)", 
-            //         last_lp_core_value, current_lp_core_value);
-            last_lp_core_value = current_lp_core_value;
-                retry_count = 0;  // Reset Retry-Counter bei erfolgreichem Betrieb
+            if (retry_count >= MAX_RETRIES) {
+                ESP_LOGE(TAG,
+                         "FEHLER: LP-Core konnte nach %u Versuchen nicht gestartet werden. Watchdog-Task beendet!",
+                         (unsigned)MAX_RETRIES);
+                vTaskDelete(NULL);
+                return;
             }
+
+            ++retry_count;
+            ESP_LOGW(TAG,
+                     "LP-Core Heartbeat unverändert (%lu) → starte LP-Core (Versuch %u/%u)",
+                     (unsigned long)current_lp_core_running,
+                     (unsigned)retry_count,
+                     (unsigned)MAX_RETRIES);
+
+            if (!start_lp_core()) {
+                ESP_LOGE(TAG, "FEHLER: LP-Core Start fehlgeschlagen!");
+            }
+
+            // start_lp_core() setzt den Heartbeat zurück. Der nächste Vergleich
+            // erfolgt nach dem Watchdog-Intervall gegen diesen neuen Basiswert.
+            last_lp_core_running = *(volatile uint32_t *)&ulp_lp_core_running;
         }
+
+        vTaskDelay(pdMS_TO_TICKS(LP_CORE_WATCHDOG_MS));
     }
 }
 
@@ -4405,6 +4369,13 @@ extern "C" void app_main(void) {
 
     // Power-On vs. Wake-up erkennen (wakeup_reason bereits oben gelesen)
     isPowerOn = (wakeup_reason == ESP_SLEEP_WAKEUP_UNDEFINED);
+
+    // RTC-RAM ist nach Power-On, Flash oder Reboot nicht als gültig anzusehen.
+    // Gleiche Startwerte veranlassen den Watchdog-Task, den LP-Core zu starten.
+    if (isPowerOn) {
+        *(volatile uint32_t *)&ulp_lp_core_running = 0;
+        last_lp_core_running = 0;
+    }
     
     // Wake-up Count nur bei Deep-Sleep-Wake-up erhöhen (nicht bei ESP.restart())
     if (!isPowerOn) {
@@ -4535,7 +4506,7 @@ extern "C" void app_main(void) {
         init_ring_buffer_and_ulp_pulse_counter(isPowerOn);
 
         // LP-Core Watchdog Task starten (asynchron)
-        xTaskCreate(
+        const BaseType_t watchdog_task_result = xTaskCreate(
             lp_core_watchdog_task,      // Task-Funktion
             "LP_Core_Watchdog",          // Task-Name
             4096,                        // Stack-Größe (Bytes)
@@ -4543,7 +4514,11 @@ extern "C" void app_main(void) {
             1,                           // Priorität (niedrig, da nicht kritisch)
             NULL                         // Task-Handle (nicht benötigt)
         );
-        ESP_LOGI(TAG, "LP-Core Watchdog Task gestartet");
+        if (watchdog_task_result == pdPASS) {
+            ESP_LOGI(TAG, "LP-Core Watchdog Task angelegt");
+        } else {
+            ESP_LOGE(TAG, "FEHLER: LP-Core Watchdog Task konnte nicht angelegt werden");
+        }
         
         // 1. Batteriespannung-Test und ggf. in Ring-Speicher schreiben
         // < 30%: Schreibe in Ring-Speicher (RTC-RAM könnte verloren gehen; deckt auch reinen USB ab)
