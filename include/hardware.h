@@ -35,9 +35,6 @@
 #define REED_GPIO          2   // Reed-Kontakt (externer Pull-Up, active-low)
 #define BUTTON_B_GPIO      21  // Taster B (Software Pull-Up, active-low gegen Masse)
 
-// REED-Kontakt Konfiguration
-#define REED_MIN_PULSE_DURATION_US  (3 * 1000000ULL)  // Minimale Puls-Länge: 3 Sekunden (in Mikrosekunden)
-
 // Interne LED (XIAO ESP32C6: GPIO15)
 // HINWEIS: Bei einigen Boards ist die LED active-low (ON = LOW, OFF = HIGH)
 // Falls die LED nicht leuchtet, versuchen Sie LOW statt HIGH
@@ -139,10 +136,8 @@
 #define AP_IP_ADDRESS_4       1
 
 // LP-Core Konfiguration
-// LP-Core Intervall = REED_MIN_PULSE_DURATION - 0.5 Sekunden (um sicherzustellen, dass Pulse erkannt werden)
-#define LP_CORE_INTERVAL_US   (REED_MIN_PULSE_DURATION_US - (500 * 1000ULL))  // 0.5 Sekunden = 500ms = 500000µs
 // Erster Check erfolgt beim Task-Start; bei länger aktivem HP-Core danach alle 6 s.
-// Muss länger sein als LP_CORE_INTERVAL_US (2,5 s HIGH-Pfad) plus Reserve.
+// Der LP-Core liefert per LP-Timer alle 2 s einen Heartbeat; 6 s bieten Reserve.
 #define LP_CORE_WATCHDOG_MS   6000
 
 // ============================================
