@@ -136,8 +136,13 @@
 #define AP_IP_ADDRESS_4       1
 
 // LP-Core Konfiguration
+// Abtastintervalle (TPL5110 mit R1 = 8,2 kΩ: LOW mind. ~3 s, Mindestabstand ~4 s).
+// SAMPLE_IDLE_US / SAMPLE_PULSE_US in ulp/ulp_main.c müssen dazu passen
+// (LP-Übersetzungseinheit sieht hardware.h nicht; gleiches Muster wie REED_LP_IO_NUM).
+#define LP_CORE_SAMPLE_IDLE_US   2000000ULL  // GPIO2 HIGH: nächste Probe in 2 s
+#define LP_CORE_SAMPLE_PULSE_US   250000ULL  // GPIO2 LOW: Rückkehr auf HIGH schnell sehen
 // Erster Check erfolgt beim Task-Start; bei länger aktivem HP-Core danach alle 6 s.
-// Der LP-Core liefert per LP-Timer alle 2 s einen Heartbeat; 6 s bieten Reserve.
+// Heartbeat im Ruhezustand alle 2 s, während LOW schneller; 6 s = dreifache Reserve.
 #define LP_CORE_WATCHDOG_MS   6000
 
 // ============================================

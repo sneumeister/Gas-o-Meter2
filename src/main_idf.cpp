@@ -86,16 +86,12 @@ extern "C" {
 bool start_lp_core(void) {
     static constexpr uint32_t START_TIMEOUT_MS = 100;
     static constexpr uint32_t START_POLL_MS = 10;
-    static constexpr uint32_t HEARTBEAT_INTERVAL_US = 2000000;
 
     ESP_LOGI(TAG, "Starte LP-Core...");
 
     // Binary-Load initialisiert LP-BSS neu (pulse_counter := 0). Stand vorher sichern.
     const uint32_t saved_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
 
-    // Watchdog-Zähler zurücksetzen — sonst interpretiert der HP-Core RTC-Müll als „LP läuft“
-    *(volatile uint32_t *)&ulp_lp_core_running = 0;
-    
     // REED-Pin vor dem Binary-Load als RTC-GPIO initialisieren.
     // Kein interner Pull-Up/Pull-Down; der externe Pull-Up bleibt maßgeblich.
     const gpio_num_t reed_gpio = (gpio_num_t)REED_GPIO;
@@ -129,17 +125,23 @@ bool start_lp_core(void) {
     
     ESP_LOGI(TAG, "LP-Core Binary geladen (%zu Bytes)", binary_size);
 
-    // Zählerstand wiederherstellen (NVS/RTC-Wert darf durch Load nicht verloren gehen)
+    // LP-RAM nach Load: Zähler, Heartbeat-Basis und aktueller Reed-Pegel
+    // (echter Pegel vermeidet Phantom-Impuls und Doppelzählung bei Neustart während LOW).
     *(volatile uint32_t *)&ulp_pulse_counter = saved_pulse;
-    ESP_LOGI(TAG, "LP-Core: ulp_pulse_counter nach Load wiederhergestellt: %lu",
-             (unsigned long)saved_pulse);
-    
-    // Phase 1: einmaliger Start durch den HP-Core zur Heartbeat-Bestätigung.
-    ulp_lp_core_cfg_t initial_cfg = {
-        .wakeup_source = ULP_LP_CORE_WAKEUP_SOURCE_HP_CPU,
+    *(volatile uint32_t *)&ulp_lp_core_running = 0;
+    *(volatile uint32_t *)&ulp_reed_level = (uint32_t)rtc_gpio_get_level(reed_gpio);
+    ESP_LOGI(TAG, "LP-Core: ulp_pulse_counter nach Load wiederhergestellt: %lu, reed_level=%lu",
+             (unsigned long)saved_pulse,
+             (unsigned long)*(volatile uint32_t *)&ulp_reed_level);
+
+    // Ein Start: sofortiger Durchlauf (HP_CPU) plus periodischer LP-Timer.
+    ulp_lp_core_cfg_t cfg = {
+        .wakeup_source = ULP_LP_CORE_WAKEUP_SOURCE_HP_CPU |
+                         ULP_LP_CORE_WAKEUP_SOURCE_LP_TIMER,
+        .lp_timer_sleep_duration_us = LP_CORE_SAMPLE_IDLE_US,
     };
-    
-    ret = ulp_lp_core_run(&initial_cfg);
+
+    ret = ulp_lp_core_run(&cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "FEHLER: LP-Core konnte nicht gestartet werden: %s", esp_err_to_name(ret));
         return false;
@@ -167,35 +169,9 @@ bool start_lp_core(void) {
         return false;
     }
 
-    ESP_LOGI(TAG, "LP-Core gestartet und initialer Heartbeat bestätigt");
-
-    // Der Heartbeat steht am Anfang von LP-main(). Ein Poll-Takt gibt der
-    // IDF-Startup-Routine Zeit, main() zu verlassen und den LP-Core anzuhalten.
-    vTaskDelay(pdMS_TO_TICKS(START_POLL_MS));
-
-    // Phase 2: Reed-Flanke und periodischen Heartbeat dauerhaft aktivieren.
-    ret = rtc_gpio_wakeup_enable(reed_gpio, GPIO_INTR_NEGEDGE);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "FEHLER: REED LP_IO-Wake konnte nicht aktiviert werden: %s",
-                 esp_err_to_name(ret));
-        return false;
-    }
-
-    ulp_lp_core_cfg_t wake_cfg = {
-        .wakeup_source = ULP_LP_CORE_WAKEUP_SOURCE_LP_IO |
-                         ULP_LP_CORE_WAKEUP_SOURCE_LP_TIMER,
-        .lp_timer_sleep_duration_us = HEARTBEAT_INTERVAL_US,
-    };
-
-    ret = ulp_lp_core_run(&wake_cfg);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "FEHLER: LP_IO-/LP_TIMER-Wake konnte nicht konfiguriert werden: %s",
-                 esp_err_to_name(ret));
-        return false;
-    }
-
-    ESP_LOGI(TAG, "LP-Core Haltbetrieb aktiv (GPIO%d NEGEDGE, Timer %lu ms)",
-             REED_GPIO, (unsigned long)(HEARTBEAT_INTERVAL_US / 1000));
+    ESP_LOGI(TAG, "LP-Core Haltbetrieb aktiv (Pegel-Abtastung, Idle %lu ms / Pulse %lu ms)",
+             (unsigned long)(LP_CORE_SAMPLE_IDLE_US / 1000),
+             (unsigned long)(LP_CORE_SAMPLE_PULSE_US / 1000));
     return true;
 }
 
