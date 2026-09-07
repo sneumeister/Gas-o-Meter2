@@ -1,6 +1,7 @@
 #ifndef HARDWARE_H
 #define HARDWARE_H
 
+#include "hardware_shared.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -27,13 +28,8 @@
 #endif
 
 // ============================================
-// Hardware Pin-Definitionen
+// Pin-Nummern: siehe hardware_shared.h (auch für LP-Core).
 // ============================================
-
-// GPIO-Pins für Taster und Sensoren
-#define BUTTON_A_GPIO      1   // Taster A (Software Pull-Up, active-low gegen Masse)
-#define REED_GPIO          2   // Reed-Kontakt (externer Pull-Up, active-low)
-#define BUTTON_B_GPIO      21  // Taster B (Software Pull-Up, active-low gegen Masse)
 
 // Interne LED (XIAO ESP32C6: GPIO15)
 // HINWEIS: Bei einigen Boards ist die LED active-low (ON = LOW, OFF = HIGH)
@@ -136,11 +132,7 @@
 #define AP_IP_ADDRESS_4       1
 
 // LP-Core Konfiguration
-// Abtastintervalle (TPL5110 mit R1 = 8,2 kΩ: LOW mind. ~3 s, Mindestabstand ~4 s).
-// SAMPLE_IDLE_US / SAMPLE_PULSE_US in ulp/ulp_main.c müssen dazu passen
-// (LP-Übersetzungseinheit sieht hardware.h nicht; gleiches Muster wie REED_LP_IO_NUM).
-#define LP_CORE_SAMPLE_IDLE_US   2000000ULL  // GPIO2 HIGH: nächste Probe in 2 s
-#define LP_CORE_SAMPLE_PULSE_US   250000ULL  // GPIO2 LOW: Rückkehr auf HIGH schnell sehen
+// Abtastintervalle: LP_CORE_SAMPLE_* in hardware_shared.h (auch für LP-Core).
 // Erster Check erfolgt beim Task-Start; bei länger aktivem HP-Core danach alle 6 s.
 // Heartbeat im Ruhezustand alle 2 s, während LOW schneller; 6 s = dreifache Reserve.
 #define LP_CORE_WATCHDOG_MS   6000
