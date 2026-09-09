@@ -8,10 +8,6 @@
 // (platformio.ini: board = seeed_xiao_esp32c6). Silkscreen D0…D10 ≠ GPIO-Nummer
 // auf anderen Modulen — bei neuem Board eigenen Block + Build-Flag ergänzen.
 
-#if !defined(CONFIG_IDF_TARGET_ESP32C6)
-#error "hardware_shared.h: Pinmap nur für ESP32-C6 (XIAO). Anderes Target → eigenen Pinmap-Block."
-#endif
-
 // ============================================
 // Hardware Pin-Definitionen (Seeed XIAO ESP32-C6)
 // ============================================
