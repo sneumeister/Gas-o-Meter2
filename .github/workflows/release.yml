@@ -188,6 +188,8 @@ jobs:
           test -f pages_site/firmware/latest/PCB_20260523/manifest-complete.json
           test -f pages_site/firmware/latest/TPL_test/manifest-complete.json
           test -f pages_site/legal.html
+          test -f pages_site/legal_en.html
+          test -f pages_site/index_en.html
           test -f pages_site/LICENSE
           test -f pages_site/NOTICE
           test -f pages_site/THIRD_PARTY_NOTICES.md

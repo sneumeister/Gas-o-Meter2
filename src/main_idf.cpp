@@ -21,6 +21,7 @@
 #include "esp_sleep.h"
 #include "driver/gpio.h"
 #include "driver/rtc_io.h"
+#include "driver/uart.h"
 #include "ulp_lp_core.h"  // LP-Core Management APIs
 #include <time.h>
 #include "nvs.h"
@@ -52,6 +53,18 @@
 // Logging-Tag
 static const char *TAG = "gas-o-meter";
 
+/** UART-TX leeren vor Deep-Sleep/Reboot (ersetzt feste 200-ms-Pause). */
+static void console_flush_before_poweroff(void) {
+    fflush(stdout);
+#if CONFIG_ESP_CONSOLE_UART
+    const esp_err_t err = uart_wait_tx_done((uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM,
+                                            pdMS_TO_TICKS(500));
+    if (err != ESP_OK && err != ESP_ERR_TIMEOUT) {
+        ESP_LOGW(TAG, "console_flush_before_poweroff: uart_wait_tx_done: %s", esp_err_to_name(err));
+    }
+#endif
+}
+
 // LP-Core Binary Header (generiert durch ulp_embed_binary in src/CMakeLists.txt)
 // ulp_embed_binary() erstellt automatisch ulp_main.h mit:
 //   - Binary-Symbolen: ulp_main_bin_start, ulp_main_bin_end (für ulp_lp_core_load_binary())
@@ -71,21 +84,32 @@ extern "C" {
 // LP-Core Initialisierung und Start
 // Läuft auf dem HP-Core und startet den LP-Core-Prozessor
 bool start_lp_core(void) {
+    static constexpr uint32_t START_TIMEOUT_MS = 100;
+    static constexpr uint32_t START_POLL_MS = 10;
+
     ESP_LOGI(TAG, "Starte LP-Core...");
 
     // Binary-Load initialisiert LP-BSS neu (pulse_counter := 0). Stand vorher sichern.
     const uint32_t saved_pulse = *(volatile uint32_t *)&ulp_pulse_counter;
 
-    // Watchdog-Zähler zurücksetzen — sonst interpretiert der HP-Core RTC-Müll als „LP läuft“
-    *(volatile uint32_t *)&ulp_lp_core_running = 0;
-    
-    // REED-Pin als RTC-GPIO initialisieren (erforderlich für LP-Core-Zugriff)
-    // GPIO2 auf ESP32C6
-    rtc_gpio_init((gpio_num_t)REED_GPIO);
-    rtc_gpio_set_direction((gpio_num_t)REED_GPIO, RTC_GPIO_MODE_INPUT_ONLY);
-    // Kein Pull-Up/Pull-Down (externer Pull-Up) - beide Pulls deaktivieren = Float
-    rtc_gpio_pullup_dis((gpio_num_t)REED_GPIO);
-    rtc_gpio_pulldown_dis((gpio_num_t)REED_GPIO);
+    // REED-Pin vor dem Binary-Load als RTC-GPIO initialisieren.
+    // Kein interner Pull-Up/Pull-Down; der externe Pull-Up bleibt maßgeblich.
+    const gpio_num_t reed_gpio = (gpio_num_t)REED_GPIO;
+    esp_err_t ret = rtc_gpio_init(reed_gpio);
+    if (ret == ESP_OK) {
+        ret = rtc_gpio_set_direction(reed_gpio, RTC_GPIO_MODE_INPUT_ONLY);
+    }
+    if (ret == ESP_OK) {
+        ret = rtc_gpio_pullup_dis(reed_gpio);
+    }
+    if (ret == ESP_OK) {
+        ret = rtc_gpio_pulldown_dis(reed_gpio);
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "FEHLER: REED-Pin konnte nicht als RTC-GPIO initialisiert werden: %s",
+                 esp_err_to_name(ret));
+        return false;
+    }
     
     ESP_LOGI(TAG, "REED-Pin (GPIO%d) als RTC-GPIO initialisiert", REED_GPIO);
     
@@ -93,7 +117,7 @@ bool start_lp_core(void) {
     // Binary-Symbole werden durch ulp_main.h (generiert von ulp_embed_binary) deklariert
     // Format: _binary_ulp_<ulp_app_name>_bin_start/end mit ulp_app_name="ulp_main"
     size_t binary_size = ulp_main_bin_end - ulp_main_bin_start;
-    esp_err_t ret = ulp_lp_core_load_binary(ulp_main_bin_start, binary_size);
+    ret = ulp_lp_core_load_binary(ulp_main_bin_start, binary_size);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "FEHLER: LP-Core Binary konnte nicht geladen werden: %s", esp_err_to_name(ret));
         return false;
@@ -101,26 +125,53 @@ bool start_lp_core(void) {
     
     ESP_LOGI(TAG, "LP-Core Binary geladen (%zu Bytes)", binary_size);
 
-    // Zählerstand wiederherstellen (NVS/RTC-Wert darf durch Load nicht verloren gehen)
+    // LP-RAM nach Load: Zähler, Heartbeat-Basis und aktueller Reed-Pegel
+    // (echter Pegel vermeidet Phantom-Impuls und Doppelzählung bei Neustart während LOW).
     *(volatile uint32_t *)&ulp_pulse_counter = saved_pulse;
-    ESP_LOGI(TAG, "LP-Core: ulp_pulse_counter nach Load wiederhergestellt: %lu",
-             (unsigned long)saved_pulse);
-    
-    // LP-Core konfigurieren und starten
+    *(volatile uint32_t *)&ulp_lp_core_running = 0;
+    *(volatile uint32_t *)&ulp_reed_level = (uint32_t)rtc_gpio_get_level(reed_gpio);
+    ESP_LOGI(TAG, "LP-Core: ulp_pulse_counter nach Load wiederhergestellt: %lu, reed_level=%lu",
+             (unsigned long)saved_pulse,
+             (unsigned long)*(volatile uint32_t *)&ulp_reed_level);
+
+    // Ein Start: sofortiger Durchlauf (HP_CPU) plus periodischer LP-Timer.
     ulp_lp_core_cfg_t cfg = {
-        .wakeup_source = ULP_LP_CORE_WAKEUP_SOURCE_HP_CPU,  // Wird vom HP-Core geweckt
+        .wakeup_source = ULP_LP_CORE_WAKEUP_SOURCE_HP_CPU |
+                         ULP_LP_CORE_WAKEUP_SOURCE_LP_TIMER,
+        .lp_timer_sleep_duration_us = LP_CORE_SAMPLE_IDLE_US,
     };
-    
+
     ret = ulp_lp_core_run(&cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "FEHLER: LP-Core konnte nicht gestartet werden: %s", esp_err_to_name(ret));
         return false;
     }
-    
-    // LP-Core starten (Software-Interrupt)
-    ulp_lp_core_sw_intr_trigger();
-    
-    ESP_LOGI(TAG, "LP-Core gestartet");
+
+    // ulp_lp_core_run() bestätigt nur den API-Aufruf. Erst der initiale
+    // Heartbeat aus LP-main() bestätigt, dass das LP-Programm wirklich läuft.
+    bool heartbeat_confirmed = false;
+    for (uint32_t elapsed_ms = 0; elapsed_ms < START_TIMEOUT_MS; elapsed_ms += START_POLL_MS) {
+        if (*(volatile uint32_t *)&ulp_lp_core_running != 0) {
+            heartbeat_confirmed = true;
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(START_POLL_MS));
+    }
+
+    if (!heartbeat_confirmed &&
+        *(volatile uint32_t *)&ulp_lp_core_running != 0) {
+        heartbeat_confirmed = true;
+    }
+
+    if (!heartbeat_confirmed) {
+        ESP_LOGE(TAG, "LP-Core Start-Timeout: kein Heartbeat innerhalb %lu ms",
+                 (unsigned long)START_TIMEOUT_MS);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "LP-Core Haltbetrieb aktiv (Pegel-Abtastung, Idle %lu ms / Pulse %lu ms)",
+             (unsigned long)(LP_CORE_SAMPLE_IDLE_US / 1000),
+             (unsigned long)(LP_CORE_SAMPLE_PULSE_US / 1000));
     return true;
 }
 
@@ -177,6 +228,7 @@ RTC_DATA_ATTR config_rtc_t config_rtc = {
 RTC_DATA_ATTR int wakeupCount = 0;  // Zählt nur Deep-Sleep-Wake-ups (nicht ESP.restart())
 RTC_DATA_ATTR uint32_t timer_wake_count = 0;  // Nur Timer-Wake-ups (für Übertragungs-Intervall)
 RTC_DATA_ATTR bool isPowerOn = false;
+RTC_DATA_ATTR uint32_t last_lp_core_running = 0;  // Letzter vom Watchdog geprüfter LP-Heartbeat
 
 // Hostname-Zugriff für transfer_ble.cpp (BLE Device Name = Hostname)
 const char* transfer_ble_get_hostname(void) {
@@ -259,7 +311,8 @@ RTC_DATA_ATTR uint32_t ring_idx = RING_BUFFER_SIZE;  // Ring-Buffer-Index (im RT
 //       *(volatile uint32_t *)&ulp_pulse_counter = new_val;        // Schreiben
 //     Dies zwingt den Compiler, immer vom RAM zu lesen/schreiben und verhindert Race Conditions
 //   - Im Code werden die Variablen mit "ulp_" Präfix verwendet (z.B. ulp_pulse_counter)
-//   - Die Variablen liegen im RTC-RAM und werden zwischen HP-Core und LP-Core geteilt
+//   - Die Variablen liegen im LP-RAM und werden zwischen HP-Core und LP-Core geteilt
+//     (bleiben über HP-Deep-Sleep erhalten, Binary-Load initialisiert sie neu)
 
 // ============================================
 // Globale Variablen
@@ -295,6 +348,12 @@ bool write_ulp_pulse_counter_to_ring_buffer();
 static bool wake_allows_web_ui(esp_sleep_wakeup_cause_t reason) {
     return reason == ESP_SLEEP_WAKEUP_GPIO || reason == ESP_SLEEP_WAKEUP_EXT0 ||
            reason == ESP_SLEEP_WAKEUP_EXT1 || reason == ESP_SLEEP_WAKEUP_UNDEFINED;
+}
+
+/** 1-s-Pause vor erster Log-Ausgabe: Serial-Monitor nach Flash/Reboot oder Taster-Wake. */
+static bool wake_needs_serial_monitor_delay(esp_sleep_wakeup_cause_t reason) {
+    return reason == ESP_SLEEP_WAKEUP_UNDEFINED || reason == ESP_SLEEP_WAKEUP_GPIO ||
+           reason == ESP_SLEEP_WAKEUP_EXT0 || reason == ESP_SLEEP_WAKEUP_EXT1;
 }
 
 /** true = jetzt transfer_data() ausführen (Timer-Wake-up, Intervall aus Config). */
@@ -626,87 +685,59 @@ bool write_ulp_pulse_counter_to_ring_buffer() {
 }
 
 
-// FreeRTOS Task für LP-Core Watchdog
-static bool lp_core_running_sane(uint32_t value)
-{
-    return value <= LP_CORE_RUNNING_SANITY_MAX;
+static bool restart_lp_core_with_retries(uint32_t observed_heartbeat) {
+    static constexpr uint8_t MAX_RETRIES = 3;
+
+    for (uint8_t attempt = 1; attempt <= MAX_RETRIES; ++attempt) {
+        ESP_LOGW(TAG,
+                 "LP-Core Heartbeat unverändert (%lu) → starte LP-Core (Versuch %u/%u)",
+                 (unsigned long)observed_heartbeat,
+                 (unsigned)attempt,
+                 (unsigned)MAX_RETRIES);
+
+        if (start_lp_core()) {
+            return true;
+        }
+    }
+
+    ESP_LOGE(TAG, "FEHLER: LP-Core konnte nach %u Versuchen nicht gestartet werden",
+             (unsigned)MAX_RETRIES);
+    return false;
 }
 
+// FreeRTOS Task für LP-Core Watchdog
 void lp_core_watchdog_task(void *parameter) {
-    uint32_t last_lp_core_value = 0;
-    uint8_t retry_count = 0;
-    const uint8_t MAX_RETRIES = 3;
     
     ESP_LOGI(TAG, "LP-Core Watchdog Task gestartet");
-
-    uint32_t running = *(volatile uint32_t *)&ulp_lp_core_running;
-    if (!lp_core_running_sane(running)) {
-        ESP_LOGW(TAG, "ulp_lp_core_running=%lu (ungültig, kein LP-Start) → zurücksetzen",
-                 (unsigned long)running);
-        *(volatile uint32_t *)&ulp_lp_core_running = 0;
-    } else if (running > 0) {
-        ESP_LOGI(TAG, "LP-Core Watchdog: vorhandener Zähler %lu (Prüfung folgt)",
-                 (unsigned long)running);
-    }
     
-    // Initialisiere last_lp_core_value mit aktuellem Wert
-    last_lp_core_value = *(volatile uint32_t *)&ulp_lp_core_running;
-    
-    // Kombinierte Start- und Watchdog-Schleife
-    // Wenn ulp_lp_core_running == 0 ODER Counter erhöht sich nicht → versuche LP-Core zu starten
-    // Wenn nach MAX_RETRIES immer noch nicht erfolgreich → Task beenden
+    // Prüft sofort beim Task-Start und danach alle LP_CORE_WATCHDOG_MS.
+    // last_lp_core_running liegt im RTC-RAM und überlebt den HP-Deep-Sleep.
     while (1) {
-        // Prüfe ob LP-Core läuft (ulp_lp_core_running == 0 bedeutet: nicht gestartet oder gestoppt)
-    if (*(volatile uint32_t *)&ulp_lp_core_running == 0) {
-            // LP-Core läuft nicht → versuche zu starten
-            retry_count++;
-            ESP_LOGW(TAG, "LP-Core läuft nicht (ulp_lp_core_running == 0) → Starte LP-Core... (Versuch %d/%d)", 
-                     retry_count, MAX_RETRIES);
-            
-            if (retry_count >= MAX_RETRIES) {
-                ESP_LOGE(TAG, "FEHLER: LP-Core konnte nach %d Versuchen nicht gestartet werden. Watch-Dog-Task beendet!", MAX_RETRIES);
-            vTaskDelete(NULL);
-            return;
-        }
-            
-            // Versuche LP-Core zu starten
-            if (start_lp_core()) {
-                // start_lp_core() gab true zurück - warte auf Watchdog-Timeout und prüfe dann
-        last_lp_core_value = *(volatile uint32_t *)&ulp_lp_core_running;
-                ESP_LOGI(TAG, "LP-Core Start aufgerufen (Zähler: %lu) - warte auf Watchdog-Timeout für Prüfung...", last_lp_core_value);
-            } else {
-                // start_lp_core() gab false zurück
-                ESP_LOGE(TAG, "FEHLER: LP-Core Start fehlgeschlagen (start_lp_core() gab false zurück)!");
-                // Kurz warten und erneut versuchen
-                vTaskDelay(pdMS_TO_TICKS(1000));
-                continue;
-            }
+        const uint32_t current_lp_core_running =
+            *(volatile uint32_t *)&ulp_lp_core_running;
+
+        // uint32_t-Subtraktion bleibt auch beim Überlauf korrekt:
+        // 0 = unverändert, jeder andere Wert = LP-Core hat Fortschritt gemacht.
+        if (current_lp_core_running - last_lp_core_running) {
+            last_lp_core_running = current_lp_core_running;
         } else {
-            // LP-Core sollte laufen (ulp_lp_core_running > 0) → Watchdog-Prüfung
-            // Warte LP_CORE_WATCHDOG_MS bevor Prüfung (gibt LP-Core Zeit, Counter zu erhöhen)
-        vTaskDelay(pdMS_TO_TICKS(LP_CORE_WATCHDOG_MS));
-        
-        uint32_t current_lp_core_value = *(volatile uint32_t *)&ulp_lp_core_running;
-        
-        // Prüfe ob Zähler sich erhöht hat
-        if (current_lp_core_value == last_lp_core_value) {
-            // Zähler hat sich nicht erhöht → LP-Core läuft nicht mehr!
-            ESP_LOGW(TAG, "WARNUNG: LP-Core Watchdog-Timeout! (Zähler: %lu, erwartet: > %lu)", 
-                     current_lp_core_value, last_lp_core_value);
-                ESP_LOGI(TAG, "Setze ulp_lp_core_running auf 0 und versuche LP-Core neu zu starten...");
-            
-                // Setze ulp_lp_core_running auf 0, damit wir in die Start-Schleife kommen
-                *(volatile uint32_t *)&ulp_lp_core_running = 0;
-                retry_count = 0;  // Reset Retry-Counter für Neustart-Versuche
-                continue;  // Gehe zurück in Start-Schleife
-            } else {
-                // Zähler hat sich erhöht → LP-Core läuft korrekt
-            // ESP_LOGI(TAG, "LP-Core Watchdog OK (Zähler: %lu → %lu)", 
-            //         last_lp_core_value, current_lp_core_value);
-            last_lp_core_value = current_lp_core_value;
-                retry_count = 0;  // Reset Retry-Counter bei erfolgreichem Betrieb
+            const bool lp_core_started =
+                restart_lp_core_with_retries(current_lp_core_running);
+
+            // Auch nach einem Fehlschlag die tatsächliche Basis übernehmen:
+            // start_lp_core() setzt den Heartbeat auf 0. Nach dem normalen
+            // Watchdog-Delay führt 0 - 0 wieder zu einem Recovery-Versuch.
+            last_lp_core_running = *(volatile uint32_t *)&ulp_lp_core_running;
+
+            if (!lp_core_started) {
+                ESP_LOGE(TAG,
+                         "LP-Core weiterhin inaktiv; nächster Versuch nach %u ms",
+                         (unsigned)LP_CORE_WATCHDOG_MS);
             }
         }
+
+        // Der Delay gilt auch nach drei fehlgeschlagenen Startversuchen.
+        vTaskDelay(pdMS_TO_TICKS(LP_CORE_WATCHDOG_MS));
     }
 }
 
@@ -1002,8 +1033,7 @@ void shutdown_resources(bool for_imminent_restart) {
     }
     
     ESP_LOGI(TAG, "Alle Ressourcen freigegeben");
-    fflush(stdout);
-    vTaskDelay(pdMS_TO_TICKS(200));  // Pause, damit Log-Output gesendet wird
+    console_flush_before_poweroff();
 }
 
 // ============================================
@@ -1021,8 +1051,7 @@ void perform_reboot(const char* reason) {
     shutdown_resources(true);
     
     ESP_LOGI(TAG, "Starte Reboot...");
-    fflush(stdout);
-    vTaskDelay(pdMS_TO_TICKS(200));
+    console_flush_before_poweroff();
     esp_restart();
 }
 
@@ -1078,109 +1107,125 @@ uint64_t calculate_next_wakeup_timer() {
 }
 
 // ============================================
-// Deep-Sleep mit GPIO- und Timer-Wake-up konfigurieren
+// Deep-Sleep mit EXT1- und Timer-Wake-up konfigurieren
 // ============================================
-// enable_timer: true = Timer-Wake-up aktivieren, false = nur GPIO-Wake-up (Taster)
+// enable_timer: true = Timer-Wake-up aktivieren, false = nur EXT1-Wake-up (Taster)
 void enter_deep_sleep_with_gpio_and_timer_wakeup(bool enable_timer = true) {
-    ESP_LOGI(TAG, "Konfiguriere Deep-Sleep mit GPIO-Wake-up (Taster A)...");
+    ESP_LOGI(TAG, "Konfiguriere Deep-Sleep mit EXT1-Wake-up (Taster A)...");
     
-    // Taster A (BUTTON_A_GPIO) als Wake-up-Source konfigurieren
-    // ESP32C6 verwendet esp_sleep_enable_gpio_wakeup() statt esp_sleep_enable_ext0_wakeup()
+    // Taster A verwendet EXT1. Damit bleibt der generische LP_IO-Wake-Grund
+    // ausschließlich dem Reed-Sensor auf GPIO2 vorbehalten.
     gpio_num_t gpio_num = (gpio_num_t)BUTTON_A_GPIO;
     
     // GPIO-Pin-Modus aus hardware.h bestimmen
     uint8_t gpio_mode = BUTTON_A_GPIO_MODE;
-    gpio_int_type_t wakeup_level;
+    esp_sleep_ext1_wakeup_mode_t wakeup_mode;
+    int wakeup_level;
     const char* level_name;
     
-    // WICHTIG: ESP32C6 unterstützt NUR Level-Mode, NICHT Edge-Mode!
-    // Level-Mode: Weckt auf, wenn GPIO im angegebenen Level ist
-    // Daher muss GPIO vor Deep-Sleep im "nicht-gedrückt" Zustand sein
+    // EXT1 arbeitet beim ESP32-C6 pegelgesteuert. Der Taster muss vor
+    // Deep-Sleep im nicht gedrückten Zustand sein.
     
-    // Prüfen, ob BUTTON_A_GPIO RTC-fähig ist (für Deep-Sleep-Wake-up)
-    // Laut ESP-IDF-Dokumentation: Nur GPIOs 0-7 haben RTC-Funktionalität
-    bool is_rtc_gpio = (gpio_num <= 7);
+    const bool is_rtc_gpio = rtc_gpio_is_valid_gpio(gpio_num);
     bool gpio_wakeup_configured = false;
     
     if (is_rtc_gpio) {
-        // RTC-GPIO verwenden (empfohlen für Deep-Sleep-Wake-up)
-        ESP_LOGI(TAG, "GPIO%d ist RTC-fähig → konfiguriere GPIO-Wake-up", gpio_num);
+        ESP_LOGI(TAG, "GPIO%d ist RTC-fähig → konfiguriere EXT1-Wake-up", gpio_num);
         
-        // RTC-GPIO initialisieren
-        rtc_gpio_init(gpio_num);
-        rtc_gpio_set_direction(gpio_num, RTC_GPIO_MODE_INPUT_ONLY);
+        esp_err_t ret = rtc_gpio_init(gpio_num);
+        if (ret == ESP_OK) {
+            ret = rtc_gpio_set_direction(gpio_num, RTC_GPIO_MODE_INPUT_ONLY);
+        }
         
         // Level basierend auf GPIO-Modus bestimmen
-        if (gpio_mode == INPUT_PULLUP) {
+        if (ret == ESP_OK && gpio_mode == INPUT_PULLUP) {
             // INPUT_PULLUP: Taster zieht auf LOW → Wake-up bei LOW-Level
-            wakeup_level = GPIO_INTR_LOW_LEVEL;
+            wakeup_mode = ESP_EXT1_WAKEUP_ANY_LOW;
+            wakeup_level = 0;
             level_name = "LOW LEVEL (Taster gedrückt = LOW)";
-            rtc_gpio_pullup_dis(gpio_num);
-            rtc_gpio_pulldown_dis(gpio_num);
-            rtc_gpio_pullup_en(gpio_num);  // RTC-GPIO Pull-Up aktivieren
-        } else if (gpio_mode == INPUT_PULLDOWN) {
+            ret = rtc_gpio_pullup_dis(gpio_num);
+            if (ret == ESP_OK) {
+                ret = rtc_gpio_pulldown_dis(gpio_num);
+            }
+            if (ret == ESP_OK) {
+                ret = rtc_gpio_pullup_en(gpio_num);
+            }
+        } else if (ret == ESP_OK && gpio_mode == INPUT_PULLDOWN) {
             // INPUT_PULLDOWN: Taster zieht auf HIGH → Wake-up bei HIGH-Level
-            wakeup_level = GPIO_INTR_HIGH_LEVEL;
+            wakeup_mode = ESP_EXT1_WAKEUP_ANY_HIGH;
+            wakeup_level = 1;
             level_name = "HIGH LEVEL (Taster gedrückt = HIGH)";
-            rtc_gpio_pullup_dis(gpio_num);
-            rtc_gpio_pulldown_dis(gpio_num);
-            rtc_gpio_pulldown_en(gpio_num);  // RTC-GPIO Pull-Down aktivieren
-        } else {
+            ret = rtc_gpio_pullup_dis(gpio_num);
+            if (ret == ESP_OK) {
+                ret = rtc_gpio_pulldown_dis(gpio_num);
+            }
+            if (ret == ESP_OK) {
+                ret = rtc_gpio_pulldown_en(gpio_num);
+            }
+        } else if (ret == ESP_OK) {
             // INPUT (ohne Pull): Standardmäßig LOW-Level annehmen
-            wakeup_level = GPIO_INTR_LOW_LEVEL;
+            wakeup_mode = ESP_EXT1_WAKEUP_ANY_LOW;
+            wakeup_level = 0;
             level_name = "LOW LEVEL (Default)";
-            rtc_gpio_pullup_dis(gpio_num);
-            rtc_gpio_pulldown_dis(gpio_num);
+            ret = rtc_gpio_pullup_dis(gpio_num);
+            if (ret == ESP_OK) {
+                ret = rtc_gpio_pulldown_dis(gpio_num);
+            }
         }
-        
-        // WICHTIG: RTC_PERIPH Domain konfigurieren
-        // Wenn RTC_PERIPH ausgeschaltet ist, wird HOLD automatisch verwendet
-        // Wenn RTC_PERIPH eingeschaltet ist, funktionieren Pull-Ups/Pull-Downs normal
-        // Für Deep-Sleep empfohlen: RTC_PERIPH ausschalten, HOLD wird automatisch verwendet
-        esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
-        ESP_LOGI(TAG, "RTC_PERIPH Domain ausgeschaltet → HOLD wird automatisch verwendet");
-    
-    // WICHTIG: Kurze Verzögerung, damit Pull-Up/Pull-Down stabilisiert
-    vTaskDelay(pdMS_TO_TICKS(50));
-    
-    // Aktuellen GPIO-Zustand prüfen (für Debugging und Warnung)
-        int gpio_state = rtc_gpio_get_level(gpio_num);
-    ESP_LOGI(TAG, "BUTTON_A_GPIO aktueller Zustand: %s", gpio_state ? "HIGH" : "LOW");
-    
-    // WICHTIG: Bei Level-Mode weckt ESP32C6 sofort, wenn GPIO bereits im Wake-up-Level ist!
-    // Daher prüfen und warnen, falls GPIO bereits im Wake-up-Level ist
-    if ((wakeup_level == GPIO_INTR_LOW_LEVEL && gpio_state == 0) ||
-        (wakeup_level == GPIO_INTR_HIGH_LEVEL && gpio_state == 1)) {
-        ESP_LOGW(TAG, "WARNUNG: BUTTON_A_GPIO ist bereits im Wake-up-Level! System würde sofort wecken.");
-        ESP_LOGW(TAG, "Stelle sicher, dass Taster nicht gedrückt ist, bevor Deep-Sleep startet!");
-        return;  // Deep-Sleep abbrechen
-    }
-    
-    // GPIO-Wake-up aktivieren (ESP32C6 unterstützt nur gpio_wakeup, nicht ext0/ext1)
-    esp_err_t ret = esp_sleep_enable_gpio_wakeup();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "FEHLER: GPIO-Wake-up-Konfiguration fehlgeschlagen: %s", esp_err_to_name(ret));
-            ESP_LOGW(TAG, "Deep-Sleep wird ohne GPIO-Wake-up gestartet!");
-    } else {
-        // GPIO als Wake-up-Source setzen: Level basierend auf GPIO-Modus
-        // ESP32C6 unterstützt NUR Level-Mode (LOW_LEVEL oder HIGH_LEVEL)
-        ret = gpio_wakeup_enable(gpio_num, wakeup_level);
+
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "FEHLER: gpio_wakeup_enable fehlgeschlagen: %s", esp_err_to_name(ret));
-            ESP_LOGE(TAG, "Fehler-Code: %s", esp_err_to_name(ret));
+            ESP_LOGE(TAG, "FEHLER: Taster-RTC-GPIO konnte nicht konfiguriert werden: %s",
+                     esp_err_to_name(ret));
         } else {
-                gpio_wakeup_configured = true;
-                ESP_LOGI(TAG, "GPIO-Wake-up konfiguriert: Taster A (BUTTON_A_GPIO) - %s", level_name);
-            ESP_LOGI(TAG, "GPIO-Modus: %s", 
-                     gpio_mode == INPUT_PULLUP ? "INPUT_PULLUP" : 
-                     (gpio_mode == INPUT_PULLDOWN ? "INPUT_PULLDOWN" : "INPUT"));
-            ESP_LOGI(TAG, "HOLD-Funktion aktiv: Pull-Up/Pull-Down wird während Deep-Sleep gehalten");
+            // Alte RTC-/LP_IO-Wake-Konfiguration für GPIO1 sicher entfernen.
+            // EXT1 nutzt einen getrennten Wake-Pfad und verändert GPIO2 nicht.
+            ret = rtc_gpio_wakeup_disable(gpio_num);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "FEHLER: Alte LP_IO-Konfiguration für Taster konnte nicht entfernt werden: %s",
+                         esp_err_to_name(ret));
+            }
         }
+
+        // AUTO lässt ESP-IDF die für EXT1 und LP-Core nötigen Domains wählen.
+        if (ret == ESP_OK) {
+            ret = esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_AUTO);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "FEHLER: RTC_PERIPH AUTO konnte nicht gesetzt werden: %s",
+                         esp_err_to_name(ret));
+            }
+        }
+
+        if (ret == ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
+        // Aktuellen GPIO-Zustand prüfen (für Debugging und Warnung)
+        int gpio_state = rtc_gpio_get_level(gpio_num);
+        ESP_LOGI(TAG, "BUTTON_A_GPIO aktueller Zustand: %s", gpio_state ? "HIGH" : "LOW");
+
+        if (ret == ESP_OK && gpio_state == wakeup_level) {
+            ESP_LOGW(TAG, "WARNUNG: BUTTON_A_GPIO ist bereits im EXT1-Wake-Level!");
+            ESP_LOGW(TAG, "Stelle sicher, dass Taster nicht gedrückt ist, bevor Deep-Sleep startet!");
+            return;
+        }
+
+        if (ret == ESP_OK) {
+            ret = esp_sleep_enable_ext1_wakeup_io(1ULL << BUTTON_A_GPIO, wakeup_mode);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "FEHLER: EXT1-Wake-up-Konfiguration fehlgeschlagen: %s",
+                         esp_err_to_name(ret));
+                ESP_LOGW(TAG, "Deep-Sleep wird ohne Taster-Wake-up gestartet!");
+            } else {
+                gpio_wakeup_configured = true;
+                ESP_LOGI(TAG, "EXT1-Wake-up konfiguriert: Taster A (GPIO%d) - %s",
+                         BUTTON_A_GPIO, level_name);
+            }
+        } else {
+            ESP_LOGW(TAG, "Deep-Sleep wird ohne Taster-Wake-up gestartet!");
         }
     } else {
-        // Nicht-RTC-Pin: GPIO-Wake-up nicht möglich
         ESP_LOGW(TAG, "WARNUNG: GPIO%d ist NICHT RTC-fähig (nur GPIOs 0-7)", gpio_num);
-        ESP_LOGW(TAG, "GPIO-Wake-up (Taster A) kann nicht konfiguriert werden!");
+        ESP_LOGW(TAG, "EXT1-Wake-up (Taster A) kann nicht konfiguriert werden!");
         ESP_LOGW(TAG, "Nur Timer-Wake-up möglich (falls aktiviert)");
     }
     
@@ -1212,7 +1257,7 @@ void enter_deep_sleep_with_gpio_and_timer_wakeup(bool enable_timer = true) {
             }
         }
     } else {
-        ESP_LOGI(TAG, "Timer-Wake-up DEAKTIVIERT (nur GPIO-Wake-up aktiv)");
+        ESP_LOGI(TAG, "Timer-Wake-up DEAKTIVIERT (nur EXT1-Taster-Wake-up aktiv)");
         ESP_LOGI(TAG, "Nur manueller Wake-up über Taster A möglich");
     }
     
@@ -1223,7 +1268,7 @@ void enter_deep_sleep_with_gpio_and_timer_wakeup(bool enable_timer = true) {
         ESP_LOGE(TAG, "Deep-Sleep wird ABGEBROCHEN - System bleibt aktiv");
         ESP_LOGE(TAG, "Mögliche Ursachen:");
         if (!is_rtc_gpio) {
-            ESP_LOGE(TAG, "  - GPIO ist nicht RTC-fähig (nur GPIOs 0-7)");
+            ESP_LOGE(TAG, "  - Taster-GPIO ist nicht EXT1-fähig (nur GPIOs 0-7)");
         }
         if (!enable_timer) {
             ESP_LOGE(TAG, "  - Timer-Wake-up ist deaktiviert (Akku-Schutz)");
@@ -1241,9 +1286,9 @@ void enter_deep_sleep_with_gpio_and_timer_wakeup(bool enable_timer = true) {
     ESP_LOGI(TAG, "=== Gehe in Deep-Sleep ===");
     ESP_LOGI(TAG, "Wake-up möglich durch:");
     if (gpio_wakeup_configured) {
-        ESP_LOGI(TAG, "  - Taster A (GPIO-Wake-up)");
+        ESP_LOGI(TAG, "  - Taster A (EXT1-Wake-up)");
     } else {
-        ESP_LOGI(TAG, "  - Taster A: NICHT verfügbar (GPIO nicht RTC-fähig)");
+        ESP_LOGI(TAG, "  - Taster A: NICHT verfügbar (EXT1 nicht konfiguriert)");
     }
     if (timer_activated) {
         ESP_LOGI(TAG, "  - Timer (Cron-Intervall): %02d:%02d:00 (in %llu Sekunden = %.2f Minuten)",
@@ -1256,8 +1301,8 @@ void enter_deep_sleep_with_gpio_and_timer_wakeup(bool enable_timer = true) {
             ESP_LOGI(TAG, "  - Timer: DEAKTIVIERT (Akku-Schutz)");
         }
     }
-    fflush(stdout);
-    
+    console_flush_before_poweroff();
+
     esp_deep_sleep_start();
     // Ab hier wird Code nicht mehr ausgeführt
 }
@@ -4360,9 +4405,17 @@ extern "C" void app_main(void) {
     esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
     // WiFi-Debug-Nachrichten reduzieren (muss ganz am Anfang stehen)
     SET_WIFI_LOG_LEVEL();
-    
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    
+#ifdef GOM_ZIGBEE_DEBUG_LOG
+    esp_log_level_set("transfer_zigbee", ESP_LOG_DEBUG);
+    esp_log_level_set("transfer", ESP_LOG_DEBUG);
+    ESP_LOGW(TAG, "ZigBee-Debug-Log aktiv (GOM_ZIGBEE_DEBUG_LOG)");
+#endif
+
+    const esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+    if (wake_needs_serial_monitor_delay(wakeup_reason)) {
+        vTaskDelay(pdMS_TO_TICKS(1000));  // Serial-Monitor nach Flash/Reboot/Taster
+    }
+
     // Antennenumschaltung initialisieren (interne Antenne als Standard)
     INIT_ANTENNA_SWITCH(ANTENNA_INTERNAL);
 
@@ -4377,10 +4430,16 @@ extern "C" void app_main(void) {
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     io_conf.intr_type = GPIO_INTR_DISABLE;
     gpio_config(&io_conf);
-    
-    // Power-On vs. Wake-up erkennen
-    esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+
+    // Power-On vs. Wake-up erkennen (wakeup_reason bereits oben gelesen)
     isPowerOn = (wakeup_reason == ESP_SLEEP_WAKEUP_UNDEFINED);
+
+    // RTC-RAM ist nach Power-On, Flash oder Reboot nicht als gültig anzusehen.
+    // Gleiche Startwerte veranlassen den Watchdog-Task, den LP-Core zu starten.
+    if (isPowerOn) {
+        *(volatile uint32_t *)&ulp_lp_core_running = 0;
+        last_lp_core_running = 0;
+    }
     
     // Wake-up Count nur bei Deep-Sleep-Wake-up erhöhen (nicht bei ESP.restart())
     if (!isPowerOn) {
@@ -4391,7 +4450,7 @@ extern "C" void app_main(void) {
     ESP_LOGI(TAG, "\n=== Gas-O-Meter ===");
     ESP_LOGI(TAG, "Wake-up Count: %d", wakeupCount);
     
-    // WICHTIG: ADC-Messung bei JEDEM Wake-up durchführen (Power-On oder Timer/GPIO-Wake-up)
+    // WICHTIG: ADC-Messung bei JEDEM Wake-up durchführen (Power-On oder Timer/EXT1-Wake-up)
     // Diese Messung ist die Basis für alle weiteren Entscheidungen (Akku-Schutz, Übertragung, etc.)
     ESP_LOGI(TAG, "Führe ADC-Messung durch (bei jedem Wake-up)...");
     esp_err_t adc_ret = init_adc();
@@ -4424,10 +4483,25 @@ extern "C" void app_main(void) {
             // WICHTIG: NVS muss vorher initialisiert werden!
             init_nvs_partitions(isPowerOn);
             init_ring_buffer_and_ulp_pulse_counter(isPowerOn);
+
+            // Dieser Schnellpfad liegt vor dem Watchdog-Task. Deshalb den
+            // Cross-Wake-Check einmal synchron ausführen, damit der LP-Core
+            // auch nach Power-On/Reboot mit schwachem Akku Impulse zählt.
+            const uint32_t current_lp_core_running =
+                *(volatile uint32_t *)&ulp_lp_core_running;
+            if (current_lp_core_running - last_lp_core_running) {
+                last_lp_core_running = current_lp_core_running;
+            } else {
+                ESP_LOGW(TAG, "Akku-Schnellpfad: LP-Core ohne Fortschritt");
+                restart_lp_core_with_retries(current_lp_core_running);
+                last_lp_core_running =
+                    *(volatile uint32_t *)&ulp_lp_core_running;
+            }
+
             ESP_LOGI(TAG, "Speichere ulp_pulse_counter in Ring-Speicher vor Deep-Sleep (Akku-Low)...");
             write_ulp_pulse_counter_to_ring_buffer();
             
-            // Deep-Sleep mit GPIO-Wake-up (Taster A) - Timer deaktiviert bei kritischer Spannung
+            // Deep-Sleep mit EXT1-Wake-up (Taster A) - Timer deaktiviert bei kritischer Spannung
             bool enable_timer = (battery_voltage > BATTERY_VOLTAGE_PROTECTION);
             enter_deep_sleep_with_gpio_and_timer_wakeup(enable_timer);
             // Ab hier wird Code nicht mehr ausgeführt (Deep-Sleep)
@@ -4440,14 +4514,16 @@ extern "C" void app_main(void) {
             ESP_LOGI(TAG, "=== EVENT: Power-On ===");
             break;
         case ESP_SLEEP_WAKEUP_GPIO:
-            ESP_LOGI(TAG, "=== EVENT: Wake-up durch GPIO (Taster A) ===");
+            ESP_LOGI(TAG, "=== EVENT: Wake-up durch GPIO (Legacy/sonstige Quelle) ===");
             break;
         case ESP_SLEEP_WAKEUP_TIMER:
             ESP_LOGI(TAG, "=== EVENT: Wake-up durch Timer (Cron-Intervall) ===");
             break;
-        case ESP_SLEEP_WAKEUP_EXT0:
         case ESP_SLEEP_WAKEUP_EXT1:
-            ESP_LOGI(TAG, "=== EVENT: Wake-up durch GPIO (EXT) ===");
+            ESP_LOGI(TAG, "=== EVENT: Wake-up durch EXT1 (Taster A) ===");
+            break;
+        case ESP_SLEEP_WAKEUP_EXT0:
+            ESP_LOGI(TAG, "=== EVENT: Wake-up durch EXT0 (Legacy/sonstige Quelle) ===");
             break;
         case ESP_SLEEP_WAKEUP_TOUCHPAD:
             ESP_LOGI(TAG, "=== EVENT: Wake-up durch Touchpad ===");
@@ -4511,7 +4587,7 @@ extern "C" void app_main(void) {
         init_ring_buffer_and_ulp_pulse_counter(isPowerOn);
 
         // LP-Core Watchdog Task starten (asynchron)
-        xTaskCreate(
+        const BaseType_t watchdog_task_result = xTaskCreate(
             lp_core_watchdog_task,      // Task-Funktion
             "LP_Core_Watchdog",          // Task-Name
             4096,                        // Stack-Größe (Bytes)
@@ -4519,7 +4595,11 @@ extern "C" void app_main(void) {
             1,                           // Priorität (niedrig, da nicht kritisch)
             NULL                         // Task-Handle (nicht benötigt)
         );
-        ESP_LOGI(TAG, "LP-Core Watchdog Task gestartet");
+        if (watchdog_task_result == pdPASS) {
+            ESP_LOGI(TAG, "LP-Core Watchdog Task angelegt");
+        } else {
+            ESP_LOGE(TAG, "FEHLER: LP-Core Watchdog Task konnte nicht angelegt werden");
+        }
         
         // 1. Batteriespannung-Test und ggf. in Ring-Speicher schreiben
         // < 30%: Schreibe in Ring-Speicher (RTC-RAM könnte verloren gehen; deckt auch reinen USB ab)

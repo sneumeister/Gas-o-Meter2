@@ -22,6 +22,11 @@ body {
   padding: 3rem 0;
 }
 
+.lang-switch {
+  margin: 0 0 1.25rem;
+  font-size: 0.95rem;
+}
+
 header {
   margin-bottom: 2rem;
 }

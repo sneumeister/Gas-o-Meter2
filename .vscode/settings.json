@@ -1,3 +1,4 @@
 {
-    "platformio-ide.intelliSenseEngine": "cpptools"
+    "platformio-ide.intelliSenseEngine": "clangd",
+    "C_Cpp.intelliSenseEngine": "disabled"
 }
