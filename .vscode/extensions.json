@@ -1,8 +1,10 @@
 {
     "recommendations": [
-        "pioarduino.pioarduino-ide"
+        "pioarduino.pioarduino-ide",
+        "llvm-vs-code-extensions.vscode-clangd"
     ],
     "unwantedRecommendations": [
+        "platformio.platformio-ide",
         "ms-vscode.cpptools-extension-pack"
     ]
 }

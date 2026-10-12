@@ -5,5 +5,17 @@
 		}
 	],
 	"settings": {
+		"platformio-ide.intelliSenseEngine": "clangd",
+		"C_Cpp.intelliSenseEngine": "disabled"
+	},
+	"extensions": {
+		"recommendations": [
+			"pioarduino.pioarduino-ide",
+			"llvm-vs-code-extensions.vscode-clangd"
+		],
+		"unwantedRecommendations": [
+			"platformio.platformio-ide",
+			"ms-vscode.cpptools-extension-pack"
+		]
 	}
 }
