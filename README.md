@@ -86,7 +86,7 @@ Der LP-Core zählt Impulse weiter, solange der Chip versorgt ist. **Taster B** h
 | Transfer   | `src/transfer.cpp`, `transfer_{mqtt,ble,zigbee}.cpp` | Modus-Dispatcher und Protokoll-Stacks                               |
 | Netzwerk   | `src/wifi_manager.cpp`, `src/time_sync.cpp`          | WiFi STA/AP, mDNS, NTP                                              |
 | Persistenz | `data/` (LittleFS), `pulse_nv` (NVS)                 | Web-UI, `config.json`, Zähler-Ringpuffer                            |
-| Version    | `include/version.h`                                  | `Gas-O-Meter2` v1.0.1                                               |
+| Version    | `include/version.h`                                  | `Gas-O-Meter2` v1.0.7                                               |
 
 
 **Typischer Ablauf:** TPL5110 weckt ESP → LP-Core liefert Zählerstand → HP-Core liest ADC/Config → optional Transfer → Deep-Sleep.
@@ -100,15 +100,15 @@ Der LP-Core zählt Impulse weiter, solange der Chip versorgt ist. **Taster B** h
 | PlatformIO            | [pioarduino/platform-espressif32](https://github.com/pioarduino/platform-espressif32) (stable zip in `platformio.ini`) |
 | Framework             | **ESP-IDF 5.5.1** (`sdkconfig.defaults`)                                                                               |
 | Board                 | `seeed_xiao_esp32c6`                                                                                                   |
-| Extension (empfohlen) | `pioarduino.pioarduino-ide` (`.vscode/extensions.json`)                                                                |
-| IntelliSense          | `cpptools` (`.vscode/settings.json`)                                                                                   |
+| Extension (empfohlen) | `pioarduino.pioarduino-ide` + `vscode-clangd` (`.vscode/extensions.json`, `gas-o-meter2.code-workspace`)              |
+| IntelliSense          | `clangd` (`.vscode/settings.json`; Espressif-clangd setzt pioarduino lokal)                                            |
 
 
 **Voraussetzungen:** PlatformIO CLI, Git, USB-Treiber für XIAO ESP32-C6.
 
 ## Build & Flash
 
-Standard-Environment in `[platformio.ini](platformio.ini)`: `PCB_20251022`
+Standard-Environment in [`platformio.ini`](platformio.ini): `PCB_20251022`
 
 
 | Environment    | USB-Erkennung                                                | Befehl                              |
@@ -118,14 +118,14 @@ Standard-Environment in `[platformio.ini](platformio.ini)`: `PCB_20251022`
 | `TPL_test`     | — (Hardwaretest TPL5110/Reed an GPIO2, ohne LP-Core/WiFi)    | `pio run -e TPL_test -t upload`     |
 
 
-**TPL_test:** Seriell `pio device monitor -e TPL_test` (115200). Monitor **vor** dem Reset öffnen oder Board danach neu starten (USB-CDC). Flanken auf GPIO2 mit µs-Zeitstempel und Intervall `dt`; alle 2 s ein Heartbeat. **Funktionstest TPL:** Reed kurz tippen → ein LOW ~3–4 s, dann HIGH; Reed dauerhaft brücken → nur **ein** LOW, das bis zum Öffnen der Brücke anhält (keine kurzen HIGH-Lücken dazwischen). **Magnettest:** Reed-Schalter mit Magnet auslösen (typische Empfindlichkeit/Abstand). Details: `[src/main_TPL_test.cpp](src/main_TPL_test.cpp)`.
+**TPL_test:** Seriell `pio device monitor -e TPL_test` (115200). Monitor **vor** dem Reset öffnen oder Board danach neu starten (USB-CDC). Flanken auf GPIO2 mit µs-Zeitstempel und Intervall `dt`; alle 2 s ein Heartbeat. **Funktionstest TPL:** Reed kurz tippen → ein LOW ~3–4 s, dann HIGH; Reed dauerhaft brücken → nur **ein** LOW, das bis zum Öffnen der Brücke anhält (keine kurzen HIGH-Lücken dazwischen). **Magnettest:** Reed-Schalter mit Magnet auslösen (typische Empfindlichkeit/Abstand). Details: [`src/main_TPL_test.cpp`](src/main_TPL_test.cpp).
 
 `BOARD_VERSION_ID` steuert in `include/hardware.h`, ob USB per ADC-Schwellwert oder per VBUS-GPIO erkannt wird — kein harter Platinen-Zwang.
 
 **Erstinstallation:**
 
 1. Repository klonen
-2. `data/config.json` aus `[data/config.json_example](data/config.json_example)` erstellen
+2. `data/config.json` aus [`data/config.json_example`](data/config.json_example) erstellen
 3. Firmware flashen: `pio run -t upload` (Default); optional `-e PCB_20260523` für VBUS-Erkennung auf Revision 20260523
 4. Filesystem flashen: `pio run -t uploadfs` (Web-UI und Default-Config)
 5. Seriell monitorieren: `pio device monitor` (115200 baud)
@@ -202,9 +202,9 @@ gas-o-meter2/
 ## Lizenz
 
 Gas-O-Meter2 ist unter der [Apache License 2.0](./LICENSE) veröffentlicht.
-Copyright- und Attributionshinweise stehen in `[NOTICE](./NOTICE)`. Die
+Copyright- und Attributionshinweise stehen in [`NOTICE`](./NOTICE). Die
 Lizenzen der verwendeten Bibliotheken dokumentiert
-`[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)`.
+[`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
 
 Die permissive Apache-2.0-Lizenz wurde gewählt, um mögliche Konflikte zwischen
 starkem Copyleft und den zusätzlichen Binärbedingungen der separat

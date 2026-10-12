@@ -82,7 +82,7 @@ The LP core keeps counting pulses while the chip is powered. **Button B** has no
 | Transfer | `src/transfer.cpp`, `transfer_{mqtt,ble,zigbee}.cpp` | Mode dispatcher and protocol stacks |
 | Network | `src/wifi_manager.cpp`, `src/time_sync.cpp` | WiFi STA/AP, mDNS, NTP |
 | Persistence | `data/` (LittleFS), `pulse_nv` (NVS) | Web UI, `config.json`, counter ring buffer |
-| Version | `include/version.h` | `Gas-O-Meter2` v1.0.1 |
+| Version | `include/version.h` | `Gas-O-Meter2` v1.0.7 |
 
 **Typical sequence:** TPL5110 wakes ESP → LP core provides counter → HP core reads ADC/config → optional transfer → deep sleep.
 
@@ -94,8 +94,8 @@ The LP core keeps counting pulses while the chip is powered. **Button B** has no
 | PlatformIO | [pioarduino/platform-espressif32](https://github.com/pioarduino/platform-espressif32) (stable zip in `platformio.ini`) |
 | Framework | **ESP-IDF 5.5.1** (`sdkconfig.defaults`) |
 | Board | `seeed_xiao_esp32c6` |
-| Extension (recommended) | `pioarduino.pioarduino-ide` (`.vscode/extensions.json`) |
-| IntelliSense | `cpptools` (`.vscode/settings.json`) |
+| Extension (recommended) | `pioarduino.pioarduino-ide` + `vscode-clangd` (`.vscode/extensions.json`, `gas-o-meter2.code-workspace`) |
+| IntelliSense | `clangd` (`.vscode/settings.json`; Espressif clangd is set locally by pioarduino) |
 
 **Requirements:** PlatformIO CLI, Git, USB drivers for XIAO ESP32-C6.
 
