@@ -25,9 +25,12 @@ integration_templates/
 
 ### [Zigbee2MQTT](./zigbee2mqtt/README_EN.md)
 
+![Zigbee2MQTT device view with custom icon](../pictures/z2m_icon.png)
+
 1. Copy `zigbee2mqtt/external_converters/gas-o-meter2.js` to `<data_path>/external_converters/`
-2. Restart Zigbee2MQTT (log: `Loaded external converter: gas-o-meter2`)
-3. ESP: `transfer_mode` Zigbee, start pairing → Z2M **Permit join**
+2. Optional: copy `zigbee2mqtt/device_icons/gas-o-meter2.png` to `<data_path>/device_icons/` and set `meta.icon` in the converter (see [zigbee2mqtt/README_EN.md](./zigbee2mqtt/README_EN.md#step-5-optional-device-icon))
+3. Restart Zigbee2MQTT (log: `Loaded external converter: gas-o-meter2`)
+4. ESP: `transfer_mode` Zigbee, start pairing → Z2M **Permit join**
 
 Details, exposes, and troubleshooting: [zigbee2mqtt/README_EN.md](./zigbee2mqtt/README_EN.md)
 

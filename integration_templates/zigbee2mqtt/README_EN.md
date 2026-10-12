@@ -9,6 +9,8 @@ External converter for Gas-O-Meter2 in Zigbee2MQTT (`external_converters/gas-o-m
 
 Firmware uses **Simple Metering** (0x0702) for gas and **Power Configuration** (0x0001) for the battery. The converter maps ZCL attributes to MQTT/HA exposes (see below).
 
+![Zigbee2MQTT device view with custom icon](../../pictures/z2m_icon.png)
+
 ---
 
 ## Project structure
@@ -98,9 +100,14 @@ After pairing, configure log lines such as `[gas-o-meter2 configure] configure b
 
 ### Step 5 (optional): Device icon
 
-Copy a PNG (e.g. 512×512) to `<data_path>/device_icons/gas-o-meter2.png`.
+The icon ships in the repo as `device_icons/gas-o-meter2.png`. Copy it to `<data_path>/device_icons/`:
 
-The converter has **no** `icon` in `meta` by default. Optionally add in `gas-o-meter2.js`:
+```bash
+mkdir -p <data_path>/device_icons/
+cp device_icons/gas-o-meter2.png <data_path>/device_icons/
+```
+
+The converter has **no** `icon` in `meta` by default. Add it in `gas-o-meter2.js`:
 
 ```javascript
 meta: {
@@ -110,7 +117,7 @@ meta: {
 },
 ```
 
-Then restart Z2M (or raise `configureKey` for another configure run).
+Then restart Z2M. The device overview will show the custom icon (see screenshot above).
 
 ---
 
