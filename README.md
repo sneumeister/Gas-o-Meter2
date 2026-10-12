@@ -2,11 +2,11 @@
 
 # Gas-O-Meter2
 
-[![Release](https://img.shields.io/github/v/release/sneumeister/Gas-o-Meter2)](https://github.com/sneumeister/Gas-o-Meter2/releases)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)
-[![ESP32-C6](https://img.shields.io/badge/MCU-ESP32--C6-red)](https://www.espressif.com/en/products/socs/esp32-c6)
-[![pioarduino](https://img.shields.io/badge/platform-pioarduino-orange)](https://github.com/pioarduino/platform-espressif32)
-[![ESP-IDF](https://img.shields.io/badge/framework-ESP--IDF%205.5-green)](https://docs.espressif.com/projects/esp-idf/)
+![Release](https://img.shields.io/github/v/release/sneumeister/Gas-o-Meter2)
+![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)
+![ESP32-C6](https://img.shields.io/badge/MCU-ESP32--C6-red)
+![pioarduino](https://img.shields.io/badge/platform-pioarduino-orange)
+![ESP-IDF](https://img.shields.io/badge/framework-ESP--IDF%205.5-green)
 
 ESP32-C6-basiertes Gaszähler-Monitoring mit **LP-Core Pulse-Counting**, akkubetriebenem Deep-Sleep und wählbaren Übertragungswegen (WiFi/MQTT, BLE, Zigbee).
 
@@ -25,6 +25,9 @@ Custom Carrier-PCB mit **TPL5110**-Mikrotimer für saubere Reed-Impulse, optiona
 - **Taster A** — Web-UI und WiFi nur nach Wake-up über **Taster A** auf der Platine; bei reinem Timer-Wake-up erfolgt nur die Datenübertragung, danach sofort Deep-Sleep
 - **Taster B** — derzeit **ohne Funktion**
 - **Transfer-Modi** — `none`, `mqtt`, `ble` oder `zigbee` (jeweils ein Modus aktiv)
+- **Akku-Laufzeit v1.0.7** — Zigbee (linkquality ~25) ca. 450h
+
+
 
 ## Hardware
 
@@ -38,12 +41,14 @@ Die Firmware-Revision (`BOARD_VERSION_ID`, siehe [Build & Flash](#build--flash))
 
 ## Übertragungswege (Transfer-Modi)
 
-| Modus | Beschreibung | Integration |
-| ----- | ------------ | ----------- |
-| `mqtt` | WiFi + MQTT (+ optional Home Assistant Autodiscovery) | NTP-Zeitsync, `transfer_mqtt.cpp` |
-| `ble` | NimBLE, JSON-Notify auf Characteristic 0xFFF1 | [Node-RED Flow](integration_templates/nodered/README.md) |
-| `zigbee` | Zigbee End Device (Metering + Battery Cluster) | [Zigbee2MQTT Converter](integration_templates/zigbee2mqtt/README.md) |
-| `none` | Nur lokale Erfassung; kein externer Transfer | — |
+
+| Modus    | Beschreibung                                          | Integration                                                          |
+| -------- | ----------------------------------------------------- | -------------------------------------------------------------------- |
+| `mqtt`   | WiFi + MQTT (+ optional Home Assistant Autodiscovery) | NTP-Zeitsync, `transfer_mqtt.cpp`                                    |
+| `ble`    | NimBLE, JSON-Notify auf Characteristic 0xFFF1         | [Node-RED Flow](integration_templates/nodered/README.md)             |
+| `zigbee` | Zigbee End Device (Metering + Battery Cluster)        | [Zigbee2MQTT Converter](integration_templates/zigbee2mqtt/README.md) |
+| `none`   | Nur lokale Erfassung; kein externer Transfer          | —                                                                    |
+
 
 Einstieg für externe Systeme: [integration_templates/README.md](integration_templates/README.md)
 
@@ -51,14 +56,16 @@ Einstieg für externe Systeme: [integration_templates/README.md](integration_tem
 
 LiPo-Spannungsreihe (wie in der Firmware hinterlegt; %-Anzeige wird dazwischen linear interpoliert):
 
-| Spannung | % | Ohne USB (Akku) | Mit USB |
-| -------- | - | --------------- | ------- |
-| ≥ 4,02V | 100% | Normal: Transfer, Zähler im RTC-RAM | Normal: Transfer, Zähler im RTC-RAM (kein NVS) |
-| 3,92V | 80% | wie oben | wie oben |
-| 3,72V | 50% | wie oben | wie oben |
-| 3,57V | 30% | Ab hier bzw. darunter: Low-Battery-Meldung; Zähler in NVS | wie links |
-| 3,42V | 20% | Darunter: Sofort Deep-Sleep, **kein** Transfer; Timer weiter bis 3,15V | Schutz greift **nicht** → Transfer wie normal |
-| ≤ 3,15V | 0% | Timer aus; nur **Taster A** weckt | Timer bleibt an |
+
+| Spannung | %    | Ohne USB (Akku)                                                        | Mit USB                                        |
+| -------- | ---- | ---------------------------------------------------------------------- | ---------------------------------------------- |
+| ≥ 4,02V  | 100% | Normal: Transfer, Zähler im RTC-RAM                                    | Normal: Transfer, Zähler im RTC-RAM (kein NVS) |
+| 3,92V    | 80%  | wie oben                                                               | wie oben                                       |
+| 3,72V    | 50%  | wie oben                                                               | wie oben                                       |
+| 3,57V    | 30%  | Ab hier bzw. darunter: Low-Battery-Meldung; Zähler in NVS              | wie links                                      |
+| 3,42V    | 20%  | Darunter: Sofort Deep-Sleep, **kein** Transfer; Timer weiter bis 3,15V | Schutz greift **nicht** → Transfer wie normal  |
+| ≤ 3,15V  | 0%   | Timer aus; nur **Taster A** weckt                                      | Timer bleibt an                                |
+
 
 **Zurück in den Normalbetrieb** (Timer war aus): USB allein weckt **nicht**. USB anstecken und **Taster A** drücken (startet Web-UI; warten bis Web-Timeout) — danach Deep-Sleep mit Timer.
 
@@ -71,48 +78,54 @@ Der LP-Core zählt Impulse weiter, solange der Chip versorgt ist. **Taster B** h
 
 ## Software-Übersicht
 
-| Komponente | Pfad / Modul | Aufgabe |
-| ---------- | ------------ | ------- |
-| HP-Core | `src/main_idf.cpp` | Boot, Config, HTTP-Server, ADC, Deep-Sleep, Transfer-Orchestrierung |
-| LP-Core | `ulp/ulp_main.c` | Reed-Pulse-Counting auf GPIO2 |
-| Transfer | `src/transfer.cpp`, `transfer_{mqtt,ble,zigbee}.cpp` | Modus-Dispatcher und Protokoll-Stacks |
-| Netzwerk | `src/wifi_manager.cpp`, `src/time_sync.cpp` | WiFi STA/AP, mDNS, NTP |
-| Persistenz | `data/` (LittleFS), `pulse_nv` (NVS) | Web-UI, `config.json`, Zähler-Ringpuffer |
-| Version | `include/version.h` | `Gas-O-Meter2` v1.0.1 |
+
+| Komponente | Pfad / Modul                                         | Aufgabe                                                             |
+| ---------- | ---------------------------------------------------- | ------------------------------------------------------------------- |
+| HP-Core    | `src/main_idf.cpp`                                   | Boot, Config, HTTP-Server, ADC, Deep-Sleep, Transfer-Orchestrierung |
+| LP-Core    | `ulp/ulp_main.c`                                     | Reed-Pulse-Counting auf GPIO2                                       |
+| Transfer   | `src/transfer.cpp`, `transfer_{mqtt,ble,zigbee}.cpp` | Modus-Dispatcher und Protokoll-Stacks                               |
+| Netzwerk   | `src/wifi_manager.cpp`, `src/time_sync.cpp`          | WiFi STA/AP, mDNS, NTP                                              |
+| Persistenz | `data/` (LittleFS), `pulse_nv` (NVS)                 | Web-UI, `config.json`, Zähler-Ringpuffer                            |
+| Version    | `include/version.h`                                  | `Gas-O-Meter2` v1.0.1                                               |
+
 
 **Typischer Ablauf:** TPL5110 weckt ESP → LP-Core liefert Zählerstand → HP-Core liest ADC/Config → optional Transfer → Deep-Sleep.
 
 ## Entwicklungsumgebung
 
-| Komponente | Version / Quelle |
-| ---------- | ---------------- |
-| IDE | VS Code oder **Cursor** mit PlatformIO-Extension |
-| PlatformIO | [pioarduino/platform-espressif32](https://github.com/pioarduino/platform-espressif32) (stable zip in `platformio.ini`) |
-| Framework | **ESP-IDF 5.5.1** (`sdkconfig.defaults`) |
-| Board | `seeed_xiao_esp32c6` |
-| Extension (empfohlen) | `pioarduino.pioarduino-ide` (`.vscode/extensions.json`) |
-| IntelliSense | `cpptools` (`.vscode/settings.json`) |
+
+| Komponente            | Version / Quelle                                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| IDE                   | VS Code oder **Cursor** mit PlatformIO-Extension                                                                       |
+| PlatformIO            | [pioarduino/platform-espressif32](https://github.com/pioarduino/platform-espressif32) (stable zip in `platformio.ini`) |
+| Framework             | **ESP-IDF 5.5.1** (`sdkconfig.defaults`)                                                                               |
+| Board                 | `seeed_xiao_esp32c6`                                                                                                   |
+| Extension (empfohlen) | `pioarduino.pioarduino-ide` (`.vscode/extensions.json`)                                                                |
+| IntelliSense          | `cpptools` (`.vscode/settings.json`)                                                                                   |
+
 
 **Voraussetzungen:** PlatformIO CLI, Git, USB-Treiber für XIAO ESP32-C6.
 
 ## Build & Flash
 
-Standard-Environment in [`platformio.ini`](platformio.ini): `PCB_20251022`
+Standard-Environment in `[platformio.ini](platformio.ini)`: `PCB_20251022`
 
-| Environment | USB-Erkennung | Befehl |
-| ----------- | ------------- | ------ |
-| `PCB_20251022` | ADC-Heuristik (Default; läuft auf beiden Platinenrevisionen) | `pio run` / `pio run -t upload` |
-| `PCB_20260523` | VBUS an GPIO18 (nur sinnvoll auf Revision 20260523) | `pio run -e PCB_20260523 -t upload` |
-| `TPL_test` | — (Hardwaretest TPL5110/Reed an GPIO2, ohne LP-Core/WiFi) | `pio run -e TPL_test -t upload` |
 
-**TPL_test:** Seriell `pio device monitor -e TPL_test` (115200). Monitor **vor** dem Reset öffnen oder Board danach neu starten (USB-CDC). Flanken auf GPIO2 mit µs-Zeitstempel und Intervall `dt`; alle 2 s ein Heartbeat. **Funktionstest TPL:** Reed kurz tippen → ein LOW ~3–4 s, dann HIGH; Reed dauerhaft brücken → nur **ein** LOW, das bis zum Öffnen der Brücke anhält (keine kurzen HIGH-Lücken dazwischen). **Magnettest:** Reed-Schalter mit Magnet auslösen (typische Empfindlichkeit/Abstand). Details: [`src/main_TPL_test.cpp`](src/main_TPL_test.cpp).
+| Environment    | USB-Erkennung                                                | Befehl                              |
+| -------------- | ------------------------------------------------------------ | ----------------------------------- |
+| `PCB_20251022` | ADC-Heuristik (Default; läuft auf beiden Platinenrevisionen) | `pio run` / `pio run -t upload`     |
+| `PCB_20260523` | VBUS an GPIO18 (nur sinnvoll auf Revision 20260523)          | `pio run -e PCB_20260523 -t upload` |
+| `TPL_test`     | — (Hardwaretest TPL5110/Reed an GPIO2, ohne LP-Core/WiFi)    | `pio run -e TPL_test -t upload`     |
+
+
+**TPL_test:** Seriell `pio device monitor -e TPL_test` (115200). Monitor **vor** dem Reset öffnen oder Board danach neu starten (USB-CDC). Flanken auf GPIO2 mit µs-Zeitstempel und Intervall `dt`; alle 2 s ein Heartbeat. **Funktionstest TPL:** Reed kurz tippen → ein LOW ~3–4 s, dann HIGH; Reed dauerhaft brücken → nur **ein** LOW, das bis zum Öffnen der Brücke anhält (keine kurzen HIGH-Lücken dazwischen). **Magnettest:** Reed-Schalter mit Magnet auslösen (typische Empfindlichkeit/Abstand). Details: `[src/main_TPL_test.cpp](src/main_TPL_test.cpp)`.
 
 `BOARD_VERSION_ID` steuert in `include/hardware.h`, ob USB per ADC-Schwellwert oder per VBUS-GPIO erkannt wird — kein harter Platinen-Zwang.
 
 **Erstinstallation:**
 
 1. Repository klonen
-2. `data/config.json` aus [`data/config.json_example`](data/config.json_example) erstellen
+2. `data/config.json` aus `[data/config.json_example](data/config.json_example)` erstellen
 3. Firmware flashen: `pio run -t upload` (Default); optional `-e PCB_20260523` für VBUS-Erkennung auf Revision 20260523
 4. Filesystem flashen: `pio run -t uploadfs` (Web-UI und Default-Config)
 5. Seriell monitorieren: `pio device monitor` (115200 baud)
@@ -130,11 +143,11 @@ Drittanbieter-Erweiterung ist nicht notwendig. Unterstützt werden beide
 PCB-Versionen sowie `TPL_test`.
 
 - **Complete:** Erstinstallation oder ein in den Release Notes als
-  **Breaking** markiertes Update; PCB-Complete setzt persistente Konfiguration
-  und Zähler-/Zigbee-Daten zurück
+**Breaking** markiertes Update; PCB-Complete setzt persistente Konfiguration
+und Zähler-/Zigbee-Daten zurück
 - **Firmware:** nur Programmcode
 - **LittleFS:** nur Web-UI und Default-Konfiguration; überschreibt die aktuelle
-  Gerätekonfiguration
+Gerätekonfiguration
 
 Bei Firmware-/LittleFS-Teilupdates im ESP-Web-Tools-Dialog niemals
 **„Erase device“** wählen.
@@ -147,20 +160,24 @@ Maintainer-Schritte stehen in [RELEASING.md](RELEASING.md).
 Zwei Wege:
 
 1. **Web-UI** nach Wake-up über **Taster A** ([Anleitung zur Web-UI](README_WEBUI.md))
-2. **`data/config.json`** — manuell oder über die Web-UI speichern
+2. `data/config.json` — manuell oder über die Web-UI speichern
 
 **Hinweis Dauerbetrieb:** Bei periodischem Timer-Wake-up (Akku-Betrieb) wacht das Gerät nur kurz auf, überträgt ggf. Daten und geht wieder in Deep-Sleep — **ohne** Web-Frontend. Status und Konfiguration sind nur nach manuellem Wake-up über **Taster A** erreichbar (WiFi STA oder Captive Portal im AP-Modus).
 
 Wichtige Config-Keys (vollständig in `config.json_example`):
 
-| Gruppe | Keys |
-| ------ | ---- |
-| Gerät | `hostname`, `adminpass` |
-| WiFi | `wifiCredentials` (max. 2 Netze) |
-| Timing | `wakeup_minutes`, `transfer_interval_x` |
-| Transfer | `transfer_mode` (`none` / `mqtt` / `ble` / `zigbee`) |
-| MQTT | `mqtt_host`, `mqtt_port`, `mqtt_username`, `mqtt_password`, `mqtt_main_topic`, `mqtt_ha_autodiscovery`, `ntp_server` |
-| Kalibrierung / TX | `adc_voltage_multiplier`, `wifi_tx_power_dbm`, `ble_tx_power_dbm`, `zigbee_tx_power_dbm` |
+
+| Gruppe            | Keys                                                                                                                 |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Gerät             | `hostname`, `adminpass`                                                                                              |
+| WiFi              | `wifiCredentials` (max. 2 Netze)                                                                                     |
+| Timing            | `wakeup_minutes`, `transfer_interval_x`                                                                              |
+| Transfer          | `transfer_mode` (`none` / `mqtt` / `ble` / `zigbee`)                                                                 |
+| MQTT              | `mqtt_host`, `mqtt_port`, `mqtt_username`, `mqtt_password`, `mqtt_main_topic`, `mqtt_ha_autodiscovery`, `ntp_server` |
+| Kalibrierung / TX | `adc_voltage_multiplier`, `wifi_tx_power_dbm`, `ble_tx_power_dbm`, `zigbee_tx_power_dbm`                             |
+
+
+
 
 ## Projektstruktur
 
@@ -180,12 +197,14 @@ gas-o-meter2/
 └── platformio.ini          # Build-Environments
 ```
 
+
+
 ## Lizenz
 
 Gas-O-Meter2 ist unter der [Apache License 2.0](./LICENSE) veröffentlicht.
-Copyright- und Attributionshinweise stehen in [`NOTICE`](./NOTICE). Die
+Copyright- und Attributionshinweise stehen in `[NOTICE](./NOTICE)`. Die
 Lizenzen der verwendeten Bibliotheken dokumentiert
-[`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
+`[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)`.
 
 Die permissive Apache-2.0-Lizenz wurde gewählt, um mögliche Konflikte zwischen
 starkem Copyleft und den zusätzlichen Binärbedingungen der separat

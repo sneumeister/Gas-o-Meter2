@@ -28,6 +28,7 @@ Custom carrier PCB with a **TPL5110** microtimer for clean reed pulses, optional
 - **Button A** — web UI and WiFi only after wake-up via **Button A** on the board; pure timer wake-up transfers data and returns to deep sleep immediately
 - **Button B** — currently **unused**
 - **Transfer modes** — `none`, `mqtt`, `ble`, or `zigbee` (one mode active)
+- **Battery Life v1.0.7** — Zigbee (link quality ~25) approx. 450 hours
 
 ## Hardware
 
