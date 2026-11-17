@@ -162,6 +162,7 @@ Important config keys (full list in `config.json_example`):
 | Transfer | `transfer_mode` (`none` / `mqtt` / `ble` / `zigbee`) |
 | MQTT | `mqtt_host`, `mqtt_port`, `mqtt_username`, `mqtt_password`, `mqtt_main_topic`, `mqtt_ha_autodiscovery`, `ntp_server` |
 | Calibration / TX | `adc_voltage_multiplier`, `wifi_tx_power_dbm`, `ble_tx_power_dbm`, `zigbee_tx_power_dbm` |
+| Antenna | `antenna` (`internal` = onBoard / `external` = U.FL; default `internal`; only select external if a U.FL antenna is connected) |
 
 ## Project structure
 

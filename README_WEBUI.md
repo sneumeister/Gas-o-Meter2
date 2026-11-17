@@ -66,11 +66,12 @@ Wichtige Bereiche:
 | ------- | ------ |
 | Gerät | Hostname, Admin-Passwort ändern |
 | WiFi-Credentials | Bis zu 2 Netze, Scan **WLAN in der Nähe**, TX-Power |
+| Antenne | Intern (onBoard) / Extern (U.FL); gilt für alle Funkwege; Wechsel nach extern nur mit Bestätigung beim Speichern |
 | Timing | Wake-up-Intervall (`wakeup_minutes`) |
 | Transfer | Modus `none` / `mqtt` / `ble` / `zigbee`, Intervall, ADC-Multiplikator, NTP |
 | Aktionen | **Konfig Neuladen**, **Konfig Speichern**, **Reboot**, **Zurück** |
 
-Nach **Konfig Speichern** wird `config.json` auf LittleFS geschrieben; ein **Reboot** übernimmt viele Einstellungen vollständig.
+Nach **Konfig Speichern** wird `config.json` auf LittleFS geschrieben; die Antennenwahl wird sofort am RF-Switch angewendet. Ein **Reboot** übernimmt viele andere Einstellungen vollständig.
 
 ### ZigBee-Einstellungen
 

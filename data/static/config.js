@@ -540,6 +540,10 @@ function saveConfig() {
     const wifiTxPowerDbm = parseInt(document.getElementById('wifi_tx_power_dbm').value);
     const bleTxPowerDbm = parseInt(document.getElementById('ble_tx_power_dbm').value);
     const zigbeeTxPowerDbm = parseInt(document.getElementById('zigbee_tx_power_dbm').value);
+    const antennaSelect = document.getElementById('antenna');
+    const antennaCurrentEl = document.getElementById('antenna_current');
+    const antenna = antennaSelect ? antennaSelect.value.trim() : 'internal';
+    const antennaPrevious = antennaCurrentEl ? antennaCurrentEl.value.trim() : 'internal';
     
     // Validierung: Hostname (max. 26 Zeichen, HOSTNAME_MAX_LEN / BLE-Stack)
     if (hostname.length === 0 || hostname.length > 26) {
@@ -611,6 +615,27 @@ function saveConfig() {
         document.getElementById('zigbee_tx_power_dbm').focus();
         return;
     }
+
+    // Validierung: Antenne
+    if (antenna !== 'internal' && antenna !== 'external') {
+        alert("Antenne ungültig (erlaubt: Intern / Extern).");
+        if (antennaSelect) antennaSelect.focus();
+        return;
+    }
+    // Confirm nur beim Wechsel nach extern (Select allein speichert nicht)
+    if (antenna === 'external' && antennaPrevious !== 'external') {
+        const ok = confirm(
+            "Externe Antenne (U.FL) wählen?\n\n" +
+            "Die externe Antenne muss gesteckt sein! " +
+            "Ohne gesteckte Antenne kann reflektierte Sendeleistung die Hardware belasten."
+        );
+        if (!ok) {
+            if (antennaSelect) {
+                antennaSelect.value = 'internal';
+            }
+            return;
+        }
+    }
     
     // Validierung: NTP-Server
     if (ntpServer.length === 0) {
@@ -658,6 +683,7 @@ function saveConfig() {
         wifi_tx_power_dbm: wifiTxPowerDbm,
         ble_tx_power_dbm: bleTxPowerDbm,
         zigbee_tx_power_dbm: zigbeeTxPowerDbm,
+        antenna: antenna,
         wifiCredentials: []
     };
     
@@ -856,6 +882,13 @@ function saveConfig() {
                 savedTransferMode = transferModeSel.value;
             }
             toggleTransferConfig();
+
+            // Antenne: gespeicherten Wert nachziehen (Confirm nur bei neuem Wechsel nach extern)
+            const antennaSel = document.getElementById('antenna');
+            const antennaCur = document.getElementById('antenna_current');
+            if (antennaSel && antennaCur) {
+                antennaCur.value = antennaSel.value;
+            }
         } else {
             throw new Error(data.message || 'Unbekannter Fehler');
         }

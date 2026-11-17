@@ -29,3 +29,4 @@ Align the reed switch in the housing cutout as shown — so the magnet in the ga
 - Battery voltage on **GPIO0** (Pin1/A0/D0) via **1:1 voltage divider** (R2/R3)
 - **USB supply:** **VBUS** on **GPIO18** (Pin11/D10) via **asymmetric voltage divider** (R3/R4)
 - **Clearance** around the onboard antenna for better RF performance
+- Antenna selection onBoard/U.FL via the XIAO RF switch (GPIO3/GPIO14); switching via config key `antenna` in the Web UI (GPIO unchanged)

@@ -69,11 +69,12 @@ Main sections:
 | ------- | ------- |
 | Device | Hostname, change admin password |
 | WiFi credentials | Up to 2 networks, scan **WLAN in der Nähe**, TX power |
+| Antenna | Internal (onBoard) / External (U.FL); applies to all radios; switching to external requires confirmation on save |
 | Timing | Wake-up interval (`wakeup_minutes`) |
 | Transfer | Mode `none` / `mqtt` / `ble` / `zigbee`, interval, ADC multiplier, NTP |
 | Actions | **Konfig Neuladen**, **Konfig Speichern**, **Reboot**, **Zurück** |
 
-After **Konfig Speichern**, `config.json` is written to LittleFS; a **Reboot** fully applies many settings.
+After **Konfig Speichern**, `config.json` is written to LittleFS; antenna selection is applied immediately on the RF switch. A **Reboot** fully applies many other settings.
 
 ### ZigBee settings
 

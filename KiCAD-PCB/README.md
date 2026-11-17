@@ -26,3 +26,4 @@ Den Reed-Schalter in der vorgesehenen Aussparung des Gehäuses gemäß Bild ausr
 - Akku-Spannung am **GPIO0** (Pin1/A0/D0) mittels **1:1-Spannungsteiler** (R2/R3)
 - **USB-Spannungsversorgung:** **VBUS** an **GPIO18** (Pin11/D10) über **asymmetrischen Spannungsteiler** (R3/R4)
 - **Freiraum** um die Onboard-Antenne zur Verbesserung der Sende-/Empfangseigenschaften
+- Antennenwahl onBoard/U.FL über den XIAO-RF-Switch (GPIO3/GPIO14); Umschaltung per Config-Key `antenna` in der Web-UI (GPIO unverändert)

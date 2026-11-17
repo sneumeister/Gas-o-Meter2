@@ -186,6 +186,19 @@
                 </div>
                 <input type="hidden" id="wifi_tx_power_dbm_current" value="`wifi_tx_power_dbm`">
             </div>
+
+            <!-- Antenne (XIAO RF-Switch: onBoard / U.FL) -->
+            <div class="mb-3">
+                <label for="antenna" class="form-label">Antenne</label>
+                <div class="select-with-icon">
+                    <select class="form-control" id="antenna" name="antenna">
+                        <option value="internal" `antenna_internal`>Intern (onBoard)</option>
+                        <option value="external" `antenna_external`>Extern (U.FL)</option>
+                    </select>
+                </div>
+                <input type="hidden" id="antenna_current" value="`antenna`">
+                <small class="form-text text-muted">Externe Antenne nur wählen, wenn eine U.FL-Antenne gesteckt ist. Sonst Intern lassen. Änderung wird erst mit Speichern wirksam.</small>
+            </div>
             
             <div class="mb-3">
                 <label for="wakeup_minutes" class="form-label">Wake-up Intervall (Minuten)</label>
