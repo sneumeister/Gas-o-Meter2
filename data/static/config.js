@@ -739,7 +739,7 @@ function saveConfig() {
     }
     
     if (!confirm("Möchten Sie wirklich alle Konfigurationsdaten speichern?\n\n" +
-                "Das Gerät wird die neue Konfiguration übernehmen und neu starten.")) {
+                "Das Gerät wird die neue Konfiguration nach dem Neustart übernehmen.")) {
         return;
     }
     
