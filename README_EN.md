@@ -82,7 +82,7 @@ The LP core keeps counting pulses while the chip is powered. **Button B** has no
 | Transfer | `src/transfer.cpp`, `transfer_{mqtt,ble,zigbee}.cpp` | Mode dispatcher and protocol stacks |
 | Network | `src/wifi_manager.cpp`, `src/time_sync.cpp` | WiFi STA/AP, mDNS, NTP |
 | Persistence | `data/` (LittleFS), `pulse_nv` (NVS) | Web UI, `config.json`, counter ring buffer |
-| Version | `include/version.h` | `Gas-O-Meter2` v1.0.7 |
+| Version | `include/version.h` | `Gas-O-Meter2` v1.0.8 |
 
 **Typical sequence:** TPL5110 wakes ESP → LP core provides counter → HP core reads ADC/config → optional transfer → deep sleep.
 
