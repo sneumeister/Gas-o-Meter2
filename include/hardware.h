@@ -52,6 +52,10 @@
 #define ANTENNA_INTERNAL        LOW   // Logik-Level für interne Antenne (GPIO14)
 #define ANTENNA_EXTERNAL        HIGH  // Logik-Level für externe Antenne (GPIO14)
 
+// Config-Werte für Antennenwahl (config.json / Web-UI)
+#define ANTENNA_CONFIG_INTERNAL  "internal"
+#define ANTENNA_CONFIG_EXTERNAL  "external"
+
 // ADC-Pins für Akku-Monitoring
 #define BATTERY_ADC_PIN    0   // Akku-Monitoring ADC Pin (GPIO0)
 #define BATTERY_ADC_UNIT   ADC_UNIT_1  // ADC Unit 1 (GPIO0 gehört zu ADC1)

@@ -79,7 +79,7 @@ Der LP-Core zählt Impulse weiter, solange der Chip versorgt ist. **Taster B** h
 | Transfer | `src/transfer.cpp`, `transfer_{mqtt,ble,zigbee}.cpp` | Modus-Dispatcher und Protokoll-Stacks |
 | Netzwerk | `src/wifi_manager.cpp`, `src/time_sync.cpp` | WiFi STA/AP, mDNS, NTP |
 | Persistenz | `data/` (LittleFS), `pulse_nv` (NVS) | Web-UI, `config.json`, Zähler-Ringpuffer |
-| Version | `include/version.h` | `Gas-O-Meter2` v1.0.7 |
+| Version | `include/version.h` | `Gas-O-Meter2` v1.0.8 |
 
 **Typischer Ablauf:** TPL5110 weckt ESP → LP-Core liefert Zählerstand → HP-Core liest ADC/Config → optional Transfer → Deep-Sleep.
 
@@ -162,6 +162,7 @@ Wichtige Config-Keys (vollständig in `config.json_example`):
 | Transfer | `transfer_mode` (`none` / `mqtt` / `ble` / `zigbee`) |
 | MQTT | `mqtt_host`, `mqtt_port`, `mqtt_username`, `mqtt_password`, `mqtt_main_topic`, `mqtt_ha_autodiscovery`, `ntp_server` |
 | Kalibrierung / TX | `adc_voltage_multiplier`, `wifi_tx_power_dbm`, `ble_tx_power_dbm`, `zigbee_tx_power_dbm` |
+| Antenne | `antenna` (`internal` = onBoard / `external` = U.FL; Default `internal`; nur wählen, wenn U.FL-Antenne gesteckt) |
 
 ## Projektstruktur
 

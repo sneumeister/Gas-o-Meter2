@@ -193,6 +193,7 @@ typedef struct {
     int8_t wifi_tx_power_dbm;     // WiFi TX Power in dBm (2..20 in UI-Stufen)
     int8_t ble_tx_power_dbm;      // BLE TX Power in dBm (3/6/9/12/15/18/20)
     int8_t zigbee_tx_power_dbm;   // ZigBee TX Power in dBm (-9/-6/-3/0/+3/+6/+10)
+    char antenna[16];              // "internal" | "external" (Default: internal)
     float adc_voltage_multiplier;  // ADC-Skalierung (aus config.json oder hardware.h)
     char ntp_server[64];       // NTP-Server (aus config.json oder hardware.h)
     char mqtt_host[MQTT_HOST_MAX_LEN + 1];
@@ -215,6 +216,7 @@ RTC_DATA_ATTR config_rtc_t config_rtc = {
     .wifi_tx_power_dbm = (int8_t)(WIFI_TX_POWER_DEFAULT / 4), // Default: 20 dBm
     .ble_tx_power_dbm = (int8_t)BLE_TX_POWER_DBM,               // Default: 9 dBm
     .zigbee_tx_power_dbm = (int8_t)ZIGBEE_TX_POWER_DEFAULT,     // Default: 0 dBm
+    .antenna = ANTENNA_CONFIG_INTERNAL,
     .adc_voltage_multiplier = ADC_VOLTAGE_MULTIPLIER,  // Default aus hardware.h
     .ntp_server = DEFAULT_NTP_SERVER,          // Default aus hardware.h
     .mqtt_host = MQTT_DUMMY_HOST,
@@ -1308,6 +1310,49 @@ void enter_deep_sleep_with_gpio_and_timer_wakeup(bool enable_timer = true) {
 }
 
 // ============================================
+// Antenne (XIAO RF-Switch GPIO3/GPIO14)
+// ============================================
+static bool antenna_config_is_external(void) {
+    return (strcmp(config_rtc.antenna, ANTENNA_CONFIG_EXTERNAL) == 0);
+}
+
+/** Ungültige/fehlende Werte → internal. Rückgabe: true wenn external. */
+static bool normalize_antenna_config(void) {
+    bool null_terminated = false;
+    for (size_t i = 0; i < sizeof(config_rtc.antenna); i++) {
+        if (config_rtc.antenna[i] == '\0') {
+            null_terminated = true;
+            break;
+        }
+    }
+    if (!null_terminated ||
+        (strcmp(config_rtc.antenna, ANTENNA_CONFIG_INTERNAL) != 0 &&
+         strcmp(config_rtc.antenna, ANTENNA_CONFIG_EXTERNAL) != 0)) {
+        ESP_LOGW(TAG, "antenna ungültig → %s", ANTENNA_CONFIG_INTERNAL);
+        strncpy(config_rtc.antenna, ANTENNA_CONFIG_INTERNAL, sizeof(config_rtc.antenna) - 1);
+        config_rtc.antenna[sizeof(config_rtc.antenna) - 1] = '\0';
+    }
+    return antenna_config_is_external();
+}
+
+/**
+ * @param force_both_directions true nach Web-Save (auch zurück auf intern);
+ *        false nach Boot-Load (nur external setzen, intern bereits per INIT).
+ */
+static void apply_antenna_from_config(bool force_both_directions) {
+    const bool use_external = normalize_antenna_config();
+    if (use_external) {
+        SET_ANTENNA_EXTERNAL();
+        ESP_LOGI(TAG, "Antenne: extern (U.FL)");
+    } else if (force_both_directions) {
+        SET_ANTENNA_INTERNAL();
+        ESP_LOGI(TAG, "Antenne: intern (onBoard)");
+    } else {
+        ESP_LOGI(TAG, "Antenne: intern (onBoard, Boot-Default)");
+    }
+}
+
+// ============================================
 // Config.json laden
 // ============================================
 bool load_config() {
@@ -1380,6 +1425,9 @@ bool load_config() {
             ESP_LOGW(TAG, "RTC zigbee_tx_power_dbm ungültig (%d) → Default", config_rtc.zigbee_tx_power_dbm);
             config_rtc.zigbee_tx_power_dbm = (int8_t)ZIGBEE_TX_POWER_DEFAULT;
         }
+
+        // Antenne: Soft-Normalize (kein RTC-Gesamt-Invalidate)
+        (void)normalize_antenna_config();
 
         if (!rtc_valid) {
             ESP_LOGW(TAG, "RTC-Config unplausibel → config.json nachladen");
@@ -1617,6 +1665,23 @@ bool load_config() {
             config_rtc.zigbee_tx_power_dbm = (int8_t)ZIGBEE_TX_POWER_DEFAULT;
         }
     }
+
+    // Antenne: internal | external (fehlt/ungültig → internal)
+    if (doc["antenna"].is<const char*>()) {
+        const char* ant = doc["antenna"].as<const char*>();
+        if (strcmp(ant, ANTENNA_CONFIG_EXTERNAL) == 0) {
+            strncpy(config_rtc.antenna, ANTENNA_CONFIG_EXTERNAL, sizeof(config_rtc.antenna) - 1);
+        } else if (strcmp(ant, ANTENNA_CONFIG_INTERNAL) == 0) {
+            strncpy(config_rtc.antenna, ANTENNA_CONFIG_INTERNAL, sizeof(config_rtc.antenna) - 1);
+        } else {
+            ESP_LOGW(TAG, "antenna ungültig (%s) → %s", ant, ANTENNA_CONFIG_INTERNAL);
+            strncpy(config_rtc.antenna, ANTENNA_CONFIG_INTERNAL, sizeof(config_rtc.antenna) - 1);
+        }
+        config_rtc.antenna[sizeof(config_rtc.antenna) - 1] = '\0';
+    } else {
+        strncpy(config_rtc.antenna, ANTENNA_CONFIG_INTERNAL, sizeof(config_rtc.antenna) - 1);
+        config_rtc.antenna[sizeof(config_rtc.antenna) - 1] = '\0';
+    }
     
     // WiFi-Credentials laden (max. 2 Paare)
     config_rtc.wifi_count = 0;
@@ -1665,6 +1730,7 @@ bool load_config() {
     ESP_LOGI(TAG, "  wifi_tx_power_dbm: %d", config_rtc.wifi_tx_power_dbm);
     ESP_LOGI(TAG, "  ble_tx_power_dbm: %d", config_rtc.ble_tx_power_dbm);
     ESP_LOGI(TAG, "  zigbee_tx_power_dbm: %d", config_rtc.zigbee_tx_power_dbm);
+    ESP_LOGI(TAG, "  antenna: %s", config_rtc.antenna);
     ESP_LOGI(TAG, "  adc_voltage_multiplier: %.4f", config_rtc.adc_voltage_multiplier);
     ESP_LOGI(TAG, "  ntp_server: %s", config_rtc.ntp_server);
     ESP_LOGI(TAG, "  mqtt_host: %s", config_rtc.mqtt_host);
@@ -1858,6 +1924,20 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
             }
             return false;
         }
+    }
+
+    if (doc["antenna"].is<const char*>()) {
+        const char* ant = doc["antenna"].as<const char*>();
+        if (strcmp(ant, ANTENNA_CONFIG_EXTERNAL) != 0 &&
+            strcmp(ant, ANTENNA_CONFIG_INTERNAL) != 0) {
+            ESP_LOGE(TAG, "FEHLER: antenna ungültig (%s)", ant);
+            if (errorMessage != nullptr) {
+                strncpy(errorMessage, "Fehler: antenna ungültig (internal/external)", 255);
+            }
+            return false;
+        }
+        strncpy(config_rtc.antenna, ant, sizeof(config_rtc.antenna) - 1);
+        config_rtc.antenna[sizeof(config_rtc.antenna) - 1] = '\0';
     }
     
     if (doc["adc_voltage_multiplier"].is<float>()) {
@@ -2059,6 +2139,7 @@ bool save_config(JsonDocument& doc, bool* wifi_credentials_changed = nullptr, ch
     newDoc["wifi_tx_power_dbm"] = (int)config_rtc.wifi_tx_power_dbm;
     newDoc["ble_tx_power_dbm"] = (int)config_rtc.ble_tx_power_dbm;
     newDoc["zigbee_tx_power_dbm"] = (int)config_rtc.zigbee_tx_power_dbm;
+    newDoc["antenna"] = config_rtc.antenna;
     newDoc["adc_voltage_multiplier"] = config_rtc.adc_voltage_multiplier;
     newDoc["ntp_server"] = config_rtc.ntp_server;
     newDoc["mqtt_host"] = config_rtc.mqtt_host;
@@ -2291,6 +2372,15 @@ const char* processor_get_value(const char* var) {
     if (strcmp(var, "zigbee_tx_power_dbm") == 0) {
         snprintf(buffer, sizeof(buffer), "%d", config_rtc.zigbee_tx_power_dbm);
         return buffer;
+    }
+    if (strcmp(var, "antenna") == 0) {
+        return config_rtc.antenna;
+    }
+    if (strcmp(var, "antenna_internal") == 0) {
+        return antenna_config_is_external() ? "" : "selected";
+    }
+    if (strcmp(var, "antenna_external") == 0) {
+        return antenna_config_is_external() ? "selected" : "";
     }
     if (strcmp(var, "nv_magic_key") == 0) {
         snprintf(buffer, sizeof(buffer), "%lu (0x%08lX)", RING_BUFFER_VERSION, RING_BUFFER_VERSION);
@@ -3204,6 +3294,7 @@ static esp_err_t config_save_handler(httpd_req_t *req) {
                  config_rtc.wifi_tx_power_dbm,
                  config_rtc.ble_tx_power_dbm,
                  config_rtc.zigbee_tx_power_dbm);
+        apply_antenna_from_config(true);
         if (wifi_credentials_changed) {
             ESP_LOGI(TAG, "  → WiFi-Credentials wurden geändert");
         }
@@ -4612,6 +4703,8 @@ extern "C" void app_main(void) {
         // 2. Config laden (idempotent: prüft intern, ob bereits geladen)
         // WICHTIG: Muss vor allen Aktionen geladen sein, da beide Stränge (Timer/Power-On/GPIO) Config benötigen
         bool config_available = load_config();
+        // Antenne nach Config (Boot: INIT war internal; nur external schaltet um)
+        apply_antenna_from_config(false);
         
         // 2.1 Battery-Spannung neu berechnen (mit korrektem adc_voltage_multiplier aus Config)
         // WICHTIG: Bei Power-On wurde battery_voltage VOR load_config() mit dem DEFAULT-Offset berechnet.

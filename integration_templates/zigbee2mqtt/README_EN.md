@@ -1,5 +1,5 @@
 <!-- translation-source: README.md -->
-<!-- translation-source-blob: 1ad0017f96cf3e44e3c7b41b7f9018e095860553 -->
+<!-- translation-source-blob: 5d22304edb7d732c3eb0c59f4e5fe17ac010df4c -->
 
 [↓ Wechsel zu Deutsch](README.md)
 

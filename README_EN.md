@@ -1,5 +1,5 @@
 <!-- translation-source: README.md -->
-<!-- translation-source-blob: 2676b610df5a94d19a52f675fa72957313422852 -->
+<!-- translation-source-blob: f272419d29f0a9c9690c10e937d6f74df0b820b7 -->
 
 [↓ Wechsel zu Deutsch](README.md)
 
@@ -82,7 +82,7 @@ The LP core keeps counting pulses while the chip is powered. **Button B** has no
 | Transfer | `src/transfer.cpp`, `transfer_{mqtt,ble,zigbee}.cpp` | Mode dispatcher and protocol stacks |
 | Network | `src/wifi_manager.cpp`, `src/time_sync.cpp` | WiFi STA/AP, mDNS, NTP |
 | Persistence | `data/` (LittleFS), `pulse_nv` (NVS) | Web UI, `config.json`, counter ring buffer |
-| Version | `include/version.h` | `Gas-O-Meter2` v1.0.7 |
+| Version | `include/version.h` | `Gas-O-Meter2` v1.0.8 |
 
 **Typical sequence:** TPL5110 wakes ESP → LP core provides counter → HP core reads ADC/config → optional transfer → deep sleep.
 
@@ -162,6 +162,7 @@ Important config keys (full list in `config.json_example`):
 | Transfer | `transfer_mode` (`none` / `mqtt` / `ble` / `zigbee`) |
 | MQTT | `mqtt_host`, `mqtt_port`, `mqtt_username`, `mqtt_password`, `mqtt_main_topic`, `mqtt_ha_autodiscovery`, `ntp_server` |
 | Calibration / TX | `adc_voltage_multiplier`, `wifi_tx_power_dbm`, `ble_tx_power_dbm`, `zigbee_tx_power_dbm` |
+| Antenna | `antenna` (`internal` = onBoard / `external` = U.FL; default `internal`; only select external if a U.FL antenna is connected) |
 
 ## Project structure
 
